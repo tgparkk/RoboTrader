@@ -1,0 +1,13 @@
+[KIS]
+# 한국투자증권 API 설정
+KIS_BASE_URL="https://openapi.koreainvestment.com:9443"
+KIS_APP_KEY="YOUR_APP_KEY_HERE"
+KIS_APP_SECRET="YOUR_APP_SECRET_HERE"
+KIS_ACCOUNT_NO="YOUR_ACCOUNT_NO_HERE"
+KIS_HTS_ID="YOUR_HTS_ID_HERE"
+
+[TELEGRAM]
+# 텔레그램 봇 설정 (선택사항)
+enabled=false
+token=YOUR_BOT_TOKEN_HERE
+chat_id=YOUR_CHAT_ID_HERE

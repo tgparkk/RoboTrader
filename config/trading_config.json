@@ -1,0 +1,38 @@
+{
+  "data_collection": {
+    "interval_seconds": 30,
+    "candidate_stocks": [
+      "005930",
+      "000660", 
+      "035420",
+      "005490",
+      "051910"
+    ]
+  },
+  "order_management": {
+    "buy_timeout_seconds": 300,
+    "sell_timeout_seconds": 180,
+    "max_adjustments": 3,
+    "adjustment_threshold_percent": 0.5,
+    "market_order_threshold_percent": 2.0
+  },
+  "risk_management": {
+    "max_position_count": 3,
+    "max_position_ratio": 0.3,
+    "stop_loss_ratio": 0.03,
+    "take_profit_ratio": 0.05,
+    "max_daily_loss": 0.1
+  },
+  "strategy": {
+    "name": "simple_momentum",
+    "parameters": {
+      "momentum_period": 5,
+      "volume_threshold": 1.5,
+      "price_change_threshold": 0.01
+    }
+  },
+  "logging": {
+    "level": "INFO",
+    "file_retention_days": 30
+  }
+}
