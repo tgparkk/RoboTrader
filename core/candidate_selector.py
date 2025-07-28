@@ -102,33 +102,52 @@ class CandidateSelector:
         - 기타 기본 조건
         """
         filtered = []
+        excluded_counts = {
+            'non_kospi': 0,
+            'preferred': 0,
+            'convertible': 0,
+            'etf': 0,
+            'passed': 0
+        }
         
         for stock in stocks:
             try:
-                # KOSPI 종목만
-                if stock.get('market') != 'KOSPI':
-                    continue
-                
-                # 우선주 제외 (종목코드 끝자리가 5인 경우나 이름에 '우' 포함)
                 code = stock.get('code', '')
                 name = stock.get('name', '')
                 
+                # KOSPI 종목만
+                if stock.get('market') != 'KOSPI':
+                    excluded_counts['non_kospi'] += 1
+                    continue
+                
+                # 우선주 제외 (종목코드 끝자리가 5인 경우나 이름에 '우' 포함)
                 if code.endswith('5') or '우' in name:
+                    excluded_counts['preferred'] += 1
                     continue
                 
                 # 전환우선주 제외
                 if '전환' in name:
+                    excluded_counts['convertible'] += 1
                     continue
                 
                 # ETF, ETN 제외
                 if any(keyword in name.upper() for keyword in ['ETF', 'ETN']):
+                    excluded_counts['etf'] += 1
                     continue
                 
+                excluded_counts['passed'] += 1
                 filtered.append(stock)
                 
             except Exception as e:
                 self.logger.warning(f"기본 필터링 중 오류 {stock}: {e}")
                 continue
+        
+        self.logger.info(f"1차 필터링 결과: "
+                        f"비KOSPI({excluded_counts['non_kospi']}), "
+                        f"우선주({excluded_counts['preferred']}), "
+                        f"전환({excluded_counts['convertible']}), "
+                        f"ETF({excluded_counts['etf']}), "
+                        f"통과({excluded_counts['passed']})")
         
         return filtered
     
@@ -187,27 +206,42 @@ class CandidateSelector:
             name = stock['name']
             market = stock['market']
             
+            self.logger.debug(f"📊 종목 분석 시작: {code}({name})")
+            
             # 현재가 및 기본 정보 조회
             price_data = self.api_manager.get_current_price(code)
             if price_data is None:
+                self.logger.debug(f"❌ {code}: 현재가 데이터 없음")
                 return None
             
             # 일봉 데이터 조회 (200일)
             daily_data = self.api_manager.get_ohlcv_data(code, "D", 200)
             if daily_data is None:
+                self.logger.debug(f"❌ {code}: 일봉 데이터 없음")
                 return None
             
             # daily_data가 DataFrame인 경우 처리
             if hasattr(daily_data, 'empty'):
                 if daily_data.empty or len(daily_data) < 200:
+                    self.logger.debug(f"❌ {code}: 일봉 데이터 부족 ({len(daily_data)}일)")
                     return None
             elif len(daily_data) < 200:
+                self.logger.debug(f"❌ {code}: 일봉 데이터 부족 ({len(daily_data)}일)")
                 return None
             
             # 거래대금 조건 체크 (최소 50억)
             volume_amount = getattr(price_data, 'volume_amount', 0)
+            if volume_amount == 0:
+                # volume_amount가 없는 경우 volume * price로 계산
+                current_volume = getattr(price_data, 'volume', 0)
+                current_price = getattr(price_data, 'current_price', 0)
+                volume_amount = current_volume * current_price
+            
             if volume_amount < 5_000_000_000:
+                self.logger.debug(f"❌ {code}: 거래대금 부족 ({volume_amount/1_000_000_000:.1f}억원)")
                 return None
+            
+            self.logger.debug(f"✅ {code}: 기본 조건 통과 - 거래대금 {volume_amount/1_000_000_000:.1f}억원")
             
             # 조건 분석
             score = 0
@@ -267,10 +301,12 @@ class CandidateSelector:
                 
                 # 시가 7% 이상 갭상승 시 제외
                 if open_change >= 0.07:
+                    self.logger.debug(f"❌ {code}: 시가 갭상승 제외 ({open_change:.1%})")
                     return None
                 
                 # 종가 10% 이상 상승 시 제외  
                 if close_change >= 0.10:
+                    self.logger.debug(f"❌ {code}: 급등주 제외 ({close_change:.1%})")
                     return None
             
             # I. 시가대비 종가 3% 이상 상승
@@ -279,8 +315,11 @@ class CandidateSelector:
                 score += 20
                 reasons.append("당일 3% 이상 상승")
             
+            self.logger.debug(f"📊 {code}: 최종 점수 {score}점 - {', '.join(reasons) if reasons else '조건 미충족'}")
+            
             # 최소 점수 기준
             if score < 50:
+                self.logger.debug(f"❌ {code}: 최소 점수 미달 ({score}점 < 50점)")
                 return None
             
             return CandidateStock(
