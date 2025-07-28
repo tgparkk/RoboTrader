@@ -220,27 +220,37 @@ class CandidateSelector:
                 self.logger.debug(f"❌ {code}: 일봉 데이터 없음")
                 return None
             
-            # 주봉 데이터 조회 (200일 대상, 약 40주)
-            weekly_data = self.api_manager.get_ohlcv_data(code, "W", 40)
+            # 주봉 데이터 조회 (200일 대상, 약 40주 = 280일)
+            weekly_data = self.api_manager.get_ohlcv_data(code, "W", 280)
             if weekly_data is None:
                 self.logger.debug(f"❌ {code}: 주봉 데이터 없음")
                 return None
             
+            # 데이터 크기 디버그 로그
+            daily_len = len(daily_data) if hasattr(daily_data, '__len__') else 0
+            weekly_len = len(weekly_data) if hasattr(weekly_data, '__len__') else 0
+            self.logger.debug(f"📊 {code}: 일봉 {daily_len}개, 주봉 {weekly_len}개 조회됨")
+            
+            # 실제 데이터 샘플 확인
+            if hasattr(weekly_data, 'empty') and not weekly_data.empty:
+                self.logger.debug(f"📊 {code}: 주봉 컬럼 - {list(weekly_data.columns)}")
+                self.logger.debug(f"📊 {code}: 주봉 샘플 - {weekly_data.iloc[0].to_dict()}")
+            
             # daily_data가 DataFrame인 경우 처리
             if hasattr(daily_data, 'empty'):
-                if daily_data.empty or len(daily_data) < 30:  # 최소 30일 필요
+                if daily_data.empty or len(daily_data) < 10:  # 최소 요구사항 완화
                     self.logger.debug(f"❌ {code}: 일봉 데이터 부족 ({len(daily_data)}일)")
                     return None
-            elif len(daily_data) < 30:
+            elif len(daily_data) < 10:
                 self.logger.debug(f"❌ {code}: 일봉 데이터 부족 ({len(daily_data)}일)")
                 return None
             
             # weekly_data가 DataFrame인 경우 처리
             if hasattr(weekly_data, 'empty'):
-                if weekly_data.empty or len(weekly_data) < 20:  # 최소 20주 필요
+                if weekly_data.empty or len(weekly_data) < 5:  # 최소 요구사항 완화
                     self.logger.debug(f"❌ {code}: 주봉 데이터 부족 ({len(weekly_data)}주)")
                     return None
-            elif len(weekly_data) < 20:
+            elif len(weekly_data) < 5:
                 self.logger.debug(f"❌ {code}: 주봉 데이터 부족 ({len(weekly_data)}주)")
                 return None
             
@@ -262,7 +272,7 @@ class CandidateSelector:
             score = 0
             reasons = []
             
-            # A. 200일 최고종가 체크 (주봉 데이터 활용)
+            # A. 최고종가 체크 (주봉 데이터 활용, 가능한 기간 내에서)
             today_close = price_data.current_price
             
             # DataFrame인 경우 처리
@@ -271,11 +281,24 @@ class CandidateSelector:
             else:
                 weekly_closes = [data.close_price for data in weekly_data]
             
-            max_close_200d = max(weekly_closes)
-            if today_close >= max_close_200d * 0.98:  # 98% 이상이면 신고가 근처
-                score += 20
-                reasons.append("200일 신고가 근처")
-                self.logger.debug(f"✅ {code}: 200일 신고가 ({max_close_200d:,.0f}원 대비 {today_close/max_close_200d:.1%})")
+            max_close_period = max(weekly_closes)
+            weeks_available = len(weekly_closes)
+            days_equivalent = weeks_available * 7  # 대략적인 일수 환산
+            
+            # 가능한 기간 내에서 신고가 근처인지 체크
+            if today_close >= max_close_period * 0.98:  # 98% 이상이면 신고가 근처
+                # 긴 기간일수록 더 높은 점수
+                if days_equivalent >= 200:
+                    score += 25
+                    reasons.append(f"200일+ 신고가 근처")
+                elif days_equivalent >= 100:
+                    score += 20
+                    reasons.append(f"100일+ 신고가 근처")
+                else:
+                    score += 15
+                    reasons.append(f"{days_equivalent}일 신고가 근처")
+                    
+                self.logger.debug(f"✅ {code}: {days_equivalent}일 신고가 ({max_close_period:,.0f}원 대비 {today_close/max_close_period:.1%})")
             
             # B. Envelope 상한선 돌파 체크
             if self._check_envelope_breakout(daily_data, today_close):
