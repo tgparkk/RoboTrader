@@ -17,8 +17,58 @@ from utils.logger import setup_logger
 from utils.korean_time import now_kst
 
 # 한글 폰트 설정
-plt.rcParams['font.family'] = ['Malgun Gothic', 'AppleGothic', 'DejaVu Sans']
+import matplotlib.font_manager as fm
+import matplotlib
+import platform
+import os
+
+# matplotlib 백엔드 설정
+matplotlib.use('Agg')
+
+# Windows 환경에서 한글 폰트 강제 설정
+def setup_korean_font():
+    if platform.system() == 'Windows':
+        # Windows 한글 폰트 설정
+        font_list = ['Malgun Gothic', 'Microsoft YaHei', 'SimHei', 'Gulim', 'Batang', 'Dotum']
+    else:
+        # macOS/Linux 한글 폰트 설정  
+        font_list = ['AppleGothic', 'Noto Sans CJK KR', 'DejaVu Sans']
+    
+    # 사용 가능한 폰트 확인
+    available_fonts = [f.name for f in fm.fontManager.ttflist]
+    
+    for font_name in font_list:
+        if font_name in available_fonts:
+            plt.rcParams['font.family'] = font_name
+            print(f"한글 폰트 설정: {font_name}")
+            break
+    else:
+        # 폰트를 찾지 못한 경우 강제로 설정
+        if platform.system() == 'Windows':
+            plt.rcParams['font.family'] = 'Malgun Gothic'
+        else:
+            plt.rcParams['font.family'] = 'DejaVu Sans'
+        print(f"기본 폰트 사용: {plt.rcParams['font.family']}")
+
+# 폰트 설정 실행
+setup_korean_font()
+
+# 기본 설정
 plt.rcParams['axes.unicode_minus'] = False
+plt.rcParams['font.size'] = 12
+plt.rcParams['figure.dpi'] = 100
+
+# 폰트 캐시 삭제 (필요시)
+try:
+    import shutil
+    cache_dir = matplotlib.get_cachedir()
+    font_cache = os.path.join(cache_dir, 'fontlist-v*.json')
+    import glob
+    for cache_file in glob.glob(font_cache):
+        os.remove(cache_file)
+        print(f"폰트 캐시 삭제: {cache_file}")
+except:
+    pass
 
 warnings.filterwarnings('ignore')
 
@@ -123,8 +173,9 @@ class ChartGenerator:
             ax1.set_title('점수 분포', fontsize=14)
             ax1.set_xlabel('점수', fontsize=12)
             ax1.set_ylabel('빈도', fontsize=12)
-            ax1.axvline(candidates['score'].mean(), color='red', linestyle='--', 
-                       label=f'평균: {candidates['score'].mean():.1f}')
+            mean_score = candidates['score'].mean()
+            ax1.axvline(mean_score, color='red', linestyle='--', 
+                       label=f'평균: {mean_score:.1f}')
             ax1.legend()
             ax1.grid(True, alpha=0.3)
             
