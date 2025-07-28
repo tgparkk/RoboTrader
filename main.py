@@ -14,6 +14,7 @@ from core.models import TradingConfig
 from core.data_collector import RealTimeDataCollector
 from core.order_manager import OrderManager
 from core.telegram_integration import TelegramIntegration
+from core.candidate_selector import CandidateSelector
 from api.kis_api_manager import KISAPIManager
 from config.settings import load_trading_config
 from utils.logger import setup_logger
@@ -35,6 +36,7 @@ class DayTradingBot:
         self.telegram = TelegramIntegration(trading_bot=self)
         self.data_collector = RealTimeDataCollector(self.config, self.api_manager)
         self.order_manager = OrderManager(self.config, self.api_manager, self.telegram)
+        self.candidate_selector = CandidateSelector(self.config, self.api_manager)
         
         # 신호 핸들러 등록
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -269,9 +271,31 @@ class DayTradingBot:
             market_status = get_market_status()
             self.logger.info(f"📈 시장 상태 갱신: {market_status}")
             
-            # TODO: 전략에 따라 후보 종목 동적 변경
-            # 현재는 기본 설정 유지
-            self.logger.info("📋 후보 종목 갱신 (현재는 기본 설정 유지)")
+            # 후보 종목 동적 선정
+            self.logger.info("🔍 후보 종목 동적 선정 시작")
+            candidates = await self.candidate_selector.select_daily_candidates(max_candidates=5)
+            
+            if candidates:
+                # 후보 종목을 설정에 업데이트
+                self.candidate_selector.update_candidate_stocks_in_config(candidates)
+                
+                # 데이터 컬렉터에 새로운 후보 종목 추가
+                for candidate in candidates:
+                    self.data_collector.add_candidate_stock(candidate.code, candidate.name)
+                
+                # 텔레그램 알림
+                candidate_info = "\n".join([
+                    f"  - {c.code}({c.name}): {c.score:.1f}점"
+                    for c in candidates
+                ])
+                await self.telegram.notify_system_status(
+                    f"🎯 일일 후보 종목 선정 완료:\n{candidate_info}"
+                )
+                
+                self.logger.info(f"✅ 후보 종목 선정 완료: {len(candidates)}개")
+            else:
+                self.logger.warning("⚠️ 선정된 후보 종목이 없습니다")
+                await self.telegram.notify_system_status("⚠️ 오늘은 선정된 후보 종목이 없습니다")
             
             await self.telegram.notify_system_status(f"일일 시장 정보 갱신 완료 - 시장 상태: {market_status}")
             
