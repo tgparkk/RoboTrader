@@ -28,6 +28,7 @@ ta>=0.10.2
 # 차트/그래프 (필요시)
 matplotlib>=3.7.0
 plotly>=5.15.0
+seaborn>=0.12.0
 
 # 웹소켓 (실시간 데이터)
 websockets>=11.0

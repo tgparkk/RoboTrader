@@ -48,7 +48,7 @@ class RealTimeDataCollector:
                 is_candidate=True
             )
             self.config.data_collection.candidate_stocks.append(stock_code)
-            self.logger.info(f"후보 종목 추가: {stock_code}")
+            self.logger.info(f"후보 종목 추가: {stock_code} : {stock_name}")
     
     def remove_candidate_stock(self, stock_code: str):
         """후보 종목 제거"""
