@@ -117,6 +117,22 @@ class TelegramNotifier:
             return True
         except TelegramError as e:
             self.logger.error(f"텔레그램 메시지 전송 실패: {e}")
+            
+            # 마크다운 파싱 오류 시 일반 텍스트로 재시도
+            if "parse entities" in str(e).lower() or "can't parse" in str(e).lower():
+                try:
+                    self.logger.info("마크다운 파싱 오류 - 일반 텍스트로 재전송 시도")
+                    # 마크다운 문법 제거
+                    plain_message = message.replace('*', '').replace('_', '').replace('`', '')
+                    await self.bot.send_message(
+                        chat_id=self.chat_id,
+                        text=plain_message,
+                        parse_mode=None
+                    )
+                    return True
+                except TelegramError as retry_error:
+                    self.logger.error(f"일반 텍스트 재전송도 실패: {retry_error}")
+            
             return False
     
     # 시스템 이벤트 알림 메서드들
