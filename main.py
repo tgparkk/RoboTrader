@@ -69,9 +69,11 @@ class DayTradingBot:
             self.logger.info("🚀 주식 단타 거래 시스템 초기화 시작")
             
             # 1. API 초기화
+            self.logger.info("📡 API 매니저 초기화 시작...")
             if not self.api_manager.initialize():
                 self.logger.error("❌ API 초기화 실패")
                 return False
+            self.logger.info("✅ API 매니저 초기화 완료")
             
             # 2. 시장 상태 확인
             market_status = get_market_status()
