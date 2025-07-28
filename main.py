@@ -15,6 +15,7 @@ from core.data_collector import RealTimeDataCollector
 from core.order_manager import OrderManager
 from core.telegram_integration import TelegramIntegration
 from core.candidate_selector import CandidateSelector
+from db.database_manager import DatabaseManager
 from api.kis_api_manager import KISAPIManager
 from config.settings import load_trading_config
 from utils.logger import setup_logger
@@ -37,6 +38,7 @@ class DayTradingBot:
         self.data_collector = RealTimeDataCollector(self.config, self.api_manager)
         self.order_manager = OrderManager(self.config, self.api_manager, self.telegram)
         self.candidate_selector = CandidateSelector(self.config, self.api_manager)
+        self.db_manager = DatabaseManager()
         
         # 신호 핸들러 등록
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -203,6 +205,8 @@ class DayTradingBot:
                     await self._refresh_api()
                     last_api_refresh = current_time
                 
+                await self._daily_market_update()
+
                 # 매일 오전 8시에 시장 상태 및 후보 종목 갱신
                 if (current_time.hour == 8 and current_time.minute == 0 and 
                     (current_time - last_market_check).total_seconds() >= 3600):  # 1시간 간격으로 체크
@@ -278,6 +282,13 @@ class DayTradingBot:
             if candidates:
                 # 후보 종목을 설정에 업데이트
                 self.candidate_selector.update_candidate_stocks_in_config(candidates)
+                
+                # 데이터베이스에 저장
+                save_success = self.db_manager.save_candidate_stocks(candidates)
+                if save_success:
+                    self.logger.info(f"📊 후보 종목 데이터베이스 저장 완료: {len(candidates)}개")
+                else:
+                    self.logger.error("❌ 후보 종목 데이터베이스 저장 실패")
                 
                 # 데이터 컬렉터에 새로운 후보 종목 추가
                 for candidate in candidates:
