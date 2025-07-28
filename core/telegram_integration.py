@@ -238,28 +238,32 @@ class TelegramIntegration:
         except Exception as e:
             self.logger.error(f"오류 알림 실패: {e}")
     
-    async def notify_system_status(self):
+    async def notify_system_status(self, message: str = None):
         """시스템 상태 알림"""
         if not self.is_enabled:
             return
         
         try:
-            # 시스템 상태 정보 수집
-            market_status = get_market_status()
-            
-            pending_orders = 0
-            completed_orders = 0
-            
-            if self.trading_bot and hasattr(self.trading_bot, 'order_manager'):
-                order_summary = self.trading_bot.order_manager.get_order_summary()
-                pending_orders = order_summary.get('pending_count', 0)
-                completed_orders = order_summary.get('completed_count', 0)
-            
-            await self.notifier.send_system_status(
-                market_status=market_status,
-                pending_orders=pending_orders,
-                completed_orders=completed_orders
-            )
+            if message:
+                # 직접 메시지가 전달된 경우
+                await self.notifier.send_message(message)
+            else:
+                # 시스템 상태 정보 수집
+                market_status = get_market_status()
+                
+                pending_orders = 0
+                completed_orders = 0
+                
+                if self.trading_bot and hasattr(self.trading_bot, 'order_manager'):
+                    order_summary = self.trading_bot.order_manager.get_order_summary()
+                    pending_orders = order_summary.get('pending_count', 0)
+                    completed_orders = order_summary.get('completed_count', 0)
+                
+                await self.notifier.send_system_status(
+                    market_status=market_status,
+                    pending_orders=pending_orders,
+                    completed_orders=completed_orders
+                )
         except Exception as e:
             self.logger.error(f"시스템 상태 알림 실패: {e}")
     
