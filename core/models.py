@@ -118,22 +118,83 @@ class Position:
 
 
 @dataclass
-class TradingConfig:
-    """거래 설정"""
-    # 기본 설정
-    data_collection_interval: int = 30  # 데이터 수집 주기 (초)
+class DataCollectionConfig:
+    """데이터 수집 설정"""
+    interval_seconds: int = 30
     candidate_stocks: List[str] = field(default_factory=list)
+
+
+@dataclass
+class OrderManagementConfig:
+    """주문 관리 설정"""
+    buy_timeout_seconds: int = 300
+    sell_timeout_seconds: int = 180
+    max_adjustments: int = 3
+    adjustment_threshold_percent: float = 0.5
+    market_order_threshold_percent: float = 2.0
+
+
+@dataclass
+class RiskManagementConfig:
+    """리스크 관리 설정"""
+    max_position_count: int = 3
+    max_position_ratio: float = 0.3
+    stop_loss_ratio: float = 0.03
+    take_profit_ratio: float = 0.05
+    max_daily_loss: float = 0.1
+
+
+@dataclass
+class StrategyConfig:
+    """전략 설정"""
+    name: str = "simple_momentum"
+    parameters: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class LoggingConfig:
+    """로깅 설정"""
+    level: str = "INFO"
+    file_retention_days: int = 30
+
+
+@dataclass
+class TradingConfig:
+    """거래 설정 통합"""
+    data_collection: DataCollectionConfig = field(default_factory=DataCollectionConfig)
+    order_management: OrderManagementConfig = field(default_factory=OrderManagementConfig)
+    risk_management: RiskManagementConfig = field(default_factory=RiskManagementConfig)
+    strategy: StrategyConfig = field(default_factory=StrategyConfig)
+    logging: LoggingConfig = field(default_factory=LoggingConfig)
     
-    # 주문 관리
-    buy_timeout: int = 300      # 매수 주문 대기시간 (초)
-    sell_timeout: int = 180     # 매도 주문 대기시간 (초)
-    max_adjustments: int = 3    # 최대 정정 횟수
-    
-    # 리스크 관리
-    max_position_count: int = 5     # 최대 동시 보유 종목 수
-    max_position_ratio: float = 0.2 # 종목별 최대 투자 비율
-    stop_loss_ratio: float = 0.03   # 손절 비율 (3%)
-    take_profit_ratio: float = 0.05 # 익절 비율 (5%)
-    
-    # 전략 설정
-    strategy_params: Dict[str, Any] = field(default_factory=dict)
+    @classmethod
+    def from_json(cls, json_data: Dict[str, Any]) -> 'TradingConfig':
+        """JSON 데이터로부터 TradingConfig 객체 생성"""
+        return cls(
+            data_collection=DataCollectionConfig(
+                interval_seconds=json_data.get('data_collection', {}).get('interval_seconds', 30),
+                candidate_stocks=json_data.get('data_collection', {}).get('candidate_stocks', [])
+            ),
+            order_management=OrderManagementConfig(
+                buy_timeout_seconds=json_data.get('order_management', {}).get('buy_timeout_seconds', 300),
+                sell_timeout_seconds=json_data.get('order_management', {}).get('sell_timeout_seconds', 180),
+                max_adjustments=json_data.get('order_management', {}).get('max_adjustments', 3),
+                adjustment_threshold_percent=json_data.get('order_management', {}).get('adjustment_threshold_percent', 0.5),
+                market_order_threshold_percent=json_data.get('order_management', {}).get('market_order_threshold_percent', 2.0)
+            ),
+            risk_management=RiskManagementConfig(
+                max_position_count=json_data.get('risk_management', {}).get('max_position_count', 3),
+                max_position_ratio=json_data.get('risk_management', {}).get('max_position_ratio', 0.3),
+                stop_loss_ratio=json_data.get('risk_management', {}).get('stop_loss_ratio', 0.03),
+                take_profit_ratio=json_data.get('risk_management', {}).get('take_profit_ratio', 0.05),
+                max_daily_loss=json_data.get('risk_management', {}).get('max_daily_loss', 0.1)
+            ),
+            strategy=StrategyConfig(
+                name=json_data.get('strategy', {}).get('name', 'simple_momentum'),
+                parameters=json_data.get('strategy', {}).get('parameters', {})
+            ),
+            logging=LoggingConfig(
+                level=json_data.get('logging', {}).get('level', 'INFO'),
+                file_retention_days=json_data.get('logging', {}).get('file_retention_days', 30)
+            )
+        )

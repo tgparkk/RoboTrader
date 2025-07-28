@@ -1,13 +1,7 @@
 {
   "data_collection": {
     "interval_seconds": 30,
-    "candidate_stocks": [
-      "005930",
-      "000660", 
-      "035420",
-      "005490",
-      "051910"
-    ]
+    "candidate_stocks": []
   },
   "order_management": {
     "buy_timeout_seconds": 300,

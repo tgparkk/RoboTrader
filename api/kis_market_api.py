@@ -424,73 +424,6 @@ def get_disparity_rank(fid_cond_mrkt_div_code: str = "J",
         return None
 
 
-def get_quote_balance_rank(fid_cond_mrkt_div_code: str = "J",
-                          fid_cond_scr_div_code: str = "20172",
-                          fid_input_iscd: str = "0000",
-                          fid_rank_sort_cls_code: str = "0",
-                          fid_div_cls_code: str = "0",
-                          fid_trgt_cls_code: str = "0",
-                          fid_trgt_exls_cls_code: str = "0",
-                          fid_input_price_1: str = "",
-                          fid_input_price_2: str = "",
-                          fid_vol_cnt: str = "",
-                          tr_cont: str = "") -> Optional[pd.DataFrame]:
-    """
-    호가잔량 순위 조회 (TR: FHPST01720000)
-
-    Args:
-        fid_cond_mrkt_div_code: 조건 시장 분류 코드 (J: 주식)
-        fid_cond_scr_div_code: 조건 화면 분류 코드 (20172)
-        fid_input_iscd: 입력 종목코드 (0000:전체, 0001:코스피, 1001:코스닥, 2001:코스피200)
-        fid_rank_sort_cls_code: 순위 정렬 구분 코드 (0:순매수잔량순, 1:순매도잔량순, 2:매수비율순, 3:매도비율순)
-        fid_div_cls_code: 분류 구분 코드 (0:전체)
-        fid_trgt_cls_code: 대상 구분 코드 (0:전체)
-        fid_trgt_exls_cls_code: 대상 제외 구분 코드 (0:전체)
-        fid_input_price_1: 입력 가격1 (가격 ~)
-        fid_input_price_2: 입력 가격2 (~ 가격)
-        fid_vol_cnt: 거래량 수 (거래량 ~)
-        tr_cont: 연속 거래 여부
-
-    Returns:
-        호가잔량 순위 종목 데이터 (최대 30건)
-    """
-    url = '/uapi/domestic-stock/v1/ranking/quote-balance'
-    tr_id = "FHPST01720000"  # 호가잔량 순위
-
-    params = {
-        "fid_vol_cnt": fid_vol_cnt,
-        "fid_cond_mrkt_div_code": fid_cond_mrkt_div_code,
-        "fid_cond_scr_div_code": fid_cond_scr_div_code,
-        "fid_input_iscd": fid_input_iscd,
-        "fid_rank_sort_cls_code": fid_rank_sort_cls_code,
-        "fid_div_cls_code": fid_div_cls_code,
-        "fid_trgt_cls_code": fid_trgt_cls_code,
-        "fid_trgt_exls_cls_code": fid_trgt_exls_cls_code,
-        "fid_input_price_1": fid_input_price_1,
-        "fid_input_price_2": fid_input_price_2
-    }
-
-    try:
-        res = kis._url_fetch(url, tr_id, tr_cont, params)
-
-        if res and res.isOK():
-            body = res.getBody()
-            output_data = getattr(body, 'output', [])
-            if output_data:
-                current_data = pd.DataFrame(output_data)
-                logger.info(f"호가잔량 순위 조회 성공: {len(current_data)}건")
-                return current_data
-            else:
-                logger.warning("호가잔량 순위 조회: 데이터 없음")
-                return pd.DataFrame()
-        else:
-            logger.error("호가잔량 순위 조회 실패")
-            return None
-    except Exception as e:
-        logger.error(f"호가잔량 순위 조회 오류: {e}")
-        return None
-
-
 # 테스트 실행을 위한 예시 함수
 if __name__ == "__main__":
     pass
@@ -865,61 +798,6 @@ def get_existing_holdings() -> List[Dict]:
 # =============================================================================
 # 🎯 종목 정보 조회 API
 # =============================================================================
-
-def get_stock_info(stock_code: str = "", start_date: str = "", end_date: str = "", 
-                   tr_cont: str = "") -> Optional[pd.DataFrame]:
-    """
-    예탁원정보(상장정보일정) API (TR: HHKDB669107C0)
-    종목의 상장정보, 총발행주식수 등을 조회합니다.
-
-    Args:
-        stock_code: 종목코드 (6자리, 공백시 전체 조회)
-        start_date: 조회시작일자 (YYYYMMDD)
-        end_date: 조회종료일자 (YYYYMMDD)
-        tr_cont: 연속거래여부 (공백: 초기조회, N: 다음데이터조회)
-
-    Returns:
-        pd.DataFrame: 종목 상장정보 (총발행주식수 포함)
-    """
-    url = '/uapi/domestic-stock/v1/ksdinfo/list-info'
-    tr_id = "HHKDB669107C0"  # 예탁원정보(상장정보일정)
-
-    # 기본 날짜 설정 (최근 3일)
-    if not start_date:
-        start_date = (now_kst() - timedelta(days=5)).strftime("%Y%m%d")
-    if not end_date:
-        end_date = now_kst().strftime("%Y%m%d")
-
-    params = {
-        "SHT_CD": stock_code,      # 종목코드 (공백: 전체)
-        "T_DT": end_date,          # 조회종료일자
-        "F_DT": start_date,        # 조회시작일자
-        "CTS": ""                  # CTS (공백)
-    }
-
-    try:
-        logger.debug(f"📋 종목정보 조회: {stock_code or '전체'} ({start_date}~{end_date})")
-        res = kis._url_fetch(url, tr_id, tr_cont, params)
-
-        if res and res.isOK():
-            body = res.getBody()
-            output1_data = getattr(body, 'output1', [])
-            
-            if output1_data:
-                stock_info_df = pd.DataFrame(output1_data)
-                logger.debug(f"✅ 종목정보 조회 성공: {len(stock_info_df)}건")
-                return stock_info_df
-            else:
-                logger.warning("⚠️ 종목정보 조회: 데이터 없음")
-                return pd.DataFrame()
-        else:
-            logger.error("❌ 종목정보 조회 실패")
-            return None
-
-    except Exception as e:
-        logger.error(f"❌ 종목정보 조회 오류: {e}")
-        return None
-
 
 def get_stock_market_cap(stock_code: str) -> Optional[Dict[str, Any]]:
     """

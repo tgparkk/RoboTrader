@@ -32,7 +32,7 @@ class OrderManager:
                              timeout_seconds: int = None) -> Optional[str]:
         """매수 주문 실행"""
         try:
-            timeout_seconds = timeout_seconds or self.config.buy_timeout
+            timeout_seconds = timeout_seconds or self.config.order_management.buy_timeout_seconds
             
             self.logger.info(f"매수 주문 시도: {stock_code} {quantity}주 @{price:,.0f}원")
             
@@ -86,7 +86,7 @@ class OrderManager:
                               timeout_seconds: int = None) -> Optional[str]:
         """매도 주문 실행"""
         try:
-            timeout_seconds = timeout_seconds or self.config.sell_timeout
+            timeout_seconds = timeout_seconds or self.config.order_management.sell_timeout_seconds
             
             self.logger.info(f"매도 주문 시도: {stock_code} {quantity}주 @{price:,.0f}원")
             
@@ -291,7 +291,7 @@ class OrderManager:
             order = self.pending_orders[order_id]
             
             # 최대 정정 횟수 체크
-            if order.adjustment_count >= self.config.max_adjustments:
+            if order.adjustment_count >= self.config.order_management.max_adjustments:
                 return
             
             # 현재가 조회

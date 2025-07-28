@@ -86,9 +86,25 @@ class TelegramNotifier:
         
         try:
             self.logger.info("텔레그램 봇 폴링 시작")
-            await self.application.run_polling()
+            await self.application.initialize()
+            await self.application.start()
+            await self.application.updater.start_polling()
+            
+            # 폴링이 계속 실행되도록 대기
+            while True:
+                await asyncio.sleep(1)
+                
         except Exception as e:
             self.logger.error(f"봇 폴링 오류: {e}")
+        finally:
+            try:
+                if self.application and self.application.updater.running:
+                    await self.application.updater.stop()
+                if self.application:
+                    await self.application.stop()
+                    await self.application.shutdown()
+            except Exception as shutdown_error:
+                self.logger.error(f"봇 종료 중 오류: {shutdown_error}")
     
     async def send_message(self, message: str, parse_mode: str = "Markdown") -> bool:
         """메시지 전송"""
@@ -280,7 +296,13 @@ class TelegramNotifier:
             await self.send_system_stop()
             
             if self.application:
-                await self.application.shutdown()
+                try:
+                    if hasattr(self.application, 'updater') and self.application.updater.running:
+                        await self.application.updater.stop()
+                    await self.application.stop()
+                    await self.application.shutdown()
+                except Exception as app_error:
+                    self.logger.error(f"Application 종료 중 오류: {app_error}")
             
             self.logger.info("텔레그램 봇 종료 완료")
             
