@@ -214,19 +214,34 @@ class CandidateSelector:
                 self.logger.debug(f"❌ {code}: 현재가 데이터 없음")
                 return None
             
-            # 일봉 데이터 조회 (200일)
-            daily_data = self.api_manager.get_ohlcv_data(code, "D", 200)
+            # 일봉 데이터 조회 (최대 100일)
+            daily_data = self.api_manager.get_ohlcv_data(code, "D", 100)
             if daily_data is None:
                 self.logger.debug(f"❌ {code}: 일봉 데이터 없음")
                 return None
             
+            # 주봉 데이터 조회 (200일 대상, 약 40주)
+            weekly_data = self.api_manager.get_ohlcv_data(code, "W", 40)
+            if weekly_data is None:
+                self.logger.debug(f"❌ {code}: 주봉 데이터 없음")
+                return None
+            
             # daily_data가 DataFrame인 경우 처리
             if hasattr(daily_data, 'empty'):
-                if daily_data.empty or len(daily_data) < 200:
+                if daily_data.empty or len(daily_data) < 30:  # 최소 30일 필요
                     self.logger.debug(f"❌ {code}: 일봉 데이터 부족 ({len(daily_data)}일)")
                     return None
-            elif len(daily_data) < 200:
+            elif len(daily_data) < 30:
                 self.logger.debug(f"❌ {code}: 일봉 데이터 부족 ({len(daily_data)}일)")
+                return None
+            
+            # weekly_data가 DataFrame인 경우 처리
+            if hasattr(weekly_data, 'empty'):
+                if weekly_data.empty or len(weekly_data) < 20:  # 최소 20주 필요
+                    self.logger.debug(f"❌ {code}: 주봉 데이터 부족 ({len(weekly_data)}주)")
+                    return None
+            elif len(weekly_data) < 20:
+                self.logger.debug(f"❌ {code}: 주봉 데이터 부족 ({len(weekly_data)}주)")
                 return None
             
             # 거래대금 조건 체크 (최소 50억)
@@ -247,12 +262,20 @@ class CandidateSelector:
             score = 0
             reasons = []
             
-            # A. 200일 최고종가 체크
+            # A. 200일 최고종가 체크 (주봉 데이터 활용)
             today_close = price_data.current_price
-            max_close_200d = max([data.close_price for data in daily_data])
+            
+            # DataFrame인 경우 처리
+            if hasattr(weekly_data, 'empty'):
+                weekly_closes = weekly_data['stck_clpr'].astype(float).tolist()
+            else:
+                weekly_closes = [data.close_price for data in weekly_data]
+            
+            max_close_200d = max(weekly_closes)
             if today_close >= max_close_200d * 0.98:  # 98% 이상이면 신고가 근처
                 score += 20
                 reasons.append("200일 신고가 근처")
+                self.logger.debug(f"✅ {code}: 200일 신고가 ({max_close_200d:,.0f}원 대비 {today_close/max_close_200d:.1%})")
             
             # B. Envelope 상한선 돌파 체크
             if self._check_envelope_breakout(daily_data, today_close):
@@ -266,8 +289,15 @@ class CandidateSelector:
                 reasons.append("양봉 형성")
             
             # D. 거래량 급증 체크 (평균 대비 3배 이상)
-            recent_data = daily_data[-20:] if hasattr(daily_data, '__getitem__') else list(daily_data)[-20:]
-            avg_volume = sum([data.volume for data in recent_data]) / len(recent_data)
+            if hasattr(daily_data, 'empty'):
+                # DataFrame인 경우
+                recent_20d = daily_data.tail(20)
+                avg_volume = recent_20d['acml_vol'].astype(float).mean()
+            else:
+                # List인 경우
+                recent_data = list(daily_data)[-20:]
+                avg_volume = sum([data.volume for data in recent_data]) / len(recent_data)
+            
             current_volume = getattr(price_data, 'volume', 0)
             if current_volume >= avg_volume * 3:
                 score += 25
@@ -285,29 +315,55 @@ class CandidateSelector:
                 reasons.append("중심가격 상회")
             
             # F. 5일 평균 거래대금 체크 (50억 이상)
-            recent_5d = daily_data[-5:] if hasattr(daily_data, '__getitem__') else list(daily_data)[-5:]
-            avg_amount_5d = sum([data.volume * data.close_price for data in recent_5d]) / len(recent_5d)
+            if hasattr(daily_data, 'empty'):
+                # DataFrame인 경우
+                recent_5d = daily_data.tail(5)
+                volumes = recent_5d['acml_vol'].astype(float)
+                closes = recent_5d['stck_clpr'].astype(float)
+                avg_amount_5d = (volumes * closes).mean()
+            else:
+                # List인 경우
+                recent_5d = list(daily_data)[-5:]
+                avg_amount_5d = sum([data.volume * data.close_price for data in recent_5d]) / len(recent_5d)
+            
             if avg_amount_5d >= 5_000_000_000:
                 score += 15
                 reasons.append("충분한 거래대금")
             
             # G, H. 급등주 제외 조건
-            data_len = len(daily_data) if hasattr(daily_data, '__len__') else len(list(daily_data))
-            if data_len >= 2:
-                data_list = daily_data if hasattr(daily_data, '__getitem__') else list(daily_data)
-                prev_close = data_list[-2].close_price
-                open_change = (today_open - prev_close) / prev_close if prev_close > 0 else 0
-                close_change = (today_close - prev_close) / prev_close if prev_close > 0 else 0
-                
-                # 시가 7% 이상 갭상승 시 제외
-                if open_change >= 0.07:
-                    self.logger.debug(f"❌ {code}: 시가 갭상승 제외 ({open_change:.1%})")
-                    return None
-                
-                # 종가 10% 이상 상승 시 제외  
-                if close_change >= 0.10:
-                    self.logger.debug(f"❌ {code}: 급등주 제외 ({close_change:.1%})")
-                    return None
+            if hasattr(daily_data, 'empty'):
+                # DataFrame인 경우
+                if len(daily_data) >= 2:
+                    prev_close = float(daily_data.iloc[-2]['stck_clpr'])
+                    open_change = (today_open - prev_close) / prev_close if prev_close > 0 else 0
+                    close_change = (today_close - prev_close) / prev_close if prev_close > 0 else 0
+                    
+                    # 시가 7% 이상 갭상승 시 제외
+                    if open_change >= 0.07:
+                        self.logger.debug(f"❌ {code}: 시가 갭상승 제외 ({open_change:.1%})")
+                        return None
+                    
+                    # 종가 10% 이상 상승 시 제외  
+                    if close_change >= 0.10:
+                        self.logger.debug(f"❌ {code}: 급등주 제외 ({close_change:.1%})")
+                        return None
+            else:
+                # List인 경우
+                data_list = list(daily_data)
+                if len(data_list) >= 2:
+                    prev_close = data_list[-2].close_price
+                    open_change = (today_open - prev_close) / prev_close if prev_close > 0 else 0
+                    close_change = (today_close - prev_close) / prev_close if prev_close > 0 else 0
+                    
+                    # 시가 7% 이상 갭상승 시 제외
+                    if open_change >= 0.07:
+                        self.logger.debug(f"❌ {code}: 시가 갭상승 제외 ({open_change:.1%})")
+                        return None
+                    
+                    # 종가 10% 이상 상승 시 제외  
+                    if close_change >= 0.10:
+                        self.logger.debug(f"❌ {code}: 급등주 제외 ({close_change:.1%})")
+                        return None
             
             # I. 시가대비 종가 3% 이상 상승
             intraday_change = (today_close - today_open) / today_open if today_open > 0 else 0
@@ -337,13 +393,21 @@ class CandidateSelector:
     def _check_envelope_breakout(self, daily_data, current_price: float) -> bool:
         """Envelope(10, 10%) 상한선 돌파 체크"""
         try:
-            data_len = len(daily_data) if hasattr(daily_data, '__len__') else len(list(daily_data))
-            if data_len < 10:
-                return False
-            
-            # 최근 10일 평균
-            recent_10d = daily_data[-10:] if hasattr(daily_data, '__getitem__') else list(daily_data)[-10:]
-            ma10 = sum([data.close_price for data in recent_10d]) / len(recent_10d)
+            if hasattr(daily_data, 'empty'):
+                # DataFrame인 경우
+                if len(daily_data) < 10:
+                    return False
+                
+                recent_10d = daily_data.tail(10)
+                ma10 = recent_10d['stck_clpr'].astype(float).mean()
+            else:
+                # List인 경우
+                data_list = list(daily_data)
+                if len(data_list) < 10:
+                    return False
+                
+                recent_10d = data_list[-10:]
+                ma10 = sum([data.close_price for data in recent_10d]) / len(recent_10d)
             
             # Envelope 상한선 (MA + 10%)
             upper_envelope = ma10 * 1.10
