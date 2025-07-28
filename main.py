@@ -15,6 +15,7 @@ from core.data_collector import RealTimeDataCollector
 from core.order_manager import OrderManager
 from core.telegram_integration import TelegramIntegration
 from api.kis_api_manager import KISAPIManager
+from config.settings import load_trading_config
 from utils.logger import setup_logger
 from utils.korean_time import now_kst, get_market_status, is_market_open
 
@@ -41,21 +42,8 @@ class DayTradingBot:
     
     def _load_config(self) -> TradingConfig:
         """거래 설정 로드"""
-        # TODO: JSON/YAML 파일에서 설정 로드
-        # 현재는 기본값 사용
-        config = TradingConfig(
-            data_collection_interval=30,  # 30초마다 데이터 수집
-            candidate_stocks=["005930", "000660", "035420"],  # 삼성전자, SK하이닉스, NAVER
-            buy_timeout=300,   # 5분
-            sell_timeout=180,  # 3분
-            max_adjustments=3,
-            max_position_count=3,
-            max_position_ratio=0.3,
-            stop_loss_ratio=0.03,
-            take_profit_ratio=0.05
-        )
-        
-        self.logger.info(f"거래 설정 로드 완료: 후보종목 {len(config.candidate_stocks)}개")
+        config = load_trading_config()
+        self.logger.info(f"거래 설정 로드 완료: 후보종목 {len(config.data_collection.candidate_stocks)}개")
         return config
     
     def _signal_handler(self, signum, frame):
@@ -82,9 +70,8 @@ class DayTradingBot:
             # 3. 텔레그램 초기화
             await self.telegram.initialize()
             
-            # 4. 후보 종목 설정
-            for stock_code in self.config.candidate_stocks:
-                self.data_collector.add_candidate_stock(stock_code)
+            # 4. 후보 종목 설정 (동적 선정을 위해 초기화만 수행)
+            # TODO: 매일 장전 동적으로 후보 종목 선정 로직 구현
             
             self.logger.info("✅ 시스템 초기화 완료")
             return True
@@ -203,7 +190,23 @@ class DayTradingBot:
         try:
             self.logger.info("📡 시스템 모니터링 태스크 시작")
             
+            last_api_refresh = now_kst()
+            last_market_check = now_kst()
+            
             while self.is_running:
+                current_time = now_kst()
+                
+                # API 24시간마다 재초기화
+                if (current_time - last_api_refresh).total_seconds() >= 86400:  # 24시간
+                    await self._refresh_api()
+                    last_api_refresh = current_time
+                
+                # 매일 오전 8시에 시장 상태 및 후보 종목 갱신
+                if (current_time.hour == 8 and current_time.minute == 0 and 
+                    (current_time - last_market_check).total_seconds() >= 3600):  # 1시간 간격으로 체크
+                    await self._daily_market_update()
+                    last_market_check = current_time
+                
                 # 30분마다 시스템 상태 로그
                 await asyncio.sleep(1800)
                 await self._log_system_status()
@@ -237,6 +240,45 @@ class DayTradingBot:
         except Exception as e:
             self.logger.error(f"❌ 시스템 상태 로깅 오류: {e}")
     
+    async def _refresh_api(self):
+        """API 재초기화"""
+        try:
+            self.logger.info("🔄 API 24시간 주기 재초기화 시작")
+            
+            # API 매니저 재초기화
+            if not self.api_manager.initialize():
+                self.logger.error("❌ API 재초기화 실패")
+                await self.telegram.notify_error("API Refresh", "API 재초기화 실패")
+                return False
+                
+            self.logger.info("✅ API 재초기화 완료")
+            await self.telegram.notify_system_status("API 재초기화 완료")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"❌ API 재초기화 오류: {e}")
+            await self.telegram.notify_error("API Refresh", e)
+            return False
+    
+    async def _daily_market_update(self):
+        """일일 시장 상태 및 후보 종목 갱신"""
+        try:
+            self.logger.info("📊 일일 시장 정보 갱신 시작")
+            
+            # 시장 상태 갱신
+            market_status = get_market_status()
+            self.logger.info(f"📈 시장 상태 갱신: {market_status}")
+            
+            # TODO: 전략에 따라 후보 종목 동적 변경
+            # 현재는 기본 설정 유지
+            self.logger.info("📋 후보 종목 갱신 (현재는 기본 설정 유지)")
+            
+            await self.telegram.notify_system_status(f"일일 시장 정보 갱신 완료 - 시장 상태: {market_status}")
+            
+        except Exception as e:
+            self.logger.error(f"❌ 일일 시장 정보 갱신 오류: {e}")
+            await self.telegram.notify_error("Daily Market Update", e)
+
     async def shutdown(self):
         """시스템 종료"""
         try:

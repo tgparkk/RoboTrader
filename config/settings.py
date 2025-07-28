@@ -1,13 +1,18 @@
 """
 설정 파일 로더 모듈
 key.ini 파일에서 설정을 읽어 환경변수로 제공
+trading_config.json 파일에서 거래 설정을 로드
 """
 import os
+import json
 import configparser
 from pathlib import Path
+from typing import Dict, Any
+from core.models import TradingConfig
 
 # 설정 파일 경로
 CONFIG_FILE = Path(__file__).parent / "key.ini"
+TRADING_CONFIG_FILE = Path(__file__).parent / "trading_config.json"
 
 def load_config():
     """설정 파일을 로드하여 환경변수 설정"""
@@ -27,6 +32,24 @@ def load_config():
         'KIS_ACCOUNT_NO': kis_section.get('KIS_ACCOUNT_NO', '').strip('"'),
         'KIS_HTS_ID': kis_section.get('KIS_HTS_ID', '').strip('"'),
     }
+
+def load_trading_config() -> TradingConfig:
+    """거래 설정 파일을 로드하여 TradingConfig 객체 반환"""
+    if not TRADING_CONFIG_FILE.exists():
+        print(f"경고: 거래 설정 파일을 찾을 수 없습니다: {TRADING_CONFIG_FILE}")
+        print("기본 설정을 사용합니다.")
+        return TradingConfig()
+    
+    try:
+        with open(TRADING_CONFIG_FILE, 'r', encoding='utf-8') as f:
+            json_data = json.load(f)
+        
+        return TradingConfig.from_json(json_data)
+        
+    except Exception as e:
+        print(f"경고: 거래 설정 파일 로드 실패: {e}")
+        print("기본 설정을 사용합니다.")
+        return TradingConfig()
 
 # 설정 로드
 try:

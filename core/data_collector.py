@@ -29,7 +29,7 @@ class RealTimeDataCollector:
     
     def _initialize_stocks(self):
         """후보 종목 초기화"""
-        for stock_code in self.config.candidate_stocks:
+        for stock_code in self.config.data_collection.candidate_stocks:
             # TODO: 종목명 조회 API 추가 필요
             stock_name = f"Stock_{stock_code}"
             self.stocks[stock_code] = Stock(
@@ -47,15 +47,15 @@ class RealTimeDataCollector:
                 name=stock_name or f"Stock_{stock_code}",
                 is_candidate=True
             )
-            self.config.candidate_stocks.append(stock_code)
+            self.config.data_collection.candidate_stocks.append(stock_code)
             self.logger.info(f"후보 종목 추가: {stock_code}")
     
     def remove_candidate_stock(self, stock_code: str):
         """후보 종목 제거"""
         if stock_code in self.stocks:
             self.stocks[stock_code].is_candidate = False
-            if stock_code in self.config.candidate_stocks:
-                self.config.candidate_stocks.remove(stock_code)
+            if stock_code in self.config.data_collection.candidate_stocks:
+                self.config.data_collection.candidate_stocks.remove(stock_code)
             self.logger.info(f"후보 종목 제거: {stock_code}")
     
     async def start_collection(self):
@@ -75,7 +75,7 @@ class RealTimeDataCollector:
                 await self._collect_all_stocks_data()
                 
                 # 설정된 주기만큼 대기
-                await asyncio.sleep(self.config.data_collection_interval)
+                await asyncio.sleep(self.config.data_collection.interval_seconds)
                 
             except Exception as e:
                 self.logger.error(f"데이터 수집 중 오류: {e}")
@@ -85,7 +85,7 @@ class RealTimeDataCollector:
         """모든 후보 종목 데이터 수집"""
         tasks = []
         
-        for stock_code in self.config.candidate_stocks:
+        for stock_code in self.config.data_collection.candidate_stocks:
             if stock_code in self.stocks:
                 task = self._collect_stock_data(stock_code)
                 tasks.append(task)
