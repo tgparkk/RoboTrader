@@ -210,220 +210,6 @@ def get_volume_rank(fid_cond_mrkt_div_code: str = "J",
         return None
 
 
-def get_fluctuation_rank(fid_cond_mrkt_div_code: str = "J",
-                        fid_cond_scr_div_code: str = "20170",
-                        fid_input_iscd: str = "0000",
-                        fid_rank_sort_cls_code: str = "0",
-                        fid_input_cnt_1: str = "0",
-                        fid_prc_cls_code: str = "0",
-                        fid_input_price_1: str = "",
-                        fid_input_price_2: str = "",
-                        fid_vol_cnt: str = "",
-                        fid_trgt_cls_code: str = "0",
-                        fid_trgt_exls_cls_code: str = "0",
-                        fid_div_cls_code: str = "0",
-                        fid_rsfl_rate1: str = "",
-                        fid_rsfl_rate2: str = "",
-                        tr_cont: str = "") -> Optional[pd.DataFrame]:
-    """
-    등락률 순위 조회 (TR: FHPST01700000)
-
-    Args:
-        fid_cond_mrkt_div_code: 조건 시장 분류 코드 (J: 주식)
-        fid_cond_scr_div_code: 조건 화면 분류 코드 (20170)
-        fid_input_iscd: 입력 종목코드 (0000:전체, 0001:코스피, 1001:코스닥, 2001:코스피200)
-        fid_rank_sort_cls_code: 순위 정렬 구분 코드 (0:상승율순, 1:하락율순, 2:시가대비상승율, 3:시가대비하락율, 4:변동율)
-        fid_input_cnt_1: 입력 수1 (0:전체, 누적일수 입력)
-        fid_prc_cls_code: 가격 구분 코드 (0:저가대비/고가대비, 1:종가대비)
-        fid_input_price_1: 입력 가격1 (가격 ~)
-        fid_input_price_2: 입력 가격2 (~ 가격)
-        fid_vol_cnt: 거래량 수 (거래량 ~)
-        fid_trgt_cls_code: 대상 구분 코드 (0:전체)
-        fid_trgt_exls_cls_code: 대상 제외 구분 코드 (0:전체)
-        fid_div_cls_code: 분류 구분 코드 (0:전체)
-        fid_rsfl_rate1: 등락 비율1 (비율 ~)
-        fid_rsfl_rate2: 등락 비율2 (~ 비율)
-        tr_cont: 연속 거래 여부
-
-    Returns:
-        등락률 순위 종목 데이터 (최대 30건)
-    """
-    url = '/uapi/domestic-stock/v1/ranking/fluctuation'
-    tr_id = "FHPST01700000"  # 등락률 순위
-
-    # 🆕 등락률 범위 자동 설정 로직
-    if fid_rsfl_rate1 and not fid_rsfl_rate2:
-        # fid_rsfl_rate1만 있는 경우 상한을 자동 설정
-        try:
-            min_rate = float(fid_rsfl_rate1)
-            if fid_rank_sort_cls_code == "0":  # 상승률순
-                fid_rsfl_rate2 = "30.0"  # 최대 30% 상승까지
-            else:  # 하락률순
-                fid_rsfl_rate2 = "0.0"   # 최대 0%까지 (하락)
-            logger.debug(f"📊 등락률 범위 자동 설정: {fid_rsfl_rate1}% ~ {fid_rsfl_rate2}%")
-        except ValueError:
-            # 변환 실패시 기본값 사용
-            fid_rsfl_rate2 = "30.0" if fid_rank_sort_cls_code == "0" else "0.0"
-    elif not fid_rsfl_rate1 and not fid_rsfl_rate2:
-        # 둘 다 없는 경우 전체 범위
-        fid_rsfl_rate1 = ""
-        fid_rsfl_rate2 = ""
-
-    params = {
-        "fid_rsfl_rate2": fid_rsfl_rate2,
-        "fid_cond_mrkt_div_code": fid_cond_mrkt_div_code,
-        "fid_cond_scr_div_code": fid_cond_scr_div_code,
-        "fid_input_iscd": fid_input_iscd,
-        "fid_rank_sort_cls_code": fid_rank_sort_cls_code,
-        "fid_input_cnt_1": fid_input_cnt_1,
-        "fid_prc_cls_code": fid_prc_cls_code,
-        "fid_input_price_1": fid_input_price_1,
-        "fid_input_price_2": fid_input_price_2,
-        "fid_vol_cnt": fid_vol_cnt,
-        "fid_trgt_cls_code": fid_trgt_cls_code,
-        "fid_trgt_exls_cls_code": fid_trgt_exls_cls_code,
-        "fid_div_cls_code": fid_div_cls_code,
-        "fid_rsfl_rate1": fid_rsfl_rate1
-    }
-
-    try:
-        # 🔧 시간대별 컨텍스트 정보 추가
-        current_time = now_kst()
-        time_context = f"현재시간:{current_time.strftime('%H:%M:%S')}"
-        is_market_open = 9 <= current_time.hour < 16
-        time_context += f" 장운영:{'Y' if is_market_open else 'N'}"
-
-        #logger.info(f"🔍 등락률순위 API 호출 - {time_context}")
-        #logger.debug(f"📋 요청파라미터: 시장={fid_input_iscd}, 등락률={fid_rsfl_rate1}~{fid_rsfl_rate2}%, 정렬={fid_rank_sort_cls_code}")
-
-        res = kis._url_fetch(url, tr_id, tr_cont, params)
-
-        if res and res.isOK():
-            try:
-                # 🔧 응답 구조 상세 분석
-                body = res.getBody()
-                logger.debug(f"📄 응답 body 타입: {type(body)}")
-
-                # rt_cd, msg_cd, msg1 확인
-                rt_cd = getattr(body, 'rt_cd', 'Unknown')
-                msg_cd = getattr(body, 'msg_cd', 'Unknown')
-                msg1 = getattr(body, 'msg1', 'Unknown')
-
-                #logger.info(f"📡 API 응답상태: rt_cd={rt_cd}, msg_cd={msg_cd}, msg1='{msg1}'")
-
-                # output 확인
-                if hasattr(body, 'output'):
-                    output_data = getattr(body, 'output', [])
-                    if output_data:
-                        current_data = pd.DataFrame(output_data)
-                        #logger.info(f"✅ 등락률 순위 조회 성공: {len(current_data)}건")
-                        return current_data
-                    else:
-                        logger.warning(f"⚠️ 등락률 순위: output이 빈 리스트 (조건 만족 종목 없음)")
-                        logger.info(f"🔍 필터조건: 시장={fid_input_iscd}, 등락률={fid_rsfl_rate1}~{fid_rsfl_rate2}%, 정렬={fid_rank_sort_cls_code}")
-                        return pd.DataFrame()
-                else:
-                    logger.error(f"❌ 응답에 output 필드 없음 - body 구조: {dir(body)}")
-                    return pd.DataFrame()
-
-            except AttributeError as e:
-                logger.error(f"❌ 등락률 순위 응답 구조 오류: {e}")
-                logger.debug(f"응답 구조: {type(res.getBody())}")
-                return pd.DataFrame()
-        else:
-            if res:
-                rt_cd = getattr(res, 'rt_cd', getattr(res.getBody(), 'rt_cd', 'Unknown') if res.getBody() else 'Unknown')
-                msg1 = getattr(res, 'msg1', getattr(res.getBody(), 'msg1', 'Unknown') if res.getBody() else 'Unknown')
-                logger.error(f"❌ 등락률 순위 조회 실패 - rt_cd:{rt_cd}, msg:'{msg1}'")
-
-                # 🔧 일반적인 오류 원인 안내
-                if rt_cd == '1':
-                    if '시간' in str(msg1) or 'time' in str(msg1).lower():
-                        logger.warning("💡 힌트: 장 운영 시간 외에는 일부 API가 제한될 수 있습니다")
-                    elif '조회' in str(msg1) or 'inquiry' in str(msg1).lower():
-                        logger.warning("💡 힌트: API 호출 한도 초과이거나 조회 조건이 너무 제한적일 수 있습니다")
-
-            else:
-                logger.error("❌ 등락률 순위 조회 실패 - 응답 없음 (네트워크 또는 인증 문제)")
-            return None
-    except Exception as e:
-        logger.error(f"❌ 등락률 순위 조회 예외: {e}")
-        return None
-
-
-def get_disparity_rank(fid_cond_mrkt_div_code: str = "J",
-                      fid_cond_scr_div_code: str = "20178",
-                      fid_input_iscd: str = "0000",
-                      fid_rank_sort_cls_code: str = "0",
-                      fid_hour_cls_code: str = "20",
-                      fid_div_cls_code: str = "0",
-                      fid_input_price_1: str = "",
-                      fid_input_price_2: str = "",
-                      fid_trgt_cls_code: str = "0",
-                      fid_trgt_exls_cls_code: str = "0",
-                      fid_vol_cnt: str = "",
-                      tr_cont: str = "") -> Optional[pd.DataFrame]:
-    """
-    이격도 순위 조회 (TR: FHPST01780000)
-
-    Args:
-        fid_cond_mrkt_div_code: 조건 시장 분류 코드 (J: 주식)
-        fid_cond_scr_div_code: 조건 화면 분류 코드 (20178)
-        fid_input_iscd: 입력 종목코드 (0000:전체, 0001:거래소, 1001:코스닥, 2001:코스피200)
-        fid_rank_sort_cls_code: 순위 정렬 구분 코드 (0:이격도상위순, 1:이격도하위순)
-        fid_hour_cls_code: 시간 구분 코드 (5:이격도5, 10:이격도10, 20:이격도20, 60:이격도60, 120:이격도120)
-        fid_div_cls_code: 분류 구분 코드 (0:전체, 1:관리종목, 2:투자주의, 3:투자경고, 4:투자위험예고, 5:투자위험, 6:보통주, 7:우선주)
-        fid_input_price_1: 입력 가격1 (가격 ~)
-        fid_input_price_2: 입력 가격2 (~ 가격)
-        fid_trgt_cls_code: 대상 구분 코드 (0:전체)
-        fid_trgt_exls_cls_code: 대상 제외 구분 코드 (0:전체)
-        fid_vol_cnt: 거래량 수 (거래량 ~)
-        tr_cont: 연속 거래 여부
-
-    Returns:
-        이격도 순위 종목 데이터 (최대 30건)
-    """
-    url = '/uapi/domestic-stock/v1/ranking/disparity'
-    tr_id = "FHPST01780000"  # 이격도 순위
-
-    params = {
-        "FID_INPUT_PRICE_2": fid_input_price_2,          # 입력 가격2
-        "FID_COND_MRKT_DIV_CODE": fid_cond_mrkt_div_code, # 조건 시장 분류 코드
-        "FID_COND_SCR_DIV_CODE": fid_cond_scr_div_code,   # 조건 화면 분류 코드
-        "FID_DIV_CLS_CODE": fid_div_cls_code,             # 분류 구분 코드
-        "FID_RANK_SORT_CLS_CODE": fid_rank_sort_cls_code, # 순위 정렬 구분 코드
-        "FID_HOUR_CLS_CODE": fid_hour_cls_code,           # 시간 구분 코드
-        "FID_INPUT_ISCD": fid_input_iscd,                 # 입력 종목코드
-        "FID_TRGT_CLS_CODE": fid_trgt_cls_code,           # 대상 구분 코드
-        "FID_TRGT_EXLS_CLS_CODE": fid_trgt_exls_cls_code, # 대상 제외 구분 코드
-        "FID_INPUT_PRICE_1": fid_input_price_1,           # 입력 가격1
-        "FID_VOL_CNT": fid_vol_cnt                        # 거래량 수
-    }
-
-    try:
-        logger.debug(f"🔍 이격도순위 API 호출 - 시장:{fid_input_iscd}, 이격도:{fid_hour_cls_code}일")
-        logger.debug(f"📋 파라미터: {params}")
-
-        res = kis._url_fetch(url, tr_id, tr_cont, params)
-
-        if res and res.isOK():
-            body = res.getBody()
-            output_data = getattr(body, 'output', [])
-            if output_data:
-                current_data = pd.DataFrame(output_data)
-                #logger.info(f"✅ 이격도 순위 조회 성공: {len(current_data)}건 (이격도{fid_hour_cls_code}일)")
-                return current_data
-            else:
-                logger.warning("이격도 순위 조회: 데이터 없음")
-                return pd.DataFrame()
-        else:
-            logger.error("이격도 순위 조회 실패")
-            return None
-    except Exception as e:
-        logger.error(f"이격도 순위 조회 오류: {e}")
-        return None
-
-
 # 테스트 실행을 위한 예시 함수
 if __name__ == "__main__":
     pass
@@ -873,4 +659,64 @@ def get_stock_market_cap(stock_code: str) -> Optional[Dict[str, Any]]:
         
     except Exception as e:
         logger.error(f"❌ {stock_code} 시가총액 계산 오류: {e}")
+        return None
+
+
+def get_psearch_result(user_id: str, seq: str, tr_cont: str = "") -> Optional[pd.DataFrame]:
+    """
+    종목조건검색조회 API (TR: HHKST03900400)
+    HTS(efriend Plus) [0110] 조건검색에서 등록 및 서버저장한 나의 조건 결과를 조회합니다.
+    
+    Args:
+        user_id: 사용자 HTS ID (40자리)
+        seq: 사용자조건 키값 (종목조건검색 목록조회 API의 output인 'seq' 사용, 0부터 시작)
+        tr_cont: 연속 거래 여부 (빈 문자열)
+        
+    Returns:
+        pd.DataFrame: 조건검색 결과 종목 데이터
+        - code: 종목코드
+        - name: 종목명
+        - price: 현재가
+        - daebi: 전일대비부호 (1:상한, 2:상승, 3:보합, 4:하한, 5:하락)
+        - change: 전일대비
+        - chgrate: 등락율
+        - acml_vol: 거래량
+        - trade_amt: 거래대금
+        - 등 추가 정보들...
+    """
+    url = '/uapi/domestic-stock/v1/quotations/psearch-result'
+    tr_id = "HHKST03900400"  # 종목조건검색조회
+    
+    params = {
+        "user_id": user_id,    # 사용자 HTS ID
+        "seq": seq             # 사용자조건 키값 (0부터 시작)
+    }
+    
+    try:
+        logger.debug(f"🔍 종목조건검색조회: user_id={user_id}, seq={seq}")
+        res = kis._url_fetch(url, tr_id, tr_cont, params)
+        
+        if res and res.isOK():
+            body = res.getBody()
+            output_data = getattr(body, 'output2', None)  # output2 배열 사용
+            
+            if output_data:
+                result_df = pd.DataFrame(output_data)
+                logger.info(f"✅ 종목조건검색조회 성공: {len(result_df)}건 (seq={seq})")
+                return result_df
+            else:
+                logger.warning(f"⚠️ 종목조건검색조회: 조건에 맞는 종목 없음 (seq={seq})")
+                return pd.DataFrame()
+                
+        else:
+            error_msg = res.getErrorMessage() if res else "Unknown error"
+            if "종목코드 오류입니다" in error_msg or "MCA05918" in error_msg:
+                logger.info(f"ℹ️ 종목조건검색조회: 검색 결과 0건 (seq={seq})")
+                return pd.DataFrame()
+            else:
+                logger.error(f"❌ 종목조건검색조회 실패 (seq={seq}): {error_msg}")
+                return None
+                
+    except Exception as e:
+        logger.error(f"❌ 종목조건검색조회 오류 (seq={seq}): {e}")
         return None

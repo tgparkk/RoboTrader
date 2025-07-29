@@ -128,10 +128,24 @@ class DayTradingBot:
         try:
             self.logger.info("🤖 매매 의사결정 태스크 시작")
             
+            last_condition_check = datetime(2000, 1, 1)  # 초기값
+            
             while self.is_running:
+
+                await self._check_condition_search()
+
                 if not is_market_open():
                     await asyncio.sleep(60)  # 장 마감 시 1분 대기
                     continue
+                
+                current_time = now_kst()
+
+                
+                
+                # 🆕 장중 조건검색 체크 (30분마다)
+                if (current_time - last_condition_check).total_seconds() >= 1800:  # 30분
+                    await self._check_condition_search()
+                    last_condition_check = current_time
                 
                 # 현재는 기본 로직만 구현 (전략은 나중에 추가)
                 await self._simple_trading_logic()
@@ -205,7 +219,7 @@ class DayTradingBot:
                     await self._refresh_api()
                     last_api_refresh = current_time
                 
-                await self._daily_market_update()
+                #await self._daily_market_update()
 
                 # 매일 오전 8시에 시장 상태 및 후보 종목 갱신
                 if (current_time.hour == 8 and current_time.minute == 0 and 
@@ -313,6 +327,100 @@ class DayTradingBot:
         except Exception as e:
             self.logger.error(f"❌ 일일 시장 정보 갱신 오류: {e}")
             await self.telegram.notify_error("Daily Market Update", e)
+    
+    async def _check_condition_search(self):
+        """장중 조건검색 체크"""
+        try:
+            self.logger.info("🔍 장중 조건검색 체크 시작")
+            
+            # 조건검색 seq 리스트 (필요에 따라 여러 조건 추가 가능)
+            #condition_seqs = ["0", "1", "2"]  # 예: 0, 1, 2번 조건
+            condition_seqs = ["0"]
+            
+            all_condition_results = []
+            
+            for seq in condition_seqs:
+                try:
+                    # 조건검색 결과 조회 (단순 조회만)
+                    condition_results = self.candidate_selector.get_condition_search_candidates(seq=seq)
+                    
+                    if condition_results:
+                        all_condition_results.extend(condition_results)
+                        self.logger.info(f"✅ 조건검색 {seq}번: {len(condition_results)}개 종목 발견")
+                    else:
+                        self.logger.debug(f"ℹ️ 조건검색 {seq}번: 해당 종목 없음")
+                        
+                except Exception as e:
+                    self.logger.warning(f"⚠️ 조건검색 {seq}번 오류: {e}")
+                    continue
+            
+            # 결과가 있으면 알림 발송
+            if all_condition_results:
+                await self._notify_condition_search_results(all_condition_results)
+                
+                # 실시간 데이터 수집에 추가 (선택사항)
+                for stock_data in all_condition_results:
+                    stock_code = stock_data.get('code', '')
+                    stock_name = stock_data.get('name', '')
+                    if stock_code and not self.data_collector.has_stock(stock_code):
+                        self.data_collector.add_candidate_stock(stock_code, stock_name)
+                        self.logger.info(f"📊 조건검색 종목 데이터 수집 추가: {stock_code}({stock_name})")
+            else:
+                self.logger.debug("ℹ️ 장중 조건검색: 발견된 종목 없음")
+            
+        except Exception as e:
+            self.logger.error(f"❌ 장중 조건검색 체크 오류: {e}")
+            await self.telegram.notify_error("Condition Search", e)
+    
+    async def _notify_condition_search_results(self, stock_results):
+        """조건검색 결과 알림"""
+        try:
+            # 알림 메시지 생성
+            message_lines = ["🔥 장중 조건검색 급등주 발견!"]
+            message_lines.append(f"📊 발견 시간: {now_kst().strftime('%H:%M:%S')}")
+            message_lines.append("")
+            
+            for i, stock_data in enumerate(stock_results[:5], 1):  # 상위 5개만
+                code = stock_data.get('code', '')
+                name = stock_data.get('name', '')
+                price = stock_data.get('price', '')
+                change_rate = stock_data.get('chgrate', '')
+                
+                message_lines.append(
+                    f"{i}. {code} {name}\n"
+                    f"   💰 현재가: {price}원\n"
+                    f"   📈 등락률: {change_rate}%"
+                )
+            
+            if len(stock_results) > 5:
+                message_lines.append(f"... 외 {len(stock_results) - 5}개 종목")
+            
+            alert_message = "\n".join(message_lines)
+            
+            # 텔레그램 알림 (긴급 알림으로 발송)
+            await self.telegram.notify_urgent_signal(alert_message)
+            
+            # 개별 종목별 상세 정보도 발송 (상위 3개만)
+            for stock_data in stock_results[:3]:
+                code = stock_data.get('code', '')
+                name = stock_data.get('name', '')
+                price = stock_data.get('price', '')
+                change_rate = stock_data.get('chgrate', '')
+                volume = stock_data.get('acml_vol', '')
+                
+                await self.telegram.notify_signal_detected({
+                    'stock_code': code,
+                    'stock_name': name,
+                    'signal_type': '조건검색',
+                    'price': price,
+                    'change_rate': change_rate,
+                    'volume': volume
+                })
+            
+            self.logger.info(f"📱 조건검색 결과 알림 완료: {len(stock_results)}개 종목")
+            
+        except Exception as e:
+            self.logger.error(f"❌ 조건검색 결과 알림 오류: {e}")
 
     async def shutdown(self):
         """시스템 종료"""

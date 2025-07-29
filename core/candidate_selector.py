@@ -453,3 +453,80 @@ class CandidateSelector:
             
         except Exception as e:
             self.logger.error(f"후보 종목 설정 업데이트 실패: {e}")
+    
+    
+    def get_condition_search_results(self, seq: str) -> Optional[List[Dict]]:
+        """
+        종목조건검색조회 실행 (장중 실행용)
+        
+        Args:
+            seq: 조건검색 순번 (0부터 시작하는 문자열)
+            
+        Returns:
+            조건검색 결과 종목 리스트 또는 None
+        """
+        try:
+            from config.settings import HTS_ID
+            from api.kis_market_api import get_psearch_result
+            
+            self.logger.info(f"🔍 종목조건검색조회 실행: seq={seq}")
+            
+            # HTS_ID 확인
+            if not HTS_ID:
+                self.logger.error("❌ HTS_ID가 설정되지 않았습니다. config/key.ini를 확인해주세요.")
+                return None
+            
+            # 종목조건검색조회 API 호출
+            result_df = get_psearch_result(user_id=HTS_ID, seq=seq)
+            
+            if result_df is None:
+                self.logger.error(f"❌ 종목조건검색조회 실패: seq={seq}")
+                return None
+            
+            if result_df.empty:
+                self.logger.info(f"ℹ️ 조건에 맞는 종목이 없습니다: seq={seq}")
+                return []
+            
+            # DataFrame을 딕셔너리 리스트로 변환
+            result_list = result_df.to_dict('records')
+            
+            self.logger.info(f"✅ 종목조건검색조회 성공: {len(result_list)}개 종목 발견 (seq={seq})")
+            
+            # 결과 요약 로그
+            for i, stock in enumerate(result_list[:5]):  # 상위 5개만 로그
+                code = stock.get('code', '')
+                name = stock.get('name', '')
+                price = stock.get('price', '')
+                change_rate = stock.get('chgrate', '')
+                
+                self.logger.info(f"  {i+1}. {code}({name}): {price}원 ({change_rate}%)")
+            
+            if len(result_list) > 5:
+                self.logger.info(f"  ... 외 {len(result_list) - 5}개 종목")
+            
+            return result_list
+            
+        except Exception as e:
+            self.logger.error(f"❌ 종목조건검색조회 오류: {e}")
+            return None
+    
+    
+    def get_condition_search_candidates(self, seq: str, max_candidates: int = 10) -> Optional[List[Dict]]:
+        """
+        조건검색 결과 조회 (단순 조회만)
+        
+        Args:
+            seq: 조건검색 순번
+            max_candidates: 최대 후보 종목 수 (미사용, 호환성 유지용)
+            
+        Returns:
+            조건검색 결과 종목 리스트 또는 None
+        """
+        try:
+            # 1. 조건검색 결과 조회
+            search_results = self.get_condition_search_results(seq)
+            return search_results
+            
+        except Exception as e:
+            self.logger.error(f"❌ 조건검색 결과 조회 실패: {e}")
+            return None
