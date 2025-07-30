@@ -23,6 +23,7 @@ class TelegramNotifier:
         self.bot = Bot(token=bot_token)
         self.application = None
         self.is_initialized = False
+        self.is_polling = False
         
         # 메시지 형식 템플릿
         self.templates = {
@@ -46,6 +47,13 @@ class TelegramNotifier:
             # 봇 연결 테스트
             me = await self.bot.get_me()
             self.logger.info(f"봇 연결 성공: @{me.username}")
+            
+            # 기존 웹훅 제거 (다중 인스턴스 충돌 방지)
+            try:
+                await self.bot.delete_webhook(drop_pending_updates=True)
+                self.logger.info("기존 웹훅 정리 완료")
+            except Exception as webhook_error:
+                self.logger.warning(f"웹훅 정리 중 오류 (무시 가능): {webhook_error}")
             
             # Application 생성
             self.application = Application.builder().token(self.bot_token).build()
@@ -84,21 +92,46 @@ class TelegramNotifier:
             self.logger.error("봇이 초기화되지 않았습니다")
             return
         
+        if self.is_polling:
+            self.logger.warning("이미 폴링이 실행 중입니다")
+            return
+        
         try:
             self.logger.info("텔레그램 봇 폴링 시작")
+            self.is_polling = True
+            
+            # 웹훅과 대기 중인 업데이트 완전 정리
+            try:
+                await self.bot.delete_webhook(drop_pending_updates=True)
+                # 잠시 대기하여 기존 연결이 완전히 정리되도록 함
+                await asyncio.sleep(2)
+            except Exception as e:
+                self.logger.warning(f"웹훅 정리 중 오류 (무시 가능): {e}")
+            
             await self.application.initialize()
             await self.application.start()
-            await self.application.updater.start_polling()
+            
+            # conflict 오류 방지를 위한 설정
+            await self.application.updater.start_polling(
+                allowed_updates=["message", "callback_query"],
+                drop_pending_updates=True
+            )
             
             # 폴링이 계속 실행되도록 대기
-            while True:
+            while self.is_polling:
                 await asyncio.sleep(1)
                 
         except Exception as e:
-            self.logger.error(f"봇 폴링 오류: {e}")
+            # Conflict 오류인 경우 특별 처리
+            if "terminated by other getUpdates request" in str(e) or "Conflict" in str(e):
+                self.logger.error("다른 봇 인스턴스가 실행 중입니다. 기존 프로세스를 종료해주세요.")
+                raise RuntimeError("텔레그램 봇 중복 실행 감지 - 기존 프로세스를 먼저 종료하세요")
+            else:
+                self.logger.error(f"봇 폴링 오류: {e}")
         finally:
+            self.is_polling = False
             try:
-                if self.application and self.application.updater.running:
+                if self.application and hasattr(self.application, 'updater') and self.application.updater.running:
                     await self.application.updater.stop()
                 if self.application:
                     await self.application.stop()
@@ -309,8 +342,18 @@ class TelegramNotifier:
     async def shutdown(self):
         """텔레그램 봇 종료"""
         try:
-            await self.send_system_stop()
+            self.logger.info("텔레그램 봇 종료 시작")
             
+            # 폴링 중단
+            self.is_polling = False
+            
+            # 시스템 종료 메시지 전송
+            try:
+                await self.send_system_stop()
+            except Exception as msg_error:
+                self.logger.error(f"종료 메시지 전송 실패: {msg_error}")
+            
+            # Application 종료
             if self.application:
                 try:
                     if hasattr(self.application, 'updater') and self.application.updater.running:

@@ -218,15 +218,33 @@ class TelegramIntegration:
             return
         
         try:
+            # Ensure price is a numeric value
+            price_value = signal_data.get('price', 0)
+            if isinstance(price_value, str):
+                try:
+                    price_value = float(price_value.replace(',', '')) if price_value else 0
+                except (ValueError, AttributeError):
+                    price_value = 0
+            
             await self.notifier.send_signal_detected(
                 stock_code=signal_data.get('stock_code', ''),
                 stock_name=signal_data.get('stock_name', ''),
                 signal_type=signal_data.get('signal_type', ''),
-                price=signal_data.get('price', 0),
+                price=price_value,
                 reason=signal_data.get('reason', '')
             )
         except Exception as e:
             self.logger.error(f"매매 신호 알림 실패: {e}")
+    
+    async def notify_urgent_signal(self, message: str):
+        """긴급 신호 알림"""
+        if not self.is_enabled:
+            return
+        
+        try:
+            await self.notifier.send_message(message)
+        except Exception as e:
+            self.logger.error(f"긴급 신호 알림 실패: {e}")
     
     async def notify_error(self, module: str, error: Exception):
         """오류 알림"""

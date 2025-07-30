@@ -4,6 +4,7 @@
 import asyncio
 import signal
 import sys
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -28,6 +29,10 @@ class DayTradingBot:
     def __init__(self):
         self.logger = setup_logger(__name__)
         self.is_running = False
+        self.pid_file = Path("bot.pid")
+        
+        # 프로세스 중복 실행 방지
+        self._check_duplicate_process()
         
         # 설정 초기화
         self.config = self._load_config()
@@ -43,6 +48,38 @@ class DayTradingBot:
         # 신호 핸들러 등록
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
+    
+    def _check_duplicate_process(self):
+        """프로세스 중복 실행 방지"""
+        try:
+            if self.pid_file.exists():
+                # 기존 PID 파일 읽기
+                existing_pid = int(self.pid_file.read_text().strip())
+                
+                # Windows에서 프로세스 존재 여부 확인
+                try:
+                    import psutil
+                    if psutil.pid_exists(existing_pid):
+                        process = psutil.Process(existing_pid)
+                        if 'python' in process.name().lower() and 'main.py' in ' '.join(process.cmdline()):
+                            self.logger.error(f"이미 봇이 실행 중입니다 (PID: {existing_pid})")
+                            print(f"오류: 이미 거래 봇이 실행 중입니다 (PID: {existing_pid})")
+                            print("기존 프로세스를 먼저 종료해주세요.")
+                            sys.exit(1)
+                except ImportError:
+                    # psutil이 없는 경우 간단한 체크
+                    self.logger.warning("psutil 모듈이 없어 정확한 중복 실행 체크를 할 수 없습니다")
+                except:
+                    # 기존 PID가 존재하지 않으면 PID 파일 삭제
+                    self.pid_file.unlink(missing_ok=True)
+            
+            # 현재 프로세스 PID 저장
+            current_pid = os.getpid()
+            self.pid_file.write_text(str(current_pid))
+            self.logger.info(f"프로세스 PID 등록: {current_pid}")
+            
+        except Exception as e:
+            self.logger.warning(f"중복 실행 체크 중 오류: {e}")
     
     def _load_config(self) -> TradingConfig:
         """거래 설정 로드"""
@@ -126,13 +163,15 @@ class DayTradingBot:
     async def _trading_decision_task(self):
         """매매 의사결정 태스크"""
         try:
+
+            await self._check_condition_search()
+
             self.logger.info("🤖 매매 의사결정 태스크 시작")
             
             last_condition_check = datetime(2000, 1, 1)  # 초기값
             
             while self.is_running:
-
-                await self._check_condition_search()
+                #await self._daily_market_update()   
 
                 if not is_market_open():
                     await asyncio.sleep(60)  # 장 마감 시 1분 대기
@@ -206,6 +245,7 @@ class DayTradingBot:
     async def _system_monitoring_task(self):
         """시스템 모니터링 태스크"""
         try:
+
             self.logger.info("📡 시스템 모니터링 태스크 시작")
             
             last_api_refresh = now_kst()
@@ -218,8 +258,6 @@ class DayTradingBot:
                 if (current_time - last_api_refresh).total_seconds() >= 86400:  # 24시간
                     await self._refresh_api()
                     last_api_refresh = current_time
-                
-                #await self._daily_market_update()
 
                 # 매일 오전 8시에 시장 상태 및 후보 종목 갱신
                 if (current_time.hour == 8 and current_time.minute == 0 and 
@@ -291,6 +329,7 @@ class DayTradingBot:
             
             # 후보 종목 동적 선정
             self.logger.info("🔍 후보 종목 동적 선정 시작")
+            '''
             candidates = await self.candidate_selector.select_daily_candidates(max_candidates=5)
             
             if candidates:
@@ -321,7 +360,7 @@ class DayTradingBot:
             else:
                 self.logger.warning("⚠️ 선정된 후보 종목이 없습니다")
                 await self.telegram.notify_system_status("⚠️ 오늘은 선정된 후보 종목이 없습니다")
-            
+            '''
             await self.telegram.notify_system_status(f"일일 시장 정보 갱신 완료 - 시장 상태: {market_status}")
             
         except Exception as e:
@@ -438,6 +477,11 @@ class DayTradingBot:
             
             # API 매니저 종료
             self.api_manager.shutdown()
+            
+            # PID 파일 삭제
+            if self.pid_file.exists():
+                self.pid_file.unlink()
+                self.logger.info("PID 파일 삭제 완료")
             
             self.logger.info("✅ 시스템 종료 완료")
             

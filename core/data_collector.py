@@ -164,6 +164,10 @@ class RealTimeDataCollector:
         """후보 종목들만 반환"""
         return [stock for stock in self.stocks.values() if stock.is_candidate]
     
+    def has_stock(self, stock_code: str) -> bool:
+        """종목 존재 여부 확인"""
+        return stock_code in self.stocks
+    
     def stop_collection(self):
         """데이터 수집 중단"""
         self.is_running = False
