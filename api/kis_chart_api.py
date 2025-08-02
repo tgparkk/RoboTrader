@@ -502,6 +502,246 @@ def get_realtime_minute_data(stock_code: str) -> Optional[pd.DataFrame]:
         return None
 
 
+def get_full_trading_day_data(stock_code: str, target_date: str = "", 
+                             selected_time: str = "") -> Optional[pd.DataFrame]:
+    """
+    당일 전체 거래시간 분봉 데이터 조회 (연속 호출로 09:00-15:30 전체 수집)
+    
+    장중에 종목이 선정되었을 때 09:00부터 선정시점까지의 모든 분봉 데이터를 수집합니다.
+    API 제한(120건)을 우회하여 전체 거래시간 데이터를 확보합니다.
+    
+    Args:
+        stock_code: 종목코드
+        target_date: 조회 날짜 (YYYYMMDD, 기본값: 오늘)
+        selected_time: 종목 선정 시간 (HHMMSS, 기본값: 현재시간)
+        
+    Returns:
+        pd.DataFrame: 09:00부터 선정시점까지의 전체 분봉 데이터
+    """
+    try:
+        # 기본값 설정
+        if not target_date:
+            target_date = now_kst().strftime("%Y%m%d")
+        if not selected_time:
+            selected_time = now_kst().strftime("%H%M%S")
+        
+        logger.info(f"📊 {stock_code} 전체 거래시간 분봉 데이터 수집 시작 ({target_date} {selected_time}까지)")
+        
+        # 시간대별 구간 설정 (120분씩 나누어 조회)
+        time_segments = [
+            ("090000", "110000"),  # 09:00-11:00 (120분)
+            ("110000", "130000"),  # 11:00-13:00 (120분)
+            ("130000", "150000"),  # 13:00-15:00 (120분)
+            ("150000", "153000")   # 15:00-15:30 (30분)
+        ]
+        
+        all_data_frames = []
+        total_collected = 0
+        
+        for start_time, end_time in time_segments:
+            # 선정 시간을 넘어서면 해당 구간까지만 수집
+            if start_time >= selected_time:
+                break
+                
+            # 해당 구간의 끝 시간이 선정 시간을 넘으면 선정 시간으로 조정
+            segment_end_time = min(end_time, selected_time)
+            
+            try:
+                logger.debug(f"  구간 수집: {start_time}~{segment_end_time}")
+                
+                # 해당 구간 데이터 조회
+                result = get_inquire_time_dailychartprice(
+                    stock_code=stock_code,
+                    input_date=target_date,
+                    input_hour=segment_end_time,
+                    past_data_yn="Y"
+                )
+                
+                if result is None:
+                    logger.warning(f"  ⚠️ {start_time}~{segment_end_time} 구간 데이터 조회 실패")
+                    continue
+                
+                summary_df, chart_df = result
+                
+                if chart_df.empty:
+                    logger.debug(f"  ℹ️ {start_time}~{segment_end_time} 구간 데이터 없음")
+                    continue
+                
+                # 해당 구간에 해당하는 데이터만 필터링
+                if 'time' in chart_df.columns:
+                    # 시간 컬럼을 6자리 문자열로 정규화
+                    chart_df['time_str'] = chart_df['time'].astype(str).str.zfill(6)
+                    
+                    # 해당 시간 구간 필터링
+                    segment_data = chart_df[
+                        (chart_df['time_str'] >= start_time) & 
+                        (chart_df['time_str'] <= segment_end_time)
+                    ].copy()
+                    
+                    if not segment_data.empty:
+                        # time_str 컬럼 제거 (임시 컬럼)
+                        segment_data = segment_data.drop('time_str', axis=1)
+                        all_data_frames.append(segment_data)
+                        total_collected += len(segment_data)
+                        
+                        first_time = segment_data['time'].iloc[0] if len(segment_data) > 0 else 'N/A'
+                        last_time = segment_data['time'].iloc[-1] if len(segment_data) > 0 else 'N/A'
+                        logger.debug(f"  ✅ 수집 완료: {len(segment_data)}건 ({first_time}~{last_time})")
+                    else:
+                        logger.debug(f"  ℹ️ 해당 구간에 데이터 없음")
+                
+                # API 호출 간격 (과도한 요청 방지)
+                await asyncio.sleep(0.1)
+                
+            except Exception as e:
+                logger.error(f"  ❌ {start_time}~{segment_end_time} 구간 수집 오류: {e}")
+                continue
+        
+        # 모든 데이터 결합
+        if all_data_frames:
+            combined_df = pd.concat(all_data_frames, ignore_index=True)
+            
+            # 시간순 정렬 및 중복 제거
+            if 'datetime' in combined_df.columns:
+                combined_df = combined_df.sort_values('datetime').drop_duplicates(subset=['datetime']).reset_index(drop=True)
+            elif 'time' in combined_df.columns:
+                combined_df = combined_df.sort_values('time').drop_duplicates(subset=['time']).reset_index(drop=True)
+            
+            # 최종 시간 범위 확인
+            if 'time' in combined_df.columns and len(combined_df) > 0:
+                first_time = combined_df['time'].iloc[0]
+                last_time = combined_df['time'].iloc[-1]
+                
+                logger.info(f"✅ {stock_code} 전체 거래시간 데이터 수집 완료")
+                logger.info(f"   수집 범위: {first_time} ~ {last_time}")
+                logger.info(f"   총 분봉 수: {len(combined_df)}건")
+                
+                return combined_df
+            else:
+                logger.warning(f"⚠️ {stock_code} 유효한 시간 데이터 없음")
+                return pd.DataFrame()
+        else:
+            logger.warning(f"⚠️ {stock_code} 수집된 데이터 없음")
+            return pd.DataFrame()
+            
+    except Exception as e:
+        logger.error(f"❌ {stock_code} 전체 거래시간 데이터 수집 오류: {e}")
+        return None
+
+
+async def get_full_trading_day_data_async(stock_code: str, target_date: str = "", 
+                                        selected_time: str = "") -> Optional[pd.DataFrame]:
+    """
+    비동기 버전의 전체 거래시간 분봉 데이터 조회
+    
+    Args:
+        stock_code: 종목코드
+        target_date: 조회 날짜 (YYYYMMDD, 기본값: 오늘)
+        selected_time: 종목 선정 시간 (HHMMSS, 기본값: 현재시간)
+        
+    Returns:
+        pd.DataFrame: 09:00부터 선정시점까지의 전체 분봉 데이터
+    """
+    try:
+        # 기본값 설정
+        if not target_date:
+            target_date = now_kst().strftime("%Y%m%d")
+        if not selected_time:
+            selected_time = now_kst().strftime("%H%M%S")
+        
+        logger.info(f"📊 {stock_code} 전체 거래시간 분봉 데이터 수집 시작 (비동기)")
+        
+        # 시간대별 구간 설정
+        time_segments = [
+            ("090000", "110000"),  # 09:00-11:00
+            ("110000", "130000"),  # 11:00-13:00  
+            ("130000", "150000"),  # 13:00-15:00
+            ("150000", "153000")   # 15:00-15:30
+        ]
+        
+        # 선정 시간에 따른 필요한 구간만 선택
+        needed_segments = []
+        for start_time, end_time in time_segments:
+            if start_time >= selected_time:
+                break
+            segment_end_time = min(end_time, selected_time)
+            needed_segments.append((start_time, segment_end_time))
+        
+        logger.debug(f"  필요한 구간: {len(needed_segments)}개")
+        
+        # 비동기 태스크 생성
+        async def fetch_segment_data(start_time: str, end_time: str):
+            try:
+                await asyncio.sleep(0.1)  # API 호출 간격
+                
+                result = get_inquire_time_dailychartprice(
+                    stock_code=stock_code,
+                    input_date=target_date,
+                    input_hour=end_time,
+                    past_data_yn="Y"
+                )
+                
+                if result is None:
+                    return None
+                    
+                summary_df, chart_df = result
+                
+                if chart_df.empty:
+                    return None
+                
+                # 시간 구간 필터링
+                if 'time' in chart_df.columns:
+                    chart_df['time_str'] = chart_df['time'].astype(str).str.zfill(6)
+                    segment_data = chart_df[
+                        (chart_df['time_str'] >= start_time) & 
+                        (chart_df['time_str'] <= end_time)
+                    ].copy()
+                    
+                    if not segment_data.empty:
+                        segment_data = segment_data.drop('time_str', axis=1)
+                        return segment_data
+                
+                return None
+                
+            except Exception as e:
+                logger.error(f"  구간 {start_time}~{end_time} 수집 오류: {e}")
+                return None
+        
+        # 모든 구간을 비동기로 동시 수집
+        tasks = [fetch_segment_data(start, end) for start, end in needed_segments]
+        segment_results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # 결과 결합
+        valid_data_frames = []
+        for i, result in enumerate(segment_results):
+            if isinstance(result, pd.DataFrame) and not result.empty:
+                valid_data_frames.append(result)
+                start_time, end_time = needed_segments[i]
+                logger.debug(f"  ✅ 구간 {start_time}~{end_time}: {len(result)}건")
+            elif isinstance(result, Exception):
+                start_time, end_time = needed_segments[i]
+                logger.error(f"  ❌ 구간 {start_time}~{end_time} 오류: {result}")
+        
+        if valid_data_frames:
+            combined_df = pd.concat(valid_data_frames, ignore_index=True)
+            
+            # 정렬 및 중복 제거
+            if 'datetime' in combined_df.columns:
+                combined_df = combined_df.sort_values('datetime').drop_duplicates(subset=['datetime']).reset_index(drop=True)
+            elif 'time' in combined_df.columns:
+                combined_df = combined_df.sort_values('time').drop_duplicates(subset=['time']).reset_index(drop=True)
+            
+            logger.info(f"✅ {stock_code} 비동기 수집 완료: {len(combined_df)}건")
+            return combined_df
+        else:
+            logger.warning(f"⚠️ {stock_code} 비동기 수집 결과 없음")
+            return pd.DataFrame()
+            
+    except Exception as e:
+        logger.error(f"❌ {stock_code} 비동기 전체 데이터 수집 오류: {e}")
+        return None
+
+
 
 # 테스트 실행을 위한 예시 함수
 if __name__ == "__main__":

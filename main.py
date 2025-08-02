@@ -22,6 +22,7 @@ from api.kis_api_manager import KISAPIManager
 from config.settings import load_trading_config
 from utils.logger import setup_logger
 from utils.korean_time import now_kst, get_market_status, is_market_open
+from post_market_chart_generator import PostMarketChartGenerator
 
 
 class DayTradingBot:
@@ -46,6 +47,7 @@ class DayTradingBot:
         self.candidate_selector = CandidateSelector(self.config, self.api_manager)
         self.intraday_manager = IntradayStockManager(self.api_manager)  # 🆕 장중 종목 관리자
         self.db_manager = DatabaseManager()
+        self.chart_generator = None  # 🆕 장 마감 후 차트 생성기 (지연 초기화)
         
         # 신호 핸들러 등록
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -251,6 +253,9 @@ class DayTradingBot:
             last_api_refresh = now_kst()
             last_market_check = now_kst()
             last_intraday_update = now_kst()  # 🆕 장중 데이터 업데이트 시간
+            last_chart_generation = datetime(2000, 1, 1)  # 🆕 장 마감 후 차트 생성 시간
+
+            
             
             while self.is_running:
                 current_time = now_kst()
@@ -273,6 +278,12 @@ class DayTradingBot:
                     if is_market_open():
                         await self._update_intraday_data()
                     last_intraday_update = current_time
+                
+                # 🆕 장 마감 후 차트 생성 (16:00에 한 번만 실행)
+                if (current_time.hour == 16 and current_time.minute == 0 and 
+                    (current_time - last_chart_generation).total_seconds() >= 60 * 60):  # 1시간 간격으로 체크
+                    await self._generate_post_market_charts()
+                    last_chart_generation = current_time
                 
                 # 30분마다 시스템 상태 로그
                 await asyncio.sleep(1800)
@@ -395,6 +406,7 @@ class DayTradingBot:
                     if condition_results:
                         all_condition_results.extend(condition_results)
                         self.logger.info(f"✅ 조건검색 {seq}번: {len(condition_results)}개 종목 발견")
+                        self.logger.debug(f"🔍 조건검색 {seq}번 결과: {condition_results}")
                     else:
                         self.logger.debug(f"ℹ️ 조건검색 {seq}번: 해당 종목 없음")
                         
@@ -403,10 +415,12 @@ class DayTradingBot:
                     continue
             
             # 결과가 있으면 알림 발송
+            self.logger.info(f"🔍 조건검색 전체 결과: {len(all_condition_results)}개 종목")
             if all_condition_results:
                 await self._notify_condition_search_results(all_condition_results)
                 
                 # 🆕 장중 선정 종목 관리자에 추가 (과거 분봉 데이터 포함)
+                self.logger.info(f"🎯 장중 선정 종목 관리자에 {len(all_condition_results)}개 종목 추가 시작")
                 for stock_data in all_condition_results:
                     stock_code = stock_data.get('code', '')
                     stock_name = stock_data.get('name', '')
@@ -511,7 +525,128 @@ class DayTradingBot:
             self.logger.error(f"❌ 장중 종목 실시간 데이터 업데이트 오류: {e}")
             await self.telegram.notify_error("Intraday Data Update", e)
     
-
+    async def _generate_post_market_charts(self):
+        """장 마감 후 선정 종목 차트 생성 (15:30 이후)"""
+        try:
+            current_time = now_kst()
+            
+            # 장 마감 시간 체크 (15:30 이후)
+            market_close_hour = 15
+            market_close_minute = 30
+            
+            if current_time.hour < market_close_hour or (current_time.hour == market_close_hour and current_time.minute < market_close_minute):
+                self.logger.debug("아직 장 마감 시간이 아님 - 차트 생성 건너뛰기")
+                #return
+            
+            # 주말이나 공휴일 체크
+            if current_time.weekday() >= 5:  # 토요일(5), 일요일(6)
+                self.logger.debug("주말 - 차트 생성 건너뛰기")
+                #return
+            
+            self.logger.info("🎨 장 마감 후 선정 종목 차트 생성 시작")
+            
+            # 차트 생성기 지연 초기화
+            if self.chart_generator is None:
+                self.chart_generator = PostMarketChartGenerator()
+                if not self.chart_generator.initialize():
+                    self.logger.error("❌ 차트 생성기 초기화 실패")
+                    return
+            
+            # 장중 선정된 종목들 조회
+            selected_stocks = []
+            
+            # IntradayStockManager에서 선정된 종목들 가져오기
+            summary = self.intraday_manager.get_all_stocks_summary()
+            
+            if summary.get('total_stocks', 0) > 0:
+                for stock_info in summary.get('stocks', []):
+                    stock_code = stock_info.get('stock_code', '')
+                    
+                    # 종목 상세 정보 조회
+                    stock_data = self.intraday_manager.get_stock_data(stock_code)
+                    if stock_data:
+                        selected_stocks.append({
+                            'code': stock_code,
+                            'name': stock_data.stock_name,
+                            'chgrate': f"+{stock_info.get('price_change_rate', 0):.1f}",
+                            'selection_reason': f"장중 선정 종목 ({stock_data.selected_time.strftime('%H:%M')} 선정)"
+                        })
+            
+            if not selected_stocks:
+                self.logger.info("ℹ️ 오늘 선정된 종목이 없어 차트 생성을 건너뜁니다")
+                return
+            
+            # 당일 날짜로 차트 생성
+            target_date = current_time.strftime("%Y%m%d")
+            
+            self.logger.info(f"📊 {len(selected_stocks)}개 선정 종목의 {target_date} 차트 생성 중...")
+            
+            # 각 종목별 차트 생성
+            success_count = 0
+            chart_files = []
+            
+            for stock_data in selected_stocks:
+                stock_code = stock_data.get('code', '')
+                stock_name = stock_data.get('name', '')
+                selection_reason = stock_data.get('selection_reason', '')
+                
+                try:
+                    self.logger.info(f"📈 {stock_code}({stock_name}) 차트 생성 중...")
+                    
+                    # 분봉 데이터 조회
+                    chart_df = self.chart_generator.get_historical_chart_data(stock_code, target_date)
+                    
+                    if chart_df is None or chart_df.empty:
+                        self.logger.warning(f"⚠️ {stock_code} 데이터 없음")
+                        continue
+                    
+                    # 차트 생성
+                    chart_file = self.chart_generator.create_post_market_candlestick_chart(
+                        stock_code=stock_code,
+                        stock_name=stock_name,
+                        chart_df=chart_df,
+                        target_date=target_date,
+                        selection_reason=selection_reason
+                    )
+                    
+                    if chart_file:
+                        chart_files.append(chart_file)
+                        success_count += 1
+                        self.logger.info(f"✅ {stock_code} 차트 생성 성공: {chart_file}")
+                    else:
+                        self.logger.error(f"❌ {stock_code} 차트 생성 실패")
+                
+                except Exception as e:
+                    self.logger.error(f"❌ {stock_code} 차트 생성 중 오류: {e}")
+                    continue
+            
+            # 결과 요약 및 텔레그램 알림
+            if success_count > 0:
+                summary_message = (f"🎨 장 마감 후 차트 생성 완료\n"
+                                 f"📊 생성된 차트: {success_count}/{len(selected_stocks)}개\n"
+                                 f"📅 날짜: {target_date}\n"
+                                 f"🕰️ 생성 시간: {current_time.strftime('%H:%M:%S')}")
+                
+                # 생성된 차트 파일 목록 추가
+                if chart_files:
+                    summary_message += "\n\n📈 생성된 차트:"
+                    for i, file in enumerate(chart_files[:5], 1):  # 최대 5개만 표시
+                        filename = Path(file).name
+                        summary_message += f"\n  {i}. {filename}"
+                    
+                    if len(chart_files) > 5:
+                        summary_message += f"\n  ... 외 {len(chart_files) - 5}개"
+                
+                await self.telegram.notify_system_status(summary_message)
+                self.logger.info(f"🎯 장 마감 후 차트 생성 완료: {success_count}개 성공")
+            else:
+                error_message = f"⚠️ 장 마감 후 차트 생성 실패\n선정 종목: {len(selected_stocks)}개"
+                await self.telegram.notify_system_status(error_message)
+                self.logger.warning("⚠️ 장 마감 후 차트 생성 결과 없음")
+            
+        except Exception as e:
+            self.logger.error(f"❌ 장 마감 후 차트 생성 오류: {e}")
+            await self.telegram.notify_error("Post Market Chart Generation", e)
 
     async def shutdown(self):
         """시스템 종료"""

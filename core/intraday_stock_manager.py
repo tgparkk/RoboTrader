@@ -11,7 +11,11 @@ from collections import defaultdict
 
 from utils.logger import setup_logger
 from utils.korean_time import now_kst, is_market_open
-from api.kis_chart_api import get_inquire_time_itemchartprice, get_inquire_time_dailychartprice
+from api.kis_chart_api import (
+    get_inquire_time_itemchartprice, 
+    get_inquire_time_dailychartprice,
+    get_full_trading_day_data_async
+)
 
 
 logger = setup_logger(__name__)
@@ -133,7 +137,10 @@ class IntradayStockManager:
     
     async def _collect_historical_data(self, stock_code: str) -> bool:
         """
-        선정 시점 이전의 과거 분봉 데이터 수집
+        선정 시점 이전의 과거 분봉 데이터 수집 (전체 거래시간)
+        
+        장중에 종목이 선정되었을 때 09:00부터 선정시점까지의 모든 분봉 데이터를 수집합니다.
+        기존 API 제한(30건 또는 120건)을 극복하여 전체 거래시간 데이터를 확보합니다.
         
         Args:
             stock_code: 종목코드
@@ -149,9 +156,115 @@ class IntradayStockManager:
                 stock_data = self.selected_stocks[stock_code]
                 selected_time = stock_data.selected_time
             
-            self.logger.debug(f"📈 {stock_code} 과거 분봉 데이터 수집 시작")
+            self.logger.info(f"📈 {stock_code} 전체 거래시간 분봉 데이터 수집 시작")
+            self.logger.info(f"   선정 시간: {selected_time.strftime('%H:%M:%S')}")
             
-            # 선정 시간까지의 당일 분봉 데이터 조회
+            # 새로운 전체 거래시간 데이터 수집 함수 사용
+            target_date = selected_time.strftime("%Y%m%d")
+            target_hour = selected_time.strftime("%H%M%S")
+            
+            # 전체 거래시간 분봉 데이터 수집 (09:00부터 선정시점까지)
+            historical_data = await get_full_trading_day_data_async(
+                stock_code=stock_code,
+                target_date=target_date,
+                selected_time=target_hour
+            )
+            
+            if historical_data is None:
+                self.logger.error(f"❌ {stock_code} 전체 거래시간 분봉 데이터 조회 실패")
+                # 실패 시 기존 방식으로 폴백
+                return await self._collect_historical_data_fallback(stock_code)
+            
+            if historical_data.empty:
+                self.logger.warning(f"⚠️ {stock_code} 전체 거래시간 분봉 데이터 없음")
+                # 빈 DataFrame이라도 저장
+                with self._lock:
+                    if stock_code in self.selected_stocks:
+                        self.selected_stocks[stock_code].historical_data = pd.DataFrame()
+                        self.selected_stocks[stock_code].data_complete = True
+                return True
+            
+            # 선정 시점 이전 데이터만 필터링 (추가 안전장치)
+            if 'datetime' in historical_data.columns:
+                # 선정 시간 이전 데이터만 선택
+                filtered_data = historical_data[historical_data['datetime'] <= selected_time].copy()
+            elif 'time' in historical_data.columns:
+                # time 컬럼을 이용한 필터링
+                selected_time_str = selected_time.strftime("%H%M%S")
+                historical_data['time_str'] = historical_data['time'].astype(str).str.zfill(6)
+                filtered_data = historical_data[historical_data['time_str'] <= selected_time_str].copy()
+                filtered_data = filtered_data.drop('time_str', axis=1)
+            else:
+                # 시간 컬럼이 없으면 전체 데이터 사용
+                filtered_data = historical_data.copy()
+            
+            # 메모리에 저장
+            with self._lock:
+                if stock_code in self.selected_stocks:
+                    self.selected_stocks[stock_code].historical_data = filtered_data
+                    self.selected_stocks[stock_code].data_complete = True
+                    self.selected_stocks[stock_code].last_update = now_kst()
+            
+            # 데이터 분석 및 로깅
+            data_count = len(filtered_data)
+            if data_count > 0:
+                if 'time' in filtered_data.columns:
+                    start_time = filtered_data.iloc[0].get('time', 'N/A')
+                    end_time = filtered_data.iloc[-1].get('time', 'N/A')
+                elif 'datetime' in filtered_data.columns:
+                    start_dt = filtered_data.iloc[0].get('datetime')
+                    end_dt = filtered_data.iloc[-1].get('datetime')
+                    start_time = start_dt.strftime('%H%M%S') if start_dt else 'N/A'
+                    end_time = end_dt.strftime('%H%M%S') if end_dt else 'N/A'
+                else:
+                    start_time = end_time = 'N/A'
+                
+                # 시간 범위 계산
+                time_range_minutes = self._calculate_time_range_minutes(start_time, end_time)
+                
+                self.logger.info(f"✅ {stock_code} 전체 거래시간 분봉 수집 성공!")
+                self.logger.info(f"   데이터 범위: {start_time} ~ {end_time} ({time_range_minutes}분)")
+                self.logger.info(f"   총 분봉 수: {data_count}건")
+                
+                # 09:00 이전 데이터가 있는지 확인
+                if start_time and start_time < "090000":
+                    self.logger.info(f"   📊 프리마켓 데이터 포함: {start_time}부터")
+                elif start_time and start_time >= "090000":
+                    self.logger.info(f"   📊 정규장 데이터: {start_time}부터")
+                
+            else:
+                self.logger.info(f"ℹ️ {stock_code} 선정 시점 이전 분봉 데이터 없음")
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"❌ {stock_code} 전체 거래시간 분봉 데이터 수집 오류: {e}")
+            # 오류 시 기존 방식으로 폴백
+            return await self._collect_historical_data_fallback(stock_code)
+    
+    async def _collect_historical_data_fallback(self, stock_code: str) -> bool:
+        """
+        과거 분봉 데이터 수집 폴백 함수 (기존 방식)
+        
+        전체 거래시간 수집이 실패했을 때 사용하는 기존 API 방식
+        
+        Args:
+            stock_code: 종목코드
+            
+        Returns:
+            bool: 수집 성공 여부
+        """
+        try:
+            with self._lock:
+                if stock_code not in self.selected_stocks:
+                    return False
+                    
+                stock_data = self.selected_stocks[stock_code]
+                selected_time = stock_data.selected_time
+            
+            self.logger.warning(f"🔄 {stock_code} 폴백 방식으로 과거 분봉 데이터 수집")
+            
+            # 선정 시간까지의 당일 분봉 데이터 조회 (기존 방식)
             target_hour = selected_time.strftime("%H%M%S")
             
             # 당일분봉조회 API 사용 (최대 30건)
@@ -162,13 +275,13 @@ class IntradayStockManager:
             )
             
             if result is None:
-                self.logger.error(f"❌ {stock_code} 과거 분봉 데이터 조회 실패")
+                self.logger.error(f"❌ {stock_code} 폴백 분봉 데이터 조회 실패")
                 return False
             
             summary_df, chart_df = result
             
             if chart_df.empty:
-                self.logger.warning(f"⚠️ {stock_code} 과거 분봉 데이터 없음")
+                self.logger.warning(f"⚠️ {stock_code} 폴백 분봉 데이터 없음")
                 # 빈 DataFrame이라도 저장
                 with self._lock:
                     if stock_code in self.selected_stocks:
@@ -178,10 +291,8 @@ class IntradayStockManager:
             
             # 선정 시점 이전 데이터만 필터링
             if 'datetime' in chart_df.columns:
-                # 선정 시간 이전 데이터만 선택
                 historical_data = chart_df[chart_df['datetime'] <= selected_time].copy()
             else:
-                # datetime 컬럼이 없으면 전체 데이터 사용
                 historical_data = chart_df.copy()
             
             # 메모리에 저장
@@ -197,16 +308,49 @@ class IntradayStockManager:
                 start_time = historical_data.iloc[0].get('time', 'N/A') if 'time' in historical_data.columns else 'N/A'
                 end_time = historical_data.iloc[-1].get('time', 'N/A') if 'time' in historical_data.columns else 'N/A'
                 
-                self.logger.info(f"✅ {stock_code} 과거 분봉 수집 완료: {data_count}건 "
+                self.logger.info(f"✅ {stock_code} 폴백 분봉 수집 완료: {data_count}건 "
                                f"({start_time} ~ {end_time})")
+                self.logger.warning(f"⚠️ 제한된 데이터 범위 (API 제한으로 최대 30분봉)")
             else:
-                self.logger.info(f"ℹ️ {stock_code} 선정 시점 이전 분봉 데이터 없음")
+                self.logger.info(f"ℹ️ {stock_code} 폴백 방식도 데이터 없음")
             
             return True
             
         except Exception as e:
-            self.logger.error(f"❌ {stock_code} 과거 분봉 데이터 수집 오류: {e}")
+            self.logger.error(f"❌ {stock_code} 폴백 분봉 데이터 수집 오류: {e}")
             return False
+    
+    def _calculate_time_range_minutes(self, start_time: str, end_time: str) -> int:
+        """
+        시작 시간과 종료 시간 사이의 분 수 계산
+        
+        Args:
+            start_time: 시작시간 (HHMMSS 형식)
+            end_time: 종료시간 (HHMMSS 형식)
+            
+        Returns:
+            int: 시간 범위 (분)
+        """
+        try:
+            if not start_time or not end_time or start_time == 'N/A' or end_time == 'N/A':
+                return 0
+                
+            # 시간 문자열을 6자리로 맞춤
+            start_time = str(start_time).zfill(6)
+            end_time = str(end_time).zfill(6)
+            
+            start_hour = int(start_time[:2])
+            start_minute = int(start_time[2:4])
+            end_hour = int(end_time[:2])
+            end_minute = int(end_time[2:4])
+            
+            start_total_minutes = start_hour * 60 + start_minute
+            end_total_minutes = end_hour * 60 + end_minute
+            
+            return max(0, end_total_minutes - start_total_minutes)
+            
+        except (ValueError, IndexError):
+            return 0
     
     async def update_realtime_data(self, stock_code: str) -> bool:
         """
