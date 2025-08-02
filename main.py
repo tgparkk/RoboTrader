@@ -16,6 +16,7 @@ from core.data_collector import RealTimeDataCollector
 from core.order_manager import OrderManager
 from core.telegram_integration import TelegramIntegration
 from core.candidate_selector import CandidateSelector
+from core.intraday_stock_manager import IntradayStockManager
 from db.database_manager import DatabaseManager
 from api.kis_api_manager import KISAPIManager
 from config.settings import load_trading_config
@@ -43,6 +44,7 @@ class DayTradingBot:
         self.data_collector = RealTimeDataCollector(self.config, self.api_manager)
         self.order_manager = OrderManager(self.config, self.api_manager, self.telegram)
         self.candidate_selector = CandidateSelector(self.config, self.api_manager)
+        self.intraday_manager = IntradayStockManager(self.api_manager)  # 🆕 장중 종목 관리자
         self.db_manager = DatabaseManager()
         
         # 신호 핸들러 등록
@@ -248,6 +250,7 @@ class DayTradingBot:
             
             last_api_refresh = now_kst()
             last_market_check = now_kst()
+            last_intraday_update = now_kst()  # 🆕 장중 데이터 업데이트 시간
             
             while self.is_running:
                 current_time = now_kst()
@@ -262,6 +265,12 @@ class DayTradingBot:
                     (current_time - last_market_check).total_seconds() >= 3600):  # 1시간 간격으로 체크
                     await self._daily_market_update()
                     last_market_check = current_time
+                
+                # 🆕 장중 종목 실시간 데이터 업데이트 (1분마다)
+                if (current_time - last_intraday_update).total_seconds() >= 60:  # 1분
+                    if is_market_open():
+                        await self._update_intraday_data()
+                    last_intraday_update = current_time
                 
                 # 30분마다 시스템 상태 로그
                 await asyncio.sleep(1800)
@@ -395,13 +404,28 @@ class DayTradingBot:
             if all_condition_results:
                 await self._notify_condition_search_results(all_condition_results)
                 
-                # 실시간 데이터 수집에 추가
+                # 🆕 장중 선정 종목 관리자에 추가 (과거 분봉 데이터 포함)
                 for stock_data in all_condition_results:
                     stock_code = stock_data.get('code', '')
                     stock_name = stock_data.get('name', '')
-                    if stock_code and not self.data_collector.has_stock(stock_code):
-                        self.data_collector.add_candidate_stock(stock_code, stock_name)
-                        self.logger.info(f"📊 조건검색 종목 데이터 수집 추가: {stock_code}({stock_name})")
+                    change_rate = stock_data.get('chgrate', '')
+                    
+                    if stock_code:
+                        # 장중 종목 관리자에 추가 (과거 분봉 데이터 자동 수집)
+                        selection_reason = f"조건검색 급등주 (등락률: {change_rate}%)"
+                        success = self.intraday_manager.add_selected_stock(
+                            stock_code=stock_code,
+                            stock_name=stock_name,
+                            selection_reason=selection_reason
+                        )
+                        
+                        if success:
+                            self.logger.info(f"🎯 장중 선정 종목 추가: {stock_code}({stock_name}) - {selection_reason}")
+                        
+                        # 기존 실시간 데이터 수집에도 추가
+                        if not self.data_collector.has_stock(stock_code):
+                            self.data_collector.add_candidate_stock(stock_code, stock_name)
+                            self.logger.info(f"📊 조건검색 종목 데이터 수집 추가: {stock_code}({stock_name})")
             else:
                 self.logger.debug("ℹ️ 장중 조건검색: 발견된 종목 없음")
             
@@ -458,6 +482,34 @@ class DayTradingBot:
             
         except Exception as e:
             self.logger.error(f"❌ 조건검색 결과 알림 오류: {e}")
+
+    async def _update_intraday_data(self):
+        """장중 종목 실시간 데이터 업데이트 (1분마다)"""
+        try:
+            # 모든 선정 종목의 실시간 데이터 업데이트
+            await self.intraday_manager.batch_update_realtime_data()
+            
+            # 업데이트 후 요약 정보 확인
+            summary = self.intraday_manager.get_all_stocks_summary()
+            if summary['total_stocks'] > 0:
+                # 주요 종목들의 수익률 정보 (3% 이상 상승 시에만 로깅)
+                profitable_stocks = [
+                    stock for stock in summary['stocks'] 
+                    if stock.get('price_change_rate', 0) > 3.0  # 3% 이상 상승
+                ]
+                
+                if profitable_stocks:
+                    profit_info = ", ".join([
+                        f"{stock['stock_code']}({stock['price_change_rate']:+.1f}%)" 
+                        for stock in profitable_stocks[:3]  # 상위 3개만
+                    ])
+                    self.logger.info(f"🚀 주요 상승 종목: {profit_info}")
+            
+        except Exception as e:
+            self.logger.error(f"❌ 장중 종목 실시간 데이터 업데이트 오류: {e}")
+            await self.telegram.notify_error("Intraday Data Update", e)
+    
+
 
     async def shutdown(self):
         """시스템 종료"""
