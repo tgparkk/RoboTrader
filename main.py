@@ -164,7 +164,7 @@ class DayTradingBot:
         """매매 의사결정 태스크"""
         try:
 
-            #await self._check_condition_search()
+            await self._check_condition_search()
 
             self.logger.info("🤖 매매 의사결정 태스크 시작")
             
@@ -179,7 +179,7 @@ class DayTradingBot:
                 
                 current_time = now_kst()
 
-                # 🆕 장중 조건검색 체크 (30분마다)
+                # 🆕 장중 조건검색 체크
                 if (current_time - last_condition_check).total_seconds() >= 60 * 10:  # 10분
                     await self._check_condition_search()
                     last_condition_check = current_time
