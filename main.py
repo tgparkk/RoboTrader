@@ -261,11 +261,13 @@ class DayTradingBot:
                     last_api_refresh = current_time
 
                 # 매일 오전 8시에 시장 상태 및 후보 종목 갱신
+                '''
                 if (current_time.hour == 8 and current_time.minute == 0 and 
-                    (current_time - last_market_check).total_seconds() >= 3600):  # 1시간 간격으로 체크
+                    (current_time - last_market_check).total_seconds() >= 60 * 60):  # 1시간 간격으로 체크
                     await self._daily_market_update()
                     last_market_check = current_time
-                
+                '''
+
                 # 🆕 장중 종목 실시간 데이터 업데이트 (1분마다)
                 if (current_time - last_intraday_update).total_seconds() >= 60:  # 1분
                     if is_market_open():
