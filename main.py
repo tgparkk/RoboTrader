@@ -17,6 +17,7 @@ from core.order_manager import OrderManager
 from core.telegram_integration import TelegramIntegration
 from core.candidate_selector import CandidateSelector
 from core.intraday_stock_manager import IntradayStockManager
+from core.trading_stock_manager import TradingStockManager
 from db.database_manager import DatabaseManager
 from api.kis_api_manager import KISAPIManager
 from config.settings import load_trading_config
@@ -46,6 +47,9 @@ class DayTradingBot:
         self.order_manager = OrderManager(self.config, self.api_manager, self.telegram)
         self.candidate_selector = CandidateSelector(self.config, self.api_manager)
         self.intraday_manager = IntradayStockManager(self.api_manager)  # 🆕 장중 종목 관리자
+        self.trading_manager = TradingStockManager(
+            self.intraday_manager, self.data_collector, self.order_manager, self.telegram
+        )  # 🆕 거래 상태 통합 관리자
         self.db_manager = DatabaseManager()
         self.chart_generator = None  # 🆕 장 마감 후 차트 생성기 (지연 초기화)
         
@@ -175,8 +179,6 @@ class DayTradingBot:
             last_condition_check = datetime(2000, 1, 1)  # 초기값
             
             while self.is_running:
-                #await self._daily_market_update()   
-
                 if not is_market_open():
                     await asyncio.sleep(60)  # 장 마감 시 1분 대기
                     continue
@@ -188,45 +190,337 @@ class DayTradingBot:
                     await self._check_condition_search()
                     last_condition_check = current_time
                 
-                # 현재는 기본 로직만 구현 (전략은 나중에 추가)
-                await self._simple_trading_logic()
+                # 매매 판단 시스템 실행
+                await self._execute_trading_decision()
                 await asyncio.sleep(60)  # 1분마다 체크
                 
         except Exception as e:
             self.logger.error(f"❌ 매매 의사결정 태스크 오류: {e}")
     
-    async def _simple_trading_logic(self):
-        """간단한 매매 로직 (예시)"""
+    async def _execute_trading_decision(self):
+        """매매 판단 시스템 실행"""
         try:
-            # 후보 종목들의 최신 데이터 확인
-            candidate_stocks = self.data_collector.get_candidate_stocks()
+            # TradingStockManager에서 관리 중인 종목들 확인
+            from core.models import StockState
             
-            for stock in candidate_stocks:
-                if len(stock.ohlcv_data) < 5:  # 최소 5개 데이터 필요
-                    continue
+            selected_stocks = self.trading_manager.get_stocks_by_state(StockState.SELECTED)
+            buy_candidates = self.trading_manager.get_stocks_by_state(StockState.BUY_CANDIDATE)
+            positioned_stocks = self.trading_manager.get_stocks_by_state(StockState.POSITIONED)
+            
+            # 매수 판단: 선정된 종목들
+            for trading_stock in selected_stocks:
+                await self._analyze_buy_decision(trading_stock)
+            
+            # 매도 판단: 포지션 보유 종목들  
+            for trading_stock in positioned_stocks:
+                await self._analyze_sell_decision(trading_stock)
                 
-                # 간단한 예시: 최근 5분간 상승률 체크
-                recent_data = stock.get_recent_ohlcv(5)
-                if len(recent_data) >= 2:
-                    price_change = (recent_data[-1].close_price - recent_data[0].close_price) / recent_data[0].close_price
+        except Exception as e:
+            self.logger.error(f"❌ 매매 판단 시스템 오류: {e}")
+    
+    async def _analyze_buy_decision(self, trading_stock):
+        """매수 판단 분석"""
+        try:
+            stock_code = trading_stock.stock_code
+            stock_name = trading_stock.stock_name
+            
+            # 분봉 데이터 가져오기
+            combined_data = self.intraday_manager.get_combined_chart_data(stock_code)
+            if combined_data is None or len(combined_data) < 30:
+                return
+            
+            # 2가지 전략으로 매수 판단
+            buy_signal = False
+            buy_reason = ""
+            
+            # 전략 1: 가격박스 + 이등분선 매수 신호
+            signal_result, reason = self._check_price_box_bisector_buy_signal(combined_data)
+            if signal_result:
+                buy_signal = True
+                buy_reason = f"가격박스+이등분선: {reason}"
+            else:
+                # 전략 2: 볼린저밴드 + 이등분선 매수 신호
+                signal_result, reason = self._check_bollinger_bisector_buy_signal(combined_data)
+                if signal_result:
+                    buy_signal = True
+                    buy_reason = f"볼린저밴드+이등분선: {reason}"
+            
+            if buy_signal:
+                # 매수 후보로 변경 (실제 주문은 아직 안함)
+                success = self.trading_manager.move_to_buy_candidate(stock_code, buy_reason)
+                if success:
+                    self.logger.info(f"🔥 매수 후보 등록: {stock_code}({stock_name}) - {buy_reason}")
                     
-                    # 1% 이상 상승 시 매수 신호 (예시)
-                    if price_change > 0.01 and stock.position.value == "none":
-                        self.logger.info(f"🔥 매수 신호 감지: {stock.code} - 상승률: {price_change:.2%}")
-                        
-                        # 텔레그램 신호 알림
-                        await self.telegram.notify_signal_detected({
-                            'stock_code': stock.code,
-                            'stock_name': stock.name,
-                            'signal_type': '매수',
-                            'price': recent_data[-1].close_price,
-                            'reason': f'{price_change:.2%} 상승'
-                        })
-                        
-                        # TODO: 실제 매수 로직 구현
+                    # 텔레그램 알림
+                    await self.telegram.notify_signal_detected({
+                        'stock_code': stock_code,
+                        'stock_name': stock_name,
+                        'signal_type': '매수후보',
+                        'price': combined_data['close'].iloc[-1],
+                        'reason': buy_reason
+                    })
                         
         except Exception as e:
-            self.logger.error(f"❌ 매매 로직 실행 오류: {e}")
+            self.logger.error(f"❌ {trading_stock.stock_code} 매수 판단 오류: {e}")
+    
+    async def _analyze_sell_decision(self, trading_stock):
+        """매도 판단 분석"""
+        try:
+            stock_code = trading_stock.stock_code
+            stock_name = trading_stock.stock_name
+            
+            # 분봉 데이터 가져오기
+            combined_data = self.intraday_manager.get_combined_chart_data(stock_code)
+            if combined_data is None or len(combined_data) < 30:
+                return
+            
+            # 매도 판단: 손절 조건 또는 수익실현 조건
+            sell_signal = False
+            sell_reason = ""
+            current_price = combined_data['close'].iloc[-1]
+            
+            # 손절 조건 확인
+            stop_loss_signal, stop_reason = self._check_stop_loss_conditions(trading_stock, combined_data)
+            if stop_loss_signal:
+                sell_signal = True
+                sell_reason = f"손절: {stop_reason}"
+            else:
+                # 수익실현 조건 확인 (두 전략 모두)
+                profit_signal, profit_reason = self._check_profit_target(trading_stock, current_price)
+                if profit_signal:
+                    sell_signal = True
+                    sell_reason = profit_reason
+            
+            if sell_signal:
+                # 매도 후보로 변경 (실제 주문은 아직 안함)
+                success = self.trading_manager.move_to_sell_candidate(stock_code, sell_reason)
+                if success:
+                    self.logger.info(f"📉 매도 후보 등록: {stock_code}({stock_name}) - {sell_reason}")
+                    
+                    # 텔레그램 알림
+                    await self.telegram.notify_signal_detected({
+                        'stock_code': stock_code,
+                        'stock_name': stock_name,
+                        'signal_type': '매도후보',
+                        'price': combined_data['close'].iloc[-1],
+                        'reason': sell_reason
+                    })
+                        
+        except Exception as e:
+            self.logger.error(f"❌ {trading_stock.stock_code} 매도 판단 오류: {e}")
+    
+    def _check_price_box_bisector_buy_signal(self, data):
+        """전략 1: 가격박스 + 이등분선 매수 신호 확인"""
+        try:
+            from core.indicators.price_box import PriceBox
+            from core.indicators.bisector_line import BisectorLine
+            
+            # 필요한 컬럼 확인
+            required_cols = ['open', 'high', 'low', 'close']
+            if not all(col in data.columns for col in required_cols):
+                return False, ""
+            
+            # 이등분선 계산
+            bisector_signals = BisectorLine.generate_trading_signals(data)
+            
+            # 이등분선 위에 있는지 확인 (필수 조건)
+            if not bisector_signals['bullish_zone'].iloc[-1]:
+                return False, "이등분선 아래"
+            
+            # 가격박스 신호 계산
+            prices = data['close']
+            box_signals = PriceBox.generate_trading_signals(prices)
+            
+            current_idx = len(box_signals) - 1
+            
+            # 매수 조건 1: 첫 박스하한선 터치 (가장 확률 높음)
+            if box_signals['first_lower_touch'].iloc[-1]:
+                return True, "첫 박스하한선 터치"
+            
+            # 매수 조건 2: 박스하한선 지지 확인 후 박스중심선 돌파
+            for i in range(max(0, current_idx-5), current_idx):
+                if (box_signals['support_bounce'].iloc[i] and 
+                    box_signals['center_breakout_up'].iloc[-1]):
+                    return True, "박스하한선 지지 후 중심선 돌파"
+            
+            return False, ""
+            
+        except Exception as e:
+            self.logger.error(f"❌ 가격박스+이등분선 매수 신호 확인 오류: {e}")
+            return False, ""
+    
+    def _check_bollinger_bisector_buy_signal(self, data):
+        """전략 2: 볼린저밴드 + 이등분선 매수 신호 확인"""
+        try:
+            from core.indicators.bollinger_bands import BollingerBands
+            from core.indicators.bisector_line import BisectorLine
+            
+            # 필요한 컬럼 확인
+            required_cols = ['open', 'high', 'low', 'close']
+            if not all(col in data.columns for col in required_cols):
+                return False, ""
+            
+            # 이등분선 계산
+            bisector_signals = BisectorLine.generate_trading_signals(data)
+            
+            # 이등분선 위에 있는지 확인 (필수 조건)
+            if not bisector_signals['bullish_zone'].iloc[-1]:
+                return False, "이등분선 아래"
+            
+            # 볼린저밴드 신호 계산
+            prices = data['close']
+            bb_signals = BollingerBands.generate_trading_signals(prices)
+            
+            current_idx = len(bb_signals) - 1
+            
+            # 밴드 폭 상태 확인 (최근 20개 기준)
+            recent_band_width = bb_signals['band_width'].iloc[-20:].mean()
+            total_band_width = bb_signals['band_width'].mean()
+            is_squeezed = recent_band_width < total_band_width * 0.7  # 밀집 판단
+            
+            if is_squeezed:
+                # 밴드 폭 밀집 시
+                # 1. 상한선 돌파 매수
+                if bb_signals['upper_breakout'].iloc[-1]:
+                    return True, "상한선 돌파 (밀집)"
+                
+                # 2. 상한선 돌파 확인 후 조정매수 (3/4, 2/4 지점)
+                for i in range(max(0, current_idx-10), current_idx):
+                    if bb_signals['upper_breakout'].iloc[i]:
+                        # 돌파했던 양봉의 3/4, 2/4 지점 계산
+                        breakout_candle_high = data['high'].iloc[i]
+                        breakout_candle_low = data['low'].iloc[i]
+                        current_price = data['close'].iloc[-1]
+                        
+                        three_quarter = breakout_candle_low + (breakout_candle_high - breakout_candle_low) * 0.75
+                        half_point = breakout_candle_low + (breakout_candle_high - breakout_candle_low) * 0.5
+                        
+                        if (abs(current_price - three_quarter) / three_quarter < 0.01 or
+                            abs(current_price - half_point) / half_point < 0.01):
+                            return True, "상한선 돌파 후 조정매수"
+                        break
+            else:
+                # 밴드 폭 확장 시
+                # 첫 하한선 지지 매수
+                if bb_signals['lower_touch'].iloc[-1] or bb_signals['oversold'].iloc[-1]:
+                    # 지지 확인 (반등)
+                    if len(data) >= 2 and data['close'].iloc[-1] > data['close'].iloc[-2]:
+                        return True, "첫 하한선 지지 (확장)"
+            
+            return False, ""
+            
+        except Exception as e:
+            self.logger.error(f"❌ 볼린저밴드+이등분선 매수 신호 확인 오류: {e}")
+            return False, ""
+    
+    def _check_stop_loss_conditions(self, trading_stock, data):
+        """손절 조건 확인"""
+        try:
+            if not trading_stock.position:
+                return False, ""
+            
+            current_price = data['close'].iloc[-1]
+            buy_price = trading_stock.position.avg_price
+            
+            # 공통 손절: 매수가 대비 -3% 손실
+            loss_rate = (current_price - buy_price) / buy_price
+            if loss_rate <= -0.03:
+                return True, "매수가 대비 -3% 손실"
+            
+            # 매수 사유에 따른 개별 손절 조건
+            if "가격박스" in trading_stock.selection_reason:
+                return self._check_price_box_stop_loss(data, buy_price, current_price)
+            elif "볼린저밴드" in trading_stock.selection_reason:
+                return self._check_bollinger_stop_loss(data, buy_price, current_price, trading_stock)
+            
+            return False, ""
+            
+        except Exception as e:
+            self.logger.error(f"❌ 손절 조건 확인 오류: {e}")
+            return False, ""
+    
+    def _check_price_box_stop_loss(self, data, buy_price, current_price):
+        """가격박스 전략 손절 조건"""
+        try:
+            from core.indicators.price_box import PriceBox
+            from core.indicators.bisector_line import BisectorLine
+            
+            # 박스중심선 이탈
+            box_signals = PriceBox.generate_trading_signals(data['close'])
+            if current_price < box_signals['center_line'].iloc[-1]:
+                return True, "박스중심선 이탈"
+            
+            # 이등분선 이탈
+            bisector_signals = BisectorLine.generate_trading_signals(data)
+            if not bisector_signals['bullish_zone'].iloc[-1]:
+                return True, "이등분선 이탈"
+            
+            # 직전저점(첫 마디 저점) 이탈 - 간단히 최근 10개 중 최저점으로 대체
+            if len(data) >= 10:
+                recent_low = data['low'].iloc[-10:].min()
+                if current_price < recent_low:
+                    return True, "직전저점 이탈"
+            
+            return False, ""
+            
+        except Exception as e:
+            self.logger.error(f"❌ 가격박스 손절 조건 확인 오류: {e}")
+            return False, ""
+    
+    def _check_bollinger_stop_loss(self, data, buy_price, current_price, trading_stock):
+        """볼린저밴드 전략 손절 조건"""
+        try:
+            from core.indicators.bollinger_bands import BollingerBands
+            
+            bb_signals = BollingerBands.generate_trading_signals(data['close'])
+            
+            # 매수 사유별 손절
+            if "상한선 돌파" in trading_stock.selection_reason:
+                # 돌파 양봉의 저가 이탈 또는 중심선 이탈
+                if current_price < bb_signals['sma'].iloc[-1]:
+                    return True, "볼린저 중심선 이탈"
+                    
+                # 돌파 양봉 저가 찾기 (최근 10개 중)
+                for i in range(max(0, len(data)-10), len(data)):
+                    if bb_signals['upper_breakout'].iloc[i]:
+                        breakout_low = data['low'].iloc[i]
+                        if current_price < breakout_low:
+                            return True, "돌파 양봉 저가 이탈"
+                        break
+                        
+            elif "하한선 지지" in trading_stock.selection_reason:
+                # 지지 캔들 저가 이탈
+                for i in range(max(0, len(data)-10), len(data)):
+                    if (bb_signals['lower_touch'].iloc[i] or bb_signals['oversold'].iloc[i]):
+                        support_low = data['low'].iloc[i]
+                        if current_price < support_low:
+                            return True, "지지 캔들 저가 이탈"
+                        break
+            
+            return False, ""
+            
+        except Exception as e:
+            self.logger.error(f"❌ 볼린저밴드 손절 조건 확인 오류: {e}")
+            return False, ""
+    
+    def _check_profit_target(self, trading_stock, current_price):
+        """수익실현 조건 확인 (두 전략 모두)"""
+        try:
+            if not trading_stock.position:
+                return False, ""
+            
+            buy_price = trading_stock.position.avg_price
+            profit_rate = (current_price - buy_price) / buy_price
+            
+            # 매수가 대비 +2.5% 수익실현 (두 전략 모두)
+            if profit_rate >= 0.025:
+                return True, "매수가 대비 +2.5% 수익실현"
+            
+            return False, ""
+            
+        except Exception as e:
+            self.logger.error(f"❌ 수익실현 조건 확인 오류: {e}")
+            return False, ""
     
     async def _telegram_task(self):
         """텔레그램 태스크"""
@@ -425,21 +719,16 @@ class DayTradingBot:
                     change_rate = stock_data.get('chgrate', '')
                     
                     if stock_code:
-                        # 장중 종목 관리자에 추가 (과거 분봉 데이터 자동 수집)
+                        # 거래 상태 통합 관리자에 추가 (분봉 데이터 수집 + 거래 상태 관리)
                         selection_reason = f"조건검색 급등주 (등락률: {change_rate}%)"
-                        success = self.intraday_manager.add_selected_stock(
+                        success = self.trading_manager.add_selected_stock(
                             stock_code=stock_code,
                             stock_name=stock_name,
                             selection_reason=selection_reason
                         )
                         
                         if success:
-                            self.logger.info(f"🎯 장중 선정 종목 추가: {stock_code}({stock_name}) - {selection_reason}")
-                        
-                        # 기존 실시간 데이터 수집에도 추가
-                        if not self.data_collector.has_stock(stock_code):
-                            self.data_collector.add_candidate_stock(stock_code, stock_name)
-                            self.logger.info(f"📊 조건검색 종목 데이터 수집 추가: {stock_code}({stock_name})")
+                            self.logger.info(f"🎯 거래 종목 추가: {stock_code}({stock_name}) - {selection_reason}")
             else:
                 self.logger.debug("ℹ️ 장중 조건검색: 발견된 종목 없음")
             
