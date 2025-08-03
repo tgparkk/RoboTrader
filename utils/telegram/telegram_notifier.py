@@ -79,6 +79,7 @@ class TelegramNotifier:
             CommandHandler("status", self._cmd_status),
             CommandHandler("positions", self._cmd_positions),
             CommandHandler("orders", self._cmd_orders),
+            CommandHandler("virtual", self._cmd_virtual_stats),
             CommandHandler("help", self._cmd_help),
             CommandHandler("stop", self._cmd_stop),
         ]
@@ -307,6 +308,64 @@ class TelegramNotifier:
         
         await update.message.reply_text(orders_message, parse_mode="Markdown")
     
+    async def _cmd_virtual_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """가상 매매 통계 명령어"""
+        if str(update.effective_chat.id) != self.chat_id:
+            return
+        
+        try:
+            # TelegramIntegration을 통해 DB 접근
+            if hasattr(self, 'trading_bot_ref') and self.trading_bot_ref:
+                db_manager = self.trading_bot_ref.db_manager
+                
+                # 가상 매매 통계 조회
+                stats = db_manager.get_virtual_trading_stats(days=7)
+                open_positions = db_manager.get_virtual_open_positions()
+                
+                # 통계 메시지 생성
+                message = f"""📊 *가상 매매 통계 (7일)*
+
+💰 *전체 성과*
+• 총 거래: {stats.get('total_trades', 0)}건
+• 미체결 포지션: {stats.get('open_positions', 0)}건
+• 승률: {stats.get('win_rate', 0):.1f}%
+• 총 손익: {stats.get('total_profit', 0):+,.0f}원
+• 평균 수익률: {stats.get('avg_profit_rate', 0):+.2f}%
+
+📈 *수익률 범위*
+• 최대 수익: {stats.get('max_profit', 0):+,.0f}원
+• 최대 손실: {stats.get('max_loss', 0):+,.0f}원
+
+🎯 *전략별 성과*"""
+                
+                # 전략별 통계 추가
+                for strategy, strategy_stats in stats.get('strategies', {}).items():
+                    message += f"""
+*{strategy}*
+• 거래: {strategy_stats.get('total_trades', 0)}건
+• 승률: {strategy_stats.get('win_rate', 0):.1f}%
+• 손익: {strategy_stats.get('total_profit', 0):+,.0f}원
+• 평균: {strategy_stats.get('avg_profit_rate', 0):+.2f}%"""
+                
+                # 미체결 포지션 정보
+                if not open_positions.empty:
+                    message += f"\n\n📋 *미체결 포지션 ({len(open_positions)}건)*"
+                    for _, pos in open_positions.head(5).iterrows():  # 최대 5개만 표시
+                        buy_time_str = pos['buy_time'].strftime('%m/%d %H:%M') if hasattr(pos['buy_time'], 'strftime') else str(pos['buy_time'])[:16]
+                        message += f"\n• {pos['stock_name']}({pos['stock_code']}) {pos['quantity']}주 @{pos['buy_price']:,.0f}원 ({buy_time_str})"
+                    
+                    if len(open_positions) > 5:
+                        message += f"\n• ... 외 {len(open_positions) - 5}건"
+                
+                await update.message.reply_text(message, parse_mode="Markdown")
+                
+            else:
+                await update.message.reply_text("⚠️ 시스템에 연결할 수 없습니다.")
+                
+        except Exception as e:
+            self.logger.error(f"가상 매매 통계 조회 오류: {e}")
+            await update.message.reply_text(f"⚠️ 통계 조회 중 오류가 발생했습니다: {str(e)}")
+    
     async def _cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """도움말 명령어"""
         if str(update.effective_chat.id) != self.chat_id:
@@ -318,6 +377,7 @@ class TelegramNotifier:
 /status - 시스템 상태 조회
 /positions - 보유 포지션 조회  
 /orders - 주문 현황 조회
+/virtual - 가상 매매 통계 조회
 /help - 도움말 표시
 /stop - 시스템 종료
 
@@ -325,6 +385,7 @@ class TelegramNotifier:
 • 주문 실행/체결 시
 • 매매 신호 감지 시
 • 시스템 오류 발생 시
+• 가상 매매 실행 시
 """
         
         await update.message.reply_text(help_message, parse_mode="Markdown")

@@ -92,7 +92,28 @@ class DatabaseManager:
                     )
                 ''')
                 
-                # 매매 기록 테이블
+                # 가상 매매 기록 테이블
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS virtual_trading_records (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        stock_code VARCHAR(10) NOT NULL,
+                        stock_name VARCHAR(100),
+                        action VARCHAR(10) NOT NULL,  -- 'BUY' or 'SELL'
+                        quantity INTEGER NOT NULL,
+                        price REAL NOT NULL,
+                        timestamp DATETIME NOT NULL,
+                        strategy VARCHAR(50),  -- 전략명
+                        reason TEXT,  -- 매매 사유
+                        is_test BOOLEAN DEFAULT 1,  -- 테스트 여부
+                        profit_loss REAL DEFAULT 0,  -- 손익 (매도시에만)
+                        profit_rate REAL DEFAULT 0,  -- 수익률 (매도시에만)
+                        buy_record_id INTEGER,  -- 대응되는 매수 기록 ID (매도시에만)
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (buy_record_id) REFERENCES virtual_trading_records (id)
+                    )
+                ''')
+                
+                # 매매 기록 테이블 (기존)
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS trading_records (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -111,6 +132,9 @@ class DatabaseManager:
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_candidate_code ON candidate_stocks(stock_code)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_price_code_date ON stock_prices(stock_code, date_time)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_trading_code_date ON trading_records(stock_code, timestamp)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_virtual_trading_code_date ON virtual_trading_records(stock_code, timestamp)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_virtual_trading_action ON virtual_trading_records(action)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_virtual_trading_test ON virtual_trading_records(is_test)')
                 
                 conn.commit()
                 self.logger.info("데이터베이스 테이블 생성 완료")
@@ -346,7 +370,7 @@ class DatabaseManager:
                 stats = {}
                 
                 # 테이블별 레코드 수
-                for table in ['candidate_stocks', 'stock_prices', 'trading_records']:
+                for table in ['candidate_stocks', 'stock_prices', 'trading_records', 'virtual_trading_records']:
                     cursor.execute(f'SELECT COUNT(*) FROM {table}')
                     stats[table] = cursor.fetchone()[0]
                 
@@ -354,4 +378,223 @@ class DatabaseManager:
                 
         except Exception as e:
             self.logger.error(f"통계 조회 실패: {e}")
+            return {}
+    
+    def save_virtual_buy(self, stock_code: str, stock_name: str, price: float, 
+                        quantity: int, strategy: str, reason: str, 
+                        timestamp: datetime = None) -> Optional[int]:
+        """가상 매수 기록 저장"""
+        try:
+            if timestamp is None:
+                timestamp = now_kst()
+            
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute('''
+                    INSERT INTO virtual_trading_records 
+                    (stock_code, stock_name, action, quantity, price, timestamp, strategy, reason, is_test)
+                    VALUES (?, ?, 'BUY', ?, ?, ?, ?, ?, 1)
+                ''', (stock_code, stock_name, quantity, price, timestamp.isoformat(), strategy, reason))
+                
+                buy_record_id = cursor.lastrowid
+                conn.commit()
+                
+                self.logger.info(f"🔥 가상 매수 기록 저장: {stock_code}({stock_name}) {quantity}주 @{price:,.0f}원 - {strategy}")
+                return buy_record_id
+                
+        except Exception as e:
+            self.logger.error(f"가상 매수 기록 저장 실패: {e}")
+            return None
+    
+    def save_virtual_sell(self, stock_code: str, stock_name: str, price: float, 
+                         quantity: int, strategy: str, reason: str, 
+                         buy_record_id: int, timestamp: datetime = None) -> bool:
+        """가상 매도 기록 저장"""
+        try:
+            if timestamp is None:
+                timestamp = now_kst()
+            
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                # 매수 기록 조회
+                cursor.execute('''
+                    SELECT price FROM virtual_trading_records 
+                    WHERE id = ? AND action = 'BUY'
+                ''', (buy_record_id,))
+                
+                buy_result = cursor.fetchone()
+                if not buy_result:
+                    self.logger.error(f"매수 기록을 찾을 수 없음: ID {buy_record_id}")
+                    return False
+                
+                buy_price = buy_result[0]
+                
+                # 손익 계산
+                profit_loss = (price - buy_price) * quantity
+                profit_rate = ((price - buy_price) / buy_price) * 100
+                
+                cursor.execute('''
+                    INSERT INTO virtual_trading_records 
+                    (stock_code, stock_name, action, quantity, price, timestamp, strategy, reason, 
+                     is_test, profit_loss, profit_rate, buy_record_id)
+                    VALUES (?, ?, 'SELL', ?, ?, ?, ?, ?, 1, ?, ?, ?)
+                ''', (stock_code, stock_name, quantity, price, timestamp.isoformat(), 
+                      strategy, reason, profit_loss, profit_rate, buy_record_id))
+                
+                conn.commit()
+                
+                profit_sign = "+" if profit_loss >= 0 else ""
+                self.logger.info(f"📉 가상 매도 기록 저장: {stock_code}({stock_name}) {quantity}주 @{price:,.0f}원 - "
+                               f"손익: {profit_sign}{profit_loss:,.0f}원 ({profit_rate:+.2f}%) - {strategy}")
+                return True
+                
+        except Exception as e:
+            self.logger.error(f"가상 매도 기록 저장 실패: {e}")
+            return False
+    
+    def get_virtual_open_positions(self) -> pd.DataFrame:
+        """미체결 가상 포지션 조회 (매수만 하고 매도 안한 것들)"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                query = '''
+                    SELECT 
+                        b.id,
+                        b.stock_code,
+                        b.stock_name,
+                        b.quantity,
+                        b.price as buy_price,
+                        b.timestamp as buy_time,
+                        b.strategy,
+                        b.reason as buy_reason
+                    FROM virtual_trading_records b
+                    WHERE b.action = 'BUY' 
+                        AND b.is_test = 1
+                        AND NOT EXISTS (
+                            SELECT 1 FROM virtual_trading_records s 
+                            WHERE s.buy_record_id = b.id AND s.action = 'SELL'
+                        )
+                    ORDER BY b.timestamp DESC
+                '''
+                
+                df = pd.read_sql_query(query, conn)
+                if not df.empty:
+                    df['buy_time'] = pd.to_datetime(df['buy_time'])
+                
+                return df
+                
+        except Exception as e:
+            self.logger.error(f"미체결 포지션 조회 실패: {e}")
+            return pd.DataFrame()
+    
+    def get_virtual_trading_history(self, days: int = 30, include_open: bool = True) -> pd.DataFrame:
+        """가상 매매 이력 조회"""
+        try:
+            start_date = now_kst() - timedelta(days=days)
+            
+            with sqlite3.connect(self.db_path) as conn:
+                if include_open:
+                    # 모든 기록 (매수/매도)
+                    query = '''
+                        SELECT 
+                            id,
+                            stock_code,
+                            stock_name,
+                            action,
+                            quantity,
+                            price,
+                            timestamp,
+                            strategy,
+                            reason,
+                            profit_loss,
+                            profit_rate,
+                            buy_record_id
+                        FROM virtual_trading_records 
+                        WHERE timestamp >= ? AND is_test = 1
+                        ORDER BY timestamp DESC
+                    '''
+                else:
+                    # 완료된 거래만 (매수-매도 쌍)
+                    query = '''
+                        SELECT 
+                            s.stock_code,
+                            s.stock_name,
+                            b.price as buy_price,
+                            b.timestamp as buy_time,
+                            b.reason as buy_reason,
+                            s.price as sell_price,
+                            s.timestamp as sell_time,
+                            s.reason as sell_reason,
+                            s.strategy,
+                            s.quantity,
+                            s.profit_loss,
+                            s.profit_rate
+                        FROM virtual_trading_records s
+                        JOIN virtual_trading_records b ON s.buy_record_id = b.id
+                        WHERE s.action = 'SELL' 
+                            AND s.timestamp >= ? 
+                            AND s.is_test = 1
+                        ORDER BY s.timestamp DESC
+                    '''
+                
+                df = pd.read_sql_query(query, conn, params=(start_date.isoformat(),))
+                
+                if not df.empty:
+                    if include_open:
+                        df['timestamp'] = pd.to_datetime(df['timestamp'])
+                    else:
+                        df['buy_time'] = pd.to_datetime(df['buy_time'])
+                        df['sell_time'] = pd.to_datetime(df['sell_time'])
+                
+                return df
+                
+        except Exception as e:
+            self.logger.error(f"가상 매매 이력 조회 실패: {e}")
+            return pd.DataFrame()
+    
+    def get_virtual_trading_stats(self, days: int = 30) -> Dict[str, Any]:
+        """가상 매매 통계"""
+        try:
+            completed_trades = self.get_virtual_trading_history(days=days, include_open=False)
+            open_positions = self.get_virtual_open_positions()
+            
+            stats = {
+                'total_trades': len(completed_trades),
+                'open_positions': len(open_positions),
+                'win_rate': 0,
+                'total_profit': 0,
+                'avg_profit_rate': 0,
+                'max_profit': 0,
+                'max_loss': 0,
+                'strategies': {}
+            }
+            
+            if not completed_trades.empty:
+                # 승률 계산
+                winning_trades = completed_trades[completed_trades['profit_loss'] > 0]
+                stats['win_rate'] = len(winning_trades) / len(completed_trades) * 100
+                
+                # 손익 통계
+                stats['total_profit'] = completed_trades['profit_loss'].sum()
+                stats['avg_profit_rate'] = completed_trades['profit_rate'].mean()
+                stats['max_profit'] = completed_trades['profit_loss'].max()
+                stats['max_loss'] = completed_trades['profit_loss'].min()
+                
+                # 전략별 통계
+                for strategy in completed_trades['strategy'].unique():
+                    strategy_trades = completed_trades[completed_trades['strategy'] == strategy]
+                    strategy_wins = strategy_trades[strategy_trades['profit_loss'] > 0]
+                    
+                    stats['strategies'][strategy] = {
+                        'total_trades': len(strategy_trades),
+                        'win_rate': len(strategy_wins) / len(strategy_trades) * 100 if len(strategy_trades) > 0 else 0,
+                        'total_profit': strategy_trades['profit_loss'].sum(),
+                        'avg_profit_rate': strategy_trades['profit_rate'].mean()
+                    }
+            
+            return stats
+            
+        except Exception as e:
+            self.logger.error(f"가상 매매 통계 조회 실패: {e}")
             return {}

@@ -97,6 +97,8 @@ class TelegramIntegration:
                 bot_token=self.config['bot_token'],
                 chat_id=self.config['chat_id']
             )
+            # trading_bot 참조 설정 (가상 매매 통계 조회용)
+            self.notifier.trading_bot_ref = self.trading_bot
             
             if await self.notifier.initialize():
                 self.is_enabled = True

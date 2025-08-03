@@ -246,9 +246,12 @@ class DayTradingBot:
                     buy_reason = f"볼린저밴드+이등분선: {reason}"
             
             if buy_signal:
-                # 매수 후보로 변경 (실제 주문은 아직 안함)
+                # 매수 후보로 변경
                 success = self.trading_manager.move_to_buy_candidate(stock_code, buy_reason)
                 if success:
+                    # 가상 매수 실행 (테스트용)
+                    await self._execute_virtual_buy(trading_stock, combined_data, buy_reason)
+                    
                     self.logger.info(f"🔥 매수 후보 등록: {stock_code}({stock_name}) - {buy_reason}")
                     
                     # 텔레그램 알림
@@ -292,9 +295,12 @@ class DayTradingBot:
                     sell_reason = profit_reason
             
             if sell_signal:
-                # 매도 후보로 변경 (실제 주문은 아직 안함)
+                # 매도 후보로 변경
                 success = self.trading_manager.move_to_sell_candidate(stock_code, sell_reason)
                 if success:
+                    # 가상 매도 실행 (테스트용)
+                    await self._execute_virtual_sell(trading_stock, combined_data, sell_reason)
+                    
                     self.logger.info(f"📉 매도 후보 등록: {stock_code}({stock_name}) - {sell_reason}")
                     
                     # 텔레그램 알림
@@ -521,6 +527,113 @@ class DayTradingBot:
         except Exception as e:
             self.logger.error(f"❌ 수익실현 조건 확인 오류: {e}")
             return False, ""
+    
+    async def _execute_virtual_buy(self, trading_stock, combined_data, buy_reason):
+        """가상 매수 실행"""
+        try:
+            stock_code = trading_stock.stock_code
+            stock_name = trading_stock.stock_name
+            current_price = combined_data['close'].iloc[-1]
+            
+            # 가상 매수 수량 설정 (1만원 기준으로 계산)
+            investment_amount = 10000  # 1만원
+            quantity = int(investment_amount / current_price)
+            
+            if quantity <= 0:
+                quantity = 1  # 최소 1주
+            
+            # 전략명 추출
+            strategy = "가격박스+이등분선" if "가격박스" in buy_reason else "볼린저밴드+이등분선"
+            
+            # DB에 가상 매수 기록 저장
+            buy_record_id = self.db_manager.save_virtual_buy(
+                stock_code=stock_code,
+                stock_name=stock_name,
+                price=current_price,
+                quantity=quantity,
+                strategy=strategy,
+                reason=buy_reason
+            )
+            
+            if buy_record_id:
+                # 가상 포지션 정보를 trading_stock에 저장 (나중에 매도할 때 사용)
+                trading_stock._virtual_buy_record_id = buy_record_id
+                trading_stock._virtual_buy_price = current_price
+                trading_stock._virtual_quantity = quantity
+                
+                # 포지션 상태로 변경 (가상)
+                trading_stock.set_position(quantity, current_price)
+                
+                self.logger.info(f"🎯 가상 매수 완료: {stock_code}({stock_name}) "
+                               f"{quantity}주 @{current_price:,.0f}원 총 {quantity * current_price:,.0f}원")
+            
+        except Exception as e:
+            self.logger.error(f"❌ 가상 매수 실행 오류: {e}")
+    
+    async def _execute_virtual_sell(self, trading_stock, combined_data, sell_reason):
+        """가상 매도 실행"""
+        try:
+            stock_code = trading_stock.stock_code
+            stock_name = trading_stock.stock_name
+            current_price = combined_data['close'].iloc[-1]
+            
+            # 가상 매수 기록 정보 가져오기
+            buy_record_id = getattr(trading_stock, '_virtual_buy_record_id', None)
+            buy_price = getattr(trading_stock, '_virtual_buy_price', None)
+            quantity = getattr(trading_stock, '_virtual_quantity', None)
+            
+            # DB에서 미체결 포지션 조회 (위 정보가 없는 경우)
+            if not buy_record_id:
+                open_positions = self.db_manager.get_virtual_open_positions()
+                stock_positions = open_positions[open_positions['stock_code'] == stock_code]
+                
+                if not stock_positions.empty:
+                    # 가장 최근 매수 기록 사용
+                    latest_position = stock_positions.iloc[0]
+                    buy_record_id = latest_position['id']
+                    buy_price = latest_position['buy_price']
+                    quantity = latest_position['quantity']
+                else:
+                    self.logger.warning(f"⚠️ {stock_code} 가상 매수 기록을 찾을 수 없음")
+                    return
+            
+            # 전략명 추출
+            strategy = "가격박스+이등분선" if "가격박스" in sell_reason else "볼린저밴드+이등분선"
+            
+            # DB에 가상 매도 기록 저장
+            success = self.db_manager.save_virtual_sell(
+                stock_code=stock_code,
+                stock_name=stock_name,
+                price=current_price,
+                quantity=quantity,
+                strategy=strategy,
+                reason=sell_reason,
+                buy_record_id=buy_record_id
+            )
+            
+            if success:
+                # 가상 포지션 정보 정리
+                if hasattr(trading_stock, '_virtual_buy_record_id'):
+                    delattr(trading_stock, '_virtual_buy_record_id')
+                if hasattr(trading_stock, '_virtual_buy_price'):
+                    delattr(trading_stock, '_virtual_buy_price')
+                if hasattr(trading_stock, '_virtual_quantity'):
+                    delattr(trading_stock, '_virtual_quantity')
+                
+                # 포지션 정리
+                trading_stock.clear_position()
+                
+                # 손익 계산 및 로깅
+                profit_loss = (current_price - buy_price) * quantity
+                profit_rate = ((current_price - buy_price) / buy_price) * 100
+                profit_sign = "+" if profit_loss >= 0 else ""
+                
+                self.logger.info(f"🎯 가상 매도 완료: {stock_code}({stock_name}) "
+                               f"{quantity}주 @{current_price:,.0f}원 "
+                               f"손익: {profit_sign}{profit_loss:,.0f}원 ({profit_rate:+.2f}%)")
+            
+        except Exception as e:
+            self.logger.error(f"❌ 가상 매도 실행 오류: {e}")
     
     async def _telegram_task(self):
         """텔레그램 태스크"""
