@@ -1,6 +1,7 @@
 """
 KIS API 차트 조회 관련 함수 (일별분봉조회)
 """
+import asyncio
 import time
 import pandas as pd
 import numpy as np
