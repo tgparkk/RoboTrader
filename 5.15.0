@@ -1,3 +1,0 @@
-Requirement already satisfied: plotly in c:\git\robotrader\venv\lib\site-packages (6.2.0)
-Requirement already satisfied: narwhals>=1.15.1 in c:\git\robotrader\venv\lib\site-packages (from plotly) (2.0.0)
-Requirement already satisfied: packaging in c:\git\robotrader\venv\lib\site-packages (from plotly) (25.0)
