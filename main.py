@@ -198,7 +198,7 @@ class DayTradingBot:
                 
                 # 매매 판단 시스템 실행
                 await self._execute_trading_decision()
-                await asyncio.sleep(60)  # 1분마다 체크
+                await asyncio.sleep(30)  # 30초마다 체크
                 
         except Exception as e:
             self.logger.error(f"❌ 매매 의사결정 태스크 오류: {e}")

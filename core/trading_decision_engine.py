@@ -16,8 +16,9 @@ class TradingDecisionEngine:
     주요 기능:
     1. 가격박스 + 이등분선 전략
     2. 볼린저밴드 + 이등분선 전략
-    3. 손절/수익실현 조건 검증
-    4. 가상 매매 실행
+    3. 다중 볼린저밴드 전략
+    4. 손절/수익실현 조건 검증
+    5. 가상 매매 실행
     """
     
     def __init__(self, db_manager=None, telegram_integration=None, trading_manager=None):
@@ -70,6 +71,11 @@ class TradingDecisionEngine:
             if signal_result:
                 return True, f"볼린저밴드+이등분선: {reason}"
             
+            # 전략 3: 다중 볼린저밴드 매수 신호
+            signal_result, reason = self._check_multi_bollinger_buy_signal(combined_data)
+            if signal_result:
+                return True, f"다중볼린저밴드: {reason}"
+            
             return False, ""
             
         except Exception as e:
@@ -120,7 +126,12 @@ class TradingDecisionEngine:
             quantity = max(1, int(self.virtual_investment_amount / current_price))
             
             # 전략명 추출
-            strategy = "가격박스+이등분선" if "가격박스" in buy_reason else "볼린저밴드+이등분선"
+            if "가격박스" in buy_reason:
+                strategy = "가격박스+이등분선"
+            elif "다중볼린저밴드" in buy_reason:
+                strategy = "다중볼린저밴드"
+            else:
+                strategy = "볼린저밴드+이등분선"
             
             # DB에 가상 매수 기록 저장
             if self.db_manager:
@@ -185,7 +196,12 @@ class TradingDecisionEngine:
                     return
             
             # 전략명 추출
-            strategy = "가격박스+이등분선" if "가격박스" in sell_reason else "볼린저밴드+이등분선"
+            if "가격박스" in sell_reason:
+                strategy = "가격박스+이등분선"
+            elif "다중볼린저밴드" in sell_reason:
+                strategy = "다중볼린저밴드"
+            else:
+                strategy = "볼린저밴드+이등분선"
             
             # DB에 가상 매도 기록 저장
             if self.db_manager and buy_record_id:
@@ -334,6 +350,42 @@ class TradingDecisionEngine:
             self.logger.error(f"❌ 볼린저밴드+이등분선 매수 신호 확인 오류: {e}")
             return False, ""
     
+    def _check_multi_bollinger_buy_signal(self, data) -> Tuple[bool, str]:
+        """전략 3: 다중 볼린저밴드 매수 신호 확인"""
+        try:
+            from core.indicators.multi_bollinger_bands import MultiBollingerBands
+            
+            # 필요한 컬럼 확인
+            required_cols = ['open', 'high', 'low', 'close', 'volume']
+            if not all(col in data.columns for col in required_cols):
+                return False, "필요한 데이터 컬럼 부족"
+            
+            prices = data['close']
+            volume_data = data['volume'] if 'volume' in data.columns else None
+            
+            # 다중 볼린저밴드 신호 계산
+            signals = MultiBollingerBands.generate_trading_signals(prices, volume_data)
+            
+            current_idx = len(signals) - 1
+            
+            # 매수 조건 1: 밀집된 상한선 돌파 시 매수
+            if signals['buy_breakout'].iloc[-1]:
+                return True, "상한선 밀집 돌파"
+            
+            # 매수 조건 2: 조정 매수 (돌파 후 되돌림)
+            if signals['potential_retracement_buy'].iloc[-1]:
+                return True, "돌파 후 조정 매수"
+            
+            # 매수 조건 3: 중심선 지지 매수
+            if signals['buy_center_support'].iloc[-1]:
+                return True, "중심선 지지 매수"
+            
+            return False, ""
+            
+        except Exception as e:
+            self.logger.error(f"❌ 다중볼린저밴드 매수 신호 확인 오류: {e}")
+            return False, ""
+    
     def _check_stop_loss_conditions(self, trading_stock, data) -> Tuple[bool, str]:
         """손절 조건 확인"""
         try:
@@ -351,6 +403,8 @@ class TradingDecisionEngine:
             # 매수 사유에 따른 개별 손절 조건
             if "가격박스" in trading_stock.selection_reason:
                 return self._check_price_box_stop_loss(data, buy_price, current_price)
+            elif "다중볼린저밴드" in trading_stock.selection_reason:
+                return self._check_multi_bollinger_stop_loss(data, buy_price, current_price)
             elif "볼린저밴드" in trading_stock.selection_reason:
                 return self._check_bollinger_stop_loss(data, buy_price, current_price, trading_stock)
             
@@ -422,6 +476,31 @@ class TradingDecisionEngine:
             
         except Exception as e:
             self.logger.error(f"❌ 볼린저밴드 손절 조건 확인 오류: {e}")
+            return False, ""
+    
+    def _check_multi_bollinger_stop_loss(self, data, buy_price, current_price) -> Tuple[bool, str]:
+        """다중 볼린저밴드 전략 손절 조건"""
+        try:
+            from core.indicators.multi_bollinger_bands import MultiBollingerBands
+            
+            prices = data['close']
+            volume_data = data['volume'] if 'volume' in data.columns else None
+            
+            # 다중 볼린저밴드 신호 계산
+            signals = MultiBollingerBands.generate_trading_signals(prices, volume_data)
+            
+            # 손절 조건 1: 이등분선 이탈
+            if signals['stop_bisector'].iloc[-1]:
+                return True, "이등분선 이탈"
+            
+            # 손절 조건 2: 중심선(20기간 SMA) 이탈
+            if signals['stop_center'].iloc[-1]:
+                return True, "중심선 이탈"
+            
+            return False, ""
+            
+        except Exception as e:
+            self.logger.error(f"❌ 다중볼린저밴드 손절 조건 확인 오류: {e}")
             return False, ""
     
     def _check_profit_target(self, trading_stock, current_price) -> Tuple[bool, str]:
