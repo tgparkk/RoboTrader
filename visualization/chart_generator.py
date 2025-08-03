@@ -4,7 +4,6 @@
 """
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-import seaborn as sns
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
@@ -85,8 +84,9 @@ class ChartGenerator:
         self.chart_dir.mkdir(exist_ok=True)
         
         # 스타일 설정
-        sns.set_style("whitegrid")
-        plt.style.use('seaborn-v0_8')
+        plt.style.use('default')
+        plt.rcParams['axes.grid'] = True
+        plt.rcParams['grid.alpha'] = 0.3
     
     def create_candidate_trend_chart(self, days: int = 30, save: bool = True) -> str:
         """후보 종목 선정 추이 차트"""
@@ -456,3 +456,237 @@ class ChartGenerator:
         except Exception as e:
             self.logger.error(f"전체 차트 생성 실패: {e}")
             return []
+    
+    def create_strategy_chart(self, data: pd.DataFrame, stock_code: str, stock_name: str, 
+                            strategy_type: str, timeframe: str = "1min", 
+                            indicators: dict = None, signals: dict = None) -> str:
+        """
+        전략별 차트 생성 (1분봉/3분봉 구분)
+        
+        Args:
+            data: 분봉 데이터
+            stock_code: 종목코드
+            stock_name: 종목명
+            strategy_type: 전략 타입 ("price_box", "bollinger_bands")
+            timeframe: 시간프레임 ("1min", "3min")
+            indicators: 기술적 지표 데이터
+            signals: 매매 신호 데이터
+            
+        Returns:
+            str: 차트 파일 경로
+        """
+        try:
+            if data.empty:
+                self.logger.error("데이터가 없어 차트를 생성할 수 없습니다")
+                return None
+            
+            self.logger.info(f"{strategy_type} 전략 {timeframe} 차트 생성 시작: {stock_code}")
+            
+            # 전략별 제목 설정
+            strategy_names = {
+                "price_box": "가격박스 + 이등분선",
+                "bollinger_bands": "볼린저밴드 + 이등분선"
+            }
+            strategy_name = strategy_names.get(strategy_type, strategy_type)
+            
+            # 시간프레임별 설정
+            timeframe_settings = {
+                "1min": {"title": "1분봉", "time_interval": 60, "tick_interval": 60},
+                "3min": {"title": "3분봉", "time_interval": 180, "tick_interval": 180}
+            }
+            tf_setting = timeframe_settings.get(timeframe, timeframe_settings["1min"])
+            
+            # 차트 생성
+            fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(16, 14))
+            fig.suptitle(f'{strategy_name} - {stock_code}({stock_name}) {tf_setting["title"]} 차트', 
+                        fontsize=16, fontweight='bold')
+            
+            # 데이터 인덱스
+            x_axis = range(len(data))
+            
+            # 상단: 캔들스틱 차트 + 기술적 지표
+            self._draw_candlestick(ax1, data, x_axis)
+            
+            if indicators is not None and not indicators.empty:
+                self._draw_indicators(ax1, indicators, x_axis, strategy_type)
+            
+            if signals is not None and not signals.empty:
+                self._draw_signals(ax1, data, signals, x_axis)
+            
+            ax1.set_title(f'가격 차트 및 {strategy_name}', fontsize=14)
+            ax1.set_ylabel('가격 (원)', fontsize=12)
+            ax1.legend(loc='upper left', fontsize=10)
+            ax1.grid(True, alpha=0.3)
+            
+            # 중간: 신호 상태
+            if signals is not None and not signals.empty:
+                self._draw_signal_status(ax2, signals, x_axis, strategy_type)
+            
+            ax2.set_title('매매 신호 상태', fontsize=14)
+            ax2.set_ylabel('신호', fontsize=12)
+            ax2.legend(loc='upper left', fontsize=10)
+            ax2.grid(True, alpha=0.3)
+            
+            # 하단: 거래량
+            ax3.bar(x_axis, data['volume'], alpha=0.5, color='gray', label='거래량')
+            ax3.set_title('거래량', fontsize=14)
+            ax3.set_xlabel(f'시간 ({tf_setting["title"]})', fontsize=12)
+            ax3.set_ylabel('거래량', fontsize=12)
+            ax3.legend(loc='upper left', fontsize=10)
+            ax3.grid(True, alpha=0.3)
+            
+            # x축 시간 라벨 설정 (전략별 시간간격 적용)
+            self._set_time_axis(data, [ax1, ax2, ax3], tf_setting["tick_interval"])
+            
+            plt.tight_layout()
+            
+            # 저장
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"{timeframe}_{strategy_type}_{stock_code}_{timestamp}.png"
+            filepath = self.chart_dir / filename
+            plt.savefig(filepath, dpi=300, bbox_inches='tight')
+            plt.close()
+            
+            self.logger.info(f"{strategy_type} {timeframe} 차트 저장: {filepath}")
+            return str(filepath)
+            
+        except Exception as e:
+            self.logger.error(f"{strategy_type} 차트 생성 오류: {e}")
+            return None
+    
+    def _draw_candlestick(self, ax, data, x_axis):
+        """캔들스틱 그리기"""
+        for i in x_axis:
+            color = 'red' if data['close'].iloc[i] >= data['open'].iloc[i] else 'blue'
+            ax.plot([i, i], [data['low'].iloc[i], data['high'].iloc[i]], color='black', linewidth=0.5)
+            ax.plot([i, i], [data['open'].iloc[i], data['close'].iloc[i]], color=color, linewidth=2)
+    
+    def _draw_indicators(self, ax, indicators, x_axis, strategy_type):
+        """기술적 지표 그리기"""
+        if strategy_type == "price_box":
+            # 가격박스 지표
+            if 'upper_line' in indicators:
+                ax.plot(x_axis, indicators['upper_line'], 'orange', linewidth=1.5, label='박스상한선', alpha=0.8)
+            if 'lower_line' in indicators:
+                ax.plot(x_axis, indicators['lower_line'], 'brown', linewidth=1.5, label='박스하한선', alpha=0.8)
+            if 'center_line' in indicators:
+                ax.plot(x_axis, indicators['center_line'], 'navy', linewidth=1.5, label='박스중심선', alpha=0.8)
+                
+        elif strategy_type == "bollinger_bands":
+            # 볼린저밴드 지표
+            if 'upper_band' in indicators:
+                ax.plot(x_axis, indicators['upper_band'], 'orange', linewidth=1.5, label='상한선', alpha=0.8)
+            if 'lower_band' in indicators:
+                ax.plot(x_axis, indicators['lower_band'], 'brown', linewidth=1.5, label='하한선', alpha=0.8)
+            if 'sma' in indicators:
+                ax.plot(x_axis, indicators['sma'], 'navy', linewidth=1.5, label='중심선(SMA)', alpha=0.8)
+            if 'upper_band' in indicators and 'lower_band' in indicators:
+                ax.fill_between(x_axis, indicators['upper_band'], indicators['lower_band'],
+                               alpha=0.1, color='blue', label='볼린저밴드')
+        
+        # 이등분선 (공통)
+        if 'bisector_line' in indicators:
+            ax.plot(x_axis, indicators['bisector_line'], 'purple', linewidth=2, label='이등분선', alpha=0.8)
+        
+        # 이등분선 상하 영역
+        if 'bullish_zone' in indicators:
+            bullish_mask = indicators['bullish_zone']
+            for i in range(len(bullish_mask)):
+                if bullish_mask.iloc[i]:
+                    ax.axvspan(i-0.5, i+0.5, alpha=0.1, color='green')
+    
+    def _draw_signals(self, ax, data, signals, x_axis):
+        """매매 신호 그리기"""
+        # 매수 신호들 수집
+        buy_signals = []
+        
+        # 가격박스 신호
+        if 'first_lower_touch' in signals:
+            buy_signals.extend(signals[signals['first_lower_touch']].index.tolist())
+        
+        # 볼린저밴드 신호
+        if 'upper_breakout' in signals:
+            buy_signals.extend(signals[signals['upper_breakout']].index.tolist())
+        if 'lower_touch' in signals:
+            buy_signals.extend(signals[signals['lower_touch']].index.tolist())
+        
+        if buy_signals:
+            buy_signals = list(set(buy_signals))  # 중복 제거
+            ax.scatter(buy_signals, data['close'].iloc[buy_signals], 
+                      color='red', marker='^', s=100, label='매수신호', zorder=5)
+    
+    def _draw_signal_status(self, ax, signals, x_axis, strategy_type):
+        """신호 상태 그리기"""
+        if strategy_type == "price_box":
+            if 'first_lower_touch' in signals:
+                touch_signals = signals['first_lower_touch'].astype(int)
+                touch_indices = [i for i in x_axis if touch_signals.iloc[i] == 1]
+                if touch_indices:
+                    ax.scatter(touch_indices, [1]*len(touch_indices), 
+                              color='red', marker='^', s=50, label='첫 박스하한선 터치')
+            
+            if 'center_breakout_up' in signals:
+                breakout_signals = signals['center_breakout_up'].astype(int)
+                breakout_indices = [i for i in x_axis if breakout_signals.iloc[i] == 1]
+                if breakout_indices:
+                    ax.scatter(breakout_indices, [0.5]*len(breakout_indices), 
+                              color='blue', marker='o', s=50, label='박스중심선 돌파')
+                              
+        elif strategy_type == "bollinger_bands":
+            if 'upper_breakout' in signals:
+                breakout_signals = signals['upper_breakout'].astype(int)
+                breakout_indices = [i for i in x_axis if breakout_signals.iloc[i] == 1]
+                if breakout_indices:
+                    ax.scatter(breakout_indices, [1]*len(breakout_indices), 
+                              color='red', marker='^', s=50, label='상한선 돌파')
+            
+            if 'lower_touch' in signals:
+                touch_signals = signals['lower_touch'].astype(int)
+                touch_indices = [i for i in x_axis if touch_signals.iloc[i] == 1]
+                if touch_indices:
+                    ax.scatter(touch_indices, [0.5]*len(touch_indices), 
+                              color='blue', marker='v', s=50, label='하한선 터치')
+        
+        # 이등분선 상태 (공통)
+        if 'bullish_zone' in signals:
+            ax.fill_between(x_axis, 0, signals['bullish_zone'].astype(int), 
+                           alpha=0.3, color='green', label='이등분선 위 구간')
+    
+    def _set_time_axis(self, data, axes, tick_interval_minutes):
+        """시간축 설정 (1분봉/3분봉 구분)"""
+        try:
+            if 'time' in data.columns:
+                # 시간 간격에 따른 틱 설정
+                if tick_interval_minutes == 60:  # 1분봉 - 1시간마다 표시
+                    time_ticks = range(0, len(data), 60)
+                elif tick_interval_minutes == 180:  # 3분봉 - 3시간마다 표시 
+                    time_ticks = range(0, len(data), 60)  # 3분봉이므로 60개 = 3시간
+                else:
+                    time_ticks = range(0, len(data), max(1, len(data) // 10))
+                
+                # 시간 라벨 생성
+                time_labels = []
+                for i in time_ticks:
+                    if i < len(data):
+                        time_val = data['time'].iloc[i]
+                        if isinstance(time_val, str):
+                            time_val = int(time_val)
+                        hour = time_val // 10000
+                        minute = (time_val // 100) % 100
+                        time_labels.append(f"{hour:02d}:{minute:02d}")
+                    else:
+                        break
+                
+                # 모든 축에 시간 라벨 적용
+                for ax in axes:
+                    ax.set_xticks(time_ticks)
+                    ax.set_xticklabels(time_labels, rotation=45)
+            else:
+                # time 컬럼이 없는 경우 인덱스 기반
+                for ax in axes:
+                    ax.set_xlabel('데이터 인덱스')
+                    
+        except Exception as e:
+            self.logger.error(f"시간축 설정 오류: {e}")
+            for ax in axes:
+                ax.set_xlabel('데이터 인덱스')
