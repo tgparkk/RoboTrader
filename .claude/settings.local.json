@@ -9,7 +9,9 @@
       "Bash(pip install:*)",
       "Bash(python:*)",
       "Bash(ls:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(del:*)",
+      "Bash(rm -f simple_test.py test_indicators.py create_final_charts.py create_real_charts.py create_3min_chart.py test_candlestick_*.py comprehensive_test.py 분봉시간조사.py 전체거래시간테스트.py 테스트.py)"
     ],
     "deny": []
   }

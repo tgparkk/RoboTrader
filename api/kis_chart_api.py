@@ -591,7 +591,8 @@ def get_full_trading_day_data(stock_code: str, target_date: str = "",
                         logger.debug(f"  ℹ️ 해당 구간에 데이터 없음")
                 
                 # API 호출 간격 (과도한 요청 방지)
-                await asyncio.sleep(0.1)
+                import time
+                time.sleep(0.1)
                 
             except Exception as e:
                 logger.error(f"  ❌ {start_time}~{segment_end_time} 구간 수집 오류: {e}")
