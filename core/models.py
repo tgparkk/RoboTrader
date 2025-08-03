@@ -24,6 +24,18 @@ class PositionType(Enum):
     LONG = "long"
 
 
+class StockState(Enum):
+    """종목 거래 상태"""
+    SELECTED = "selected"           # 조건검색으로 선정됨
+    BUY_CANDIDATE = "buy_candidate" # 매수 후보
+    BUY_PENDING = "buy_pending"     # 매수 주문 중
+    POSITIONED = "positioned"       # 매수 완료 (포지션 보유)
+    SELL_CANDIDATE = "sell_candidate" # 매도 후보
+    SELL_PENDING = "sell_pending"   # 매도 주문 중
+    COMPLETED = "completed"         # 거래 완료
+    FAILED = "failed"              # 거래 실패
+
+
 @dataclass
 class OHLCVData:
     """OHLCV 데이터"""
@@ -115,6 +127,64 @@ class Position:
         """현재가 업데이트 및 평가손익 계산"""
         self.current_price = price
         self.unrealized_pnl = (price - self.avg_price) * self.quantity
+
+
+@dataclass
+class TradingStock:
+    """거래 종목 통합 정보"""
+    stock_code: str
+    stock_name: str
+    state: StockState
+    selected_time: datetime
+    
+    # 포지션 정보
+    position: Optional[Position] = None
+    
+    # 주문 정보
+    current_order_id: Optional[str] = None
+    order_history: List[str] = field(default_factory=list)
+    
+    # 상태 변화 이력
+    state_history: List[Dict[str, Any]] = field(default_factory=list)
+    
+    # 메타 정보
+    selection_reason: str = ""
+    last_update: datetime = field(default_factory=datetime.now)
+    
+    def change_state(self, new_state: StockState, reason: str = ""):
+        """상태 변경 및 이력 기록"""
+        old_state = self.state
+        self.state = new_state
+        self.last_update = datetime.now()
+        
+        # 상태 변화 이력 기록
+        self.state_history.append({
+            'from_state': old_state.value,
+            'to_state': new_state.value,
+            'reason': reason,
+            'timestamp': self.last_update
+        })
+    
+    def add_order(self, order_id: str):
+        """주문 추가"""
+        self.current_order_id = order_id
+        self.order_history.append(order_id)
+    
+    def clear_current_order(self):
+        """현재 주문 클리어"""
+        self.current_order_id = None
+    
+    def set_position(self, quantity: int, avg_price: float):
+        """포지션 설정"""
+        self.position = Position(
+            stock_code=self.stock_code,
+            quantity=quantity,
+            avg_price=avg_price
+        )
+    
+    def clear_position(self):
+        """포지션 클리어"""
+        self.position = None
 
 
 @dataclass
