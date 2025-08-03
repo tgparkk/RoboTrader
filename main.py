@@ -11,7 +11,7 @@ from pathlib import Path
 # 프로젝트 경로 추가
 sys.path.append(str(Path(__file__).parent))
 
-from core.models import TradingConfig
+from core.models import TradingConfig, StockState
 from core.data_collector import RealTimeDataCollector
 from core.order_manager import OrderManager
 from core.telegram_integration import TelegramIntegration
@@ -53,7 +53,9 @@ class DayTradingBot:
         )  # 🆕 거래 상태 통합 관리자
         self.db_manager = DatabaseManager()
         self.decision_engine = TradingDecisionEngine(
-            db_manager=self.db_manager, telegram_integration=self.telegram
+            db_manager=self.db_manager, 
+            telegram_integration=self.telegram,
+            trading_manager=self.trading_manager
         )  # 🆕 매매 판단 엔진
         self.chart_generator = None  # 🆕 장 마감 후 차트 생성기 (지연 초기화)
         
@@ -227,6 +229,12 @@ class DayTradingBot:
         try:
             stock_code = trading_stock.stock_code
             stock_name = trading_stock.stock_name
+            
+            # 추가 안전 검증: 현재 보유 중인 종목인지 다시 한번 확인
+            positioned_stocks = self.trading_manager.get_stocks_by_state(StockState.POSITIONED)
+            if any(pos_stock.stock_code == stock_code for pos_stock in positioned_stocks):
+                self.logger.info(f"⚠️ 보유 중인 종목 매수 신호 무시: {stock_code}({stock_name})")
+                return
             
             # 분봉 데이터 가져오기
             combined_data = self.intraday_manager.get_combined_chart_data(stock_code)

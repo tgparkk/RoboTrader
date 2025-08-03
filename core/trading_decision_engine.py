@@ -20,17 +20,19 @@ class TradingDecisionEngine:
     4. 가상 매매 실행
     """
     
-    def __init__(self, db_manager=None, telegram_integration=None):
+    def __init__(self, db_manager=None, telegram_integration=None, trading_manager=None):
         """
         초기화
         
         Args:
             db_manager: 데이터베이스 관리자
             telegram_integration: 텔레그램 연동
+            trading_manager: 거래 종목 관리자
         """
         self.logger = setup_logger(__name__)
         self.db_manager = db_manager
         self.telegram = telegram_integration
+        self.trading_manager = trading_manager
         
         # 가상 매매 설정
         self.virtual_investment_amount = 10000  # 1만원 기준
@@ -53,6 +55,10 @@ class TradingDecisionEngine:
             
             if combined_data is None or len(combined_data) < 30:
                 return False, "데이터 부족"
+            
+            # 보유 종목 여부 확인 - 이미 보유 중인 종목은 매수하지 않음
+            if self._is_already_holding(stock_code):
+                return False, f"이미 보유 중인 종목 (매수 제외)"
             
             # 전략 1: 가격박스 + 이등분선 매수 신호
             signal_result, reason = self._check_price_box_bisector_buy_signal(combined_data)
@@ -436,3 +442,35 @@ class TradingDecisionEngine:
         except Exception as e:
             self.logger.error(f"❌ 수익실현 조건 확인 오류: {e}")
             return False, ""
+    
+    def _is_already_holding(self, stock_code: str) -> bool:
+        """
+        현재 보유 중인 종목인지 확인
+        
+        Args:
+            stock_code: 종목코드
+            
+        Returns:
+            bool: 보유 중이면 True, 아니면 False
+        """
+        try:
+            if not self.trading_manager:
+                # TradingManager가 없으면 안전하게 False 반환
+                return False
+            
+            # TradingStockManager를 통해 보유 종목 확인
+            from core.models import StockState
+            positioned_stocks = self.trading_manager.get_stocks_by_state(StockState.POSITIONED)
+            
+            # 해당 종목이 보유 종목 목록에 있는지 확인
+            for stock in positioned_stocks:
+                if stock.stock_code == stock_code:
+                    self.logger.info(f"📋 보유 종목 확인: {stock_code} (매수 제외)")
+                    return True
+            
+            return False
+            
+        except Exception as e:
+            self.logger.error(f"❌ 보유 종목 확인 오류 ({stock_code}): {e}")
+            # 오류 발생시 안전하게 False 반환 (매수 허용)
+            return False
