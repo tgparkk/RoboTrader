@@ -413,6 +413,179 @@ class PostMarketChartGenerator:
         except Exception as e:
             self.logger.error(f"차트 일괄 생성 오류: {e}")
             return {'success': False, 'error': str(e)}
+    
+    async def generate_post_market_charts_for_intraday_stocks(self, intraday_manager, telegram_integration=None) -> Dict[str, Any]:
+        """
+        장중 선정된 종목들의 장 마감 후 차트 생성 (main.py 로직 통합)
+        
+        Args:
+            intraday_manager: IntradayStockManager 인스턴스
+            telegram_integration: 텔레그램 통합 객체 (선택사항)
+            
+        Returns:
+            Dict: 차트 생성 결과
+        """
+        try:
+            current_time = now_kst()
+            
+            # 장 마감 시간 체크 (15:30 이후)
+            market_close_hour = 15
+            market_close_minute = 30
+            
+            if current_time.hour < market_close_hour or (current_time.hour == market_close_hour and current_time.minute < market_close_minute):
+                self.logger.debug("아직 장 마감 시간이 아님 - 차트 생성 건너뛰기")
+                return {'success': False, 'message': '아직 장 마감 시간이 아님'}
+            
+            # 주말이나 공휴일 체크
+            if current_time.weekday() >= 5:  # 토요일(5), 일요일(6)
+                self.logger.debug("주말 - 차트 생성 건너뛰기")
+                return {'success': False, 'message': '주말'}
+            
+            self.logger.info("🎨 장 마감 후 선정 종목 차트 생성 시작")
+            
+            # 장중 선정된 종목들 조회
+            selected_stocks = []
+            
+            # IntradayStockManager에서 선정된 종목들 가져오기
+            summary = intraday_manager.get_all_stocks_summary()
+            
+            if summary.get('total_stocks', 0) > 0:
+                for stock_info in summary.get('stocks', []):
+                    stock_code = stock_info.get('stock_code', '')
+                    
+                    # 종목 상세 정보 조회
+                    stock_data = intraday_manager.get_stock_data(stock_code)
+                    if stock_data:
+                        selected_stocks.append({
+                            'code': stock_code,
+                            'name': stock_data.stock_name,
+                            'chgrate': f"+{stock_info.get('price_change_rate', 0):.1f}",
+                            'selection_reason': f"장중 선정 종목 ({stock_data.selected_time.strftime('%H:%M')} 선정)"
+                        })
+            
+            if not selected_stocks:
+                self.logger.info("ℹ️ 오늘 선정된 종목이 없어 차트 생성을 건너뜁니다")
+                return {'success': False, 'message': '선정된 종목이 없음'}
+            
+            # 당일 날짜로 차트 생성
+            target_date = current_time.strftime("%Y%m%d")
+            
+            self.logger.info(f"📊 {len(selected_stocks)}개 선정 종목의 {target_date} 차트 생성 중...")
+            
+            # 각 종목별 차트 생성
+            success_count = 0
+            chart_files = []
+            stock_results = []
+            
+            for stock_data in selected_stocks:
+                stock_code = stock_data.get('code', '')
+                stock_name = stock_data.get('name', '')
+                selection_reason = stock_data.get('selection_reason', '')
+                
+                try:
+                    self.logger.info(f"📈 {stock_code}({stock_name}) 차트 생성 중...")
+                    
+                    # 분봉 데이터 조회
+                    chart_df = self.get_historical_chart_data(stock_code, target_date)
+                    
+                    if chart_df is None or chart_df.empty:
+                        self.logger.warning(f"⚠️ {stock_code} 데이터 없음")
+                        stock_results.append({
+                            'stock_code': stock_code,
+                            'stock_name': stock_name,
+                            'success': False,
+                            'error': '데이터 없음'
+                        })
+                        continue
+                    
+                    # 차트 생성
+                    chart_file = self.create_post_market_candlestick_chart(
+                        stock_code=stock_code,
+                        stock_name=stock_name,
+                        chart_df=chart_df,
+                        target_date=target_date,
+                        selection_reason=selection_reason
+                    )
+                    
+                    if chart_file:
+                        chart_files.append(chart_file)
+                        success_count += 1
+                        stock_results.append({
+                            'stock_code': stock_code,
+                            'stock_name': stock_name,
+                            'success': True,
+                            'chart_file': chart_file
+                        })
+                        self.logger.info(f"✅ {stock_code} 차트 생성 성공: {chart_file}")
+                    else:
+                        stock_results.append({
+                            'stock_code': stock_code,
+                            'stock_name': stock_name,
+                            'success': False,
+                            'error': '차트 생성 실패'
+                        })
+                        self.logger.error(f"❌ {stock_code} 차트 생성 실패")
+                
+                except Exception as e:
+                    self.logger.error(f"❌ {stock_code} 차트 생성 중 오류: {e}")
+                    stock_results.append({
+                        'stock_code': stock_code,
+                        'stock_name': stock_name,
+                        'success': False,
+                        'error': str(e)
+                    })
+                    continue
+            
+            # 결과 구성
+            results = {
+                'success': True,
+                'target_date': target_date,
+                'total_stocks': len(selected_stocks),
+                'success_count': success_count,
+                'failed_count': len(selected_stocks) - success_count,
+                'chart_files': chart_files,
+                'stock_results': stock_results,
+                'generation_time': current_time.strftime('%H:%M:%S')
+            }
+            
+            # 텔레그램 알림 전송 (제공된 경우)
+            if telegram_integration and success_count > 0:
+                try:
+                    summary_message = (f"🎨 장 마감 후 차트 생성 완료\n"
+                                     f"📊 생성된 차트: {success_count}/{len(selected_stocks)}개\n"
+                                     f"📅 날짜: {target_date}\n"
+                                     f"🕰️ 생성 시간: {current_time.strftime('%H:%M:%S')}")
+                    
+                    # 생성된 차트 파일 목록 추가
+                    if chart_files:
+                        summary_message += "\n\n📈 생성된 차트:"
+                        for i, file in enumerate(chart_files[:5], 1):  # 최대 5개만 표시
+                            filename = Path(file).name
+                            summary_message += f"\n  {i}. {filename}"
+                        
+                        if len(chart_files) > 5:
+                            summary_message += f"\n  ... 외 {len(chart_files) - 5}개"
+                    
+                    await telegram_integration.notify_system_status(summary_message)
+                except Exception as e:
+                    self.logger.error(f"텔레그램 알림 전송 실패: {e}")
+            elif telegram_integration and success_count == 0:
+                try:
+                    error_message = f"⚠️ 장 마감 후 차트 생성 실패\n선정 종목: {len(selected_stocks)}개"
+                    await telegram_integration.notify_system_status(error_message)
+                except Exception as e:
+                    self.logger.error(f"텔레그램 알림 전송 실패: {e}")
+            
+            if success_count > 0:
+                self.logger.info(f"🎯 장 마감 후 차트 생성 완료: {success_count}개 성공")
+            else:
+                self.logger.warning("⚠️ 장 마감 후 차트 생성 결과 없음")
+            
+            return results
+            
+        except Exception as e:
+            self.logger.error(f"❌ 장 마감 후 차트 생성 오류: {e}")
+            return {'success': False, 'error': str(e)}
 
 
 def main():
