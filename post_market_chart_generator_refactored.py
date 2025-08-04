@@ -209,96 +209,24 @@ class PostMarketChartGenerator:
                     self.logger.error(f"{strategy.name} 차트 생성 오류: {e}")
                     continue
             
-            # 모든 전략이 실패한 경우
-            self.logger.warning("모든 전략 차트 생성 실패")
+            # 모든 전략이 실패한 경우 기본 차트 생성
+            if chart_df is not None:
+                return self.chart_renderer.create_basic_chart(
+                    stock_code, stock_name, chart_df, target_date, selection_reason
+                )
+            else:
+                # 기본 1분봉 데이터로 기본 차트 생성
+                base_data = await self._get_cached_data(stock_code, target_date, "1min")
+                if base_data is not None:
+                    return self.chart_renderer.create_basic_chart(
+                        stock_code, stock_name, base_data, target_date, selection_reason
+                    )
+            
             return None
             
         except Exception as e:
             self.logger.error(f"차트 생성 오류: {e}")
             return None
-    
-    async def create_dual_strategy_charts(self, stock_code: str, stock_name: str,
-                                         chart_df=None, target_date: str = None,
-                                         selection_reason: str = "") -> Dict[str, Optional[str]]:
-        """
-        두 개의 전략 차트 생성 (가격박스+이등분선, 다중볼린저밴드+이등분선)
-        
-        Args:
-            stock_code: 종목코드
-            stock_name: 종목명 
-            chart_df: 차트 데이터
-            target_date: 대상 날짜
-            selection_reason: 선정 사유
-            
-        Returns:
-            Dict[str, Optional[str]]: 각 전략별 차트 파일 경로
-        """
-        try:
-            if target_date is None:
-                target_date = now_kst().strftime("%Y%m%d")
-            
-            self.logger.info(f"{stock_code} {target_date} 듀얼 차트 생성 시작")
-            
-            results = {
-                'price_box': None,
-                'multi_bollinger': None
-            }
-            
-            # 1분봉 데이터 준비
-            if chart_df is not None:
-                timeframe_data = chart_df
-            else:
-                timeframe_data = await self._get_cached_data(stock_code, target_date, "1min")
-            
-            if timeframe_data is None or timeframe_data.empty:
-                self.logger.warning("1분봉 데이터 없음")
-                return results
-            
-            # 전략 1: 가격박스 + 이등분선
-            try:
-                price_box_strategy = self.strategy_manager.get_strategy('price_box')
-                if price_box_strategy:
-                    indicator_cache_key = f"{stock_code}_{target_date}_1min_price_box"
-                    price_box_indicators = self._get_cached_indicators(indicator_cache_key, timeframe_data, price_box_strategy)
-                    
-                    price_box_path = self.chart_renderer.create_strategy_chart(
-                        stock_code, stock_name, target_date, price_box_strategy,
-                        timeframe_data, price_box_indicators, selection_reason,
-                        chart_suffix="price_box"
-                    )
-                    
-                    if price_box_path:
-                        results['price_box'] = price_box_path
-                        self.logger.info(f"✅ 가격박스 차트 생성: {price_box_path}")
-                    
-            except Exception as e:
-                self.logger.error(f"가격박스 차트 생성 오류: {e}")
-            
-            # 전략 2: 다중볼린저밴드 + 이등분선
-            try:
-                multi_bb_strategy = self.strategy_manager.get_strategy('multi_bollinger')
-                if multi_bb_strategy:
-                    indicator_cache_key = f"{stock_code}_{target_date}_1min_multi_bollinger"
-                    multi_bb_indicators = self._get_cached_indicators(indicator_cache_key, timeframe_data, multi_bb_strategy)
-                    
-                    multi_bb_path = self.chart_renderer.create_strategy_chart(
-                        stock_code, stock_name, target_date, multi_bb_strategy,
-                        timeframe_data, multi_bb_indicators, selection_reason,
-                        chart_suffix="multi_bollinger"
-                    )
-                    
-                    if multi_bb_path:
-                        results['multi_bollinger'] = multi_bb_path
-                        self.logger.info(f"✅ 다중볼린저밴드 차트 생성: {multi_bb_path}")
-                        
-            except Exception as e:
-                self.logger.error(f"다중볼린저밴드 차트 생성 오류: {e}")
-            
-            return results
-            
-        except Exception as e:
-            self.logger.error(f"듀얼 차트 생성 오류: {e}")
-            return {'price_box': None, 'multi_bollinger': None}
     
     async def generate_charts_for_selected_stocks(self, target_date: str = None) -> Dict[str, Any]:
         """
@@ -393,18 +321,15 @@ class PostMarketChartGenerator:
                                    target_date: str, selection_reason: str, change_rate: str) -> Dict[str, Any]:
         """단일 종목 처리 (내부 메서드)"""
         try:
-            # 듀얼 차트 생성 (가격박스+이등분선, 다중볼린저밴드+이등분선)
-            chart_results = await self.create_dual_strategy_charts(
+            # 차트 생성
+            chart_file = await self.create_post_market_candlestick_chart(
                 stock_code=stock_code,
                 stock_name=stock_name,
                 target_date=target_date,
                 selection_reason=selection_reason
             )
             
-            # 성공한 차트가 하나라도 있으면 성공으로 처리
-            success_charts = [path for path in chart_results.values() if path is not None]
-            
-            if success_charts:
+            if chart_file:
                 # 데이터 건수 조회 (캐시에서)
                 cache_key = self._get_cache_key(stock_code, target_date, "1min")
                 data_count = len(self._data_cache.get(cache_key, []))
@@ -413,8 +338,7 @@ class PostMarketChartGenerator:
                     'stock_code': stock_code,
                     'stock_name': stock_name,
                     'success': True,
-                    'chart_files': chart_results,  # 두 차트 경로 모두 반환
-                    'chart_count': len(success_charts),
+                    'chart_file': chart_file,
                     'data_count': data_count,
                     'change_rate': change_rate
                 }

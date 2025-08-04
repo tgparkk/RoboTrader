@@ -10,16 +10,21 @@ class PriceBox:
     """
     가격박스 지표 (1분봉 활용 권장)
     
+    정의:
+    - 가격: 종가
+    - 이평기간: 30
+    - 이평방법: 삼각
+    
+    계산법:
+    1. 박스중심선: 삼각이동평균(종가, 30일)
+    2. 박스상한선: A + AvgIf(종가-A, 1, 0.0) + 2*StdevIf(종가-A, 1, 0.0)  
+    3. 박스하한선: A + AvgIf(종가-A, -1, 0.0) - 2*StdevIf(종가-A, -1, 0.0)
+    
     매매법:
     - 주가 하락시: 박스하한선에서 지지 확인 후 매수 또는 박스중심선 돌파시 매수
     - 주가 상승시: 박스상한선에서 매도
     - 박스하한선에서 10분 내외 반응 없으면 즉각 손절
     - 첫 박스하한선이 가장 확률 높은 자리
-    
-    계산법:
-    1. 삼각 이동평균(30일) → 박스중심선
-    2. 조건부 편차 계산 (상승/하락 구분)
-    3. 박스 상/하한선 = 중심선 ± (평균편차 + 2*표준편차)
     """
     
     @staticmethod
@@ -84,19 +89,19 @@ class PriceBox:
             
             # 상승 편차 통계
             if len(window_upward) > 0:
-                avg_up_series.iloc[i] = window_upward.mean()
-                std_up_series.iloc[i] = window_upward.std() if len(window_upward) > 1 else 0
+                avg_up_series.iat[i] = window_upward.mean()
+                std_up_series.iat[i] = window_upward.std() if len(window_upward) > 1 else 0
             else:
-                avg_up_series.iloc[i] = 0
-                std_up_series.iloc[i] = 0
+                avg_up_series.iat[i] = 0
+                std_up_series.iat[i] = 0
             
             # 하락 편차 통계
             if len(window_downward) > 0:
-                avg_down_series.iloc[i] = window_downward.mean()
-                std_down_series.iloc[i] = window_downward.std() if len(window_downward) > 1 else 0
+                avg_down_series.iat[i] = window_downward.mean()
+                std_down_series.iat[i] = window_downward.std() if len(window_downward) > 1 else 0
             else:
-                avg_down_series.iloc[i] = 0
-                std_down_series.iloc[i] = 0
+                avg_down_series.iat[i] = 0
+                std_down_series.iat[i] = 0
         
         return {
             'avg_up': avg_up_series,
@@ -108,26 +113,38 @@ class PriceBox:
     
     @staticmethod
     def calculate_price_box(prices: pd.Series, period: int = 30, 
-                          std_multiplier: float = 2.0) -> Dict[str, pd.Series]:
+                          std_multiplier: float = 2.0, ma_type: str = 'triangular') -> Dict[str, pd.Series]:
         """
         가격박스 계산 (Static Method)
         
+        정의에 따른 계산:
+        - 박스중심선: MA(가격, 이평기간, 이평방법)
+        - 박스상한선: A + AvgIf(가격-A, 1, 0.0) + 2*StdevIf(가격-A, 1, 0.0)
+        - 박스하한선: A + AvgIf(가격-A, -1, 0.0) - 2*StdevIf(가격-A, -1, 0.0)
+        
         Parameters:
         - prices: 종가 데이터
-        - period: 삼각 이동평균 기간 (기본값: 30)
+        - period: 이동평균 기간 (기본값: 30)
         - std_multiplier: 표준편차 배수 (기본값: 2.0)
+        - ma_type: 이동평균 종류 ('simple' 또는 'triangular')
         
         Returns:
         - 박스 중심선, 상한선, 하한선
         """
-        # 1단계: 삼각 이동평균 계산 (박스중심선)
-        center_line = PriceBox.triangular_moving_average(prices, period)
+        # 1단계: 이동평균 계산 (박스중심선)
+        if ma_type == 'triangular':
+            center_line = PriceBox.triangular_moving_average(prices, period)
+        else:
+            center_line = prices.rolling(window=period, min_periods=1).mean()
         
         # 2단계: 조건부 편차 계산
         deviation_data = PriceBox.calculate_conditional_deviations(prices, center_line)
         
-        # 3단계: 박스 상/하한선 계산
+        # 3단계: 박스 상/하한선 계산 (정의에 따라)
+        # 상한선: A + AvgIf(편차, >0) + 2*StdevIf(편차, >0)
         upper_band = center_line + deviation_data['avg_up'] + std_multiplier * deviation_data['std_up']
+        
+        # 하한선: A + AvgIf(편차, <0) - 2*StdevIf(편차, <0)  
         lower_band = center_line + deviation_data['avg_down'] - std_multiplier * deviation_data['std_down']
         
         return {
@@ -177,7 +194,7 @@ class PriceBox:
             recent_touch = lower_touch.iloc[i-2:i+1].any()
             current_above_support = prices.iloc[i] > lower_band.iloc[i] * (1 + tolerance)
             if recent_touch and current_above_support:
-                support_confirmed.iloc[i] = True
+                support_confirmed.iat[i] = True
         
         # 하한선에서 반등 (즉시 반등, 기존 로직 유지)
         support_bounce = (prices.shift(1) <= lower_band * (1 + tolerance)) & (prices > lower_band * (1 + tolerance))
@@ -233,7 +250,7 @@ class PriceBox:
                 # 추가 조건: 다음 몇 봉에서 실제 반등이 있는지 확인 (미래 정보 사용하지 않음)
                 # 대신 현재 봉에서 하한선 근처에서 마감되는지만 확인
                 if prices.iloc[i] > lower_band.iloc[i] * 0.998:  # 하한선 아래 0.2% 이내
-                    first_lower_touch.iloc[i] = True
+                    first_lower_touch.iat[i] = True
             
             # 상한선도 동일 로직 (더 엄격한 조건)
             past_upper_touches = (prices.iloc[i-lookback_period:i] >= upper_band.iloc[i-lookback_period:i] * 0.998).any()
@@ -241,7 +258,7 @@ class PriceBox:
             
             if not past_upper_touches and current_upper_touch:
                 if prices.iloc[i] < upper_band.iloc[i] * 1.002:
-                    first_upper_touch.iloc[i] = True
+                    first_upper_touch.iat[i] = True
         
         return {
             'first_lower_touch': first_lower_touch,
@@ -271,7 +288,7 @@ class PriceBox:
         signals = pd.DataFrame(index=timestamps)
         signals['price'] = prices
         
-        # 가격박스 계산
+        # 가격박스 계산 (삼각이동평균 30일 기본값)
         box_data = PriceBox.calculate_price_box(prices, period, std_multiplier)
         signals['center_line'] = box_data['center_line']
         signals['upper_band'] = box_data['upper_band']
@@ -307,7 +324,7 @@ class PriceBox:
             current_center_breakout = signals['center_breakout_up'].iloc[i]
             
             if recent_support_confirmed and current_center_breakout:
-                signals['buy_safe'].iloc[i] = True
+                signals.loc[i, 'buy_safe'] = True
         
         # 매도 신호
         # 상한선에서 매도
@@ -378,7 +395,7 @@ class PriceBox:
                 # 1. 중심선 이탈 손절
                 center_line_value = signals['center_line'].iloc[i]
                 if current_price < center_line_value:
-                    stop_loss_signal.iloc[i] = True
+                    stop_loss_signal.iat[i] = True
                     positions_to_remove.append(buy_idx)
                     continue
                     
@@ -386,13 +403,13 @@ class PriceBox:
                 if i > buy_idx + 2:  # 최소 2봉 이후부터 체크
                     recent_low = signals['price'].iloc[buy_idx:i].min()
                     if current_price < recent_low * 0.99:  # 직전 저점 1% 하회
-                        stop_loss_signal.iloc[i] = True
+                        stop_loss_signal.iat[i] = True
                         positions_to_remove.append(buy_idx)
                         continue
                 
                 # 3. -3% 손실 손절
                 if current_price < buy_price * 0.97:
-                    stop_loss_signal.iloc[i] = True
+                    stop_loss_signal.iat[i] = True
                     positions_to_remove.append(buy_idx)
                     continue
             
