@@ -176,7 +176,8 @@ class MultiBollingerBands:
         
         # 거래량 볼린저밴드 (선택사항)
         if volume_data is not None:
-            vol_center, vol_upper, vol_lower = VolumeBollingerBands.calculate_bollinger_bands(volume_data)
+            vol_center, vol_upper, vol_lower = VolumeBollingerBands.calculate_volume_bollinger_bands(
+                volume_data, 20, 2.0, 3)
             signals['vol_center'] = vol_center
             signals['vol_upper'] = vol_upper
             signals['vol_lower'] = vol_lower

@@ -186,8 +186,9 @@ class IntradayStockManager:
             
             # 선정 시점 이전 데이터만 필터링 (추가 안전장치)
             if 'datetime' in historical_data.columns:
-                # 선정 시간 이전 데이터만 선택
-                filtered_data = historical_data[historical_data['datetime'] <= selected_time].copy()
+                # 선정 시간을 timezone-naive로 변환하여 pandas datetime64[ns]와 비교
+                selected_time_naive = selected_time.replace(tzinfo=None)
+                filtered_data = historical_data[historical_data['datetime'] <= selected_time_naive].copy()
             elif 'time' in historical_data.columns:
                 # time 컬럼을 이용한 필터링
                 selected_time_str = selected_time.strftime("%H%M%S")
@@ -291,7 +292,9 @@ class IntradayStockManager:
             
             # 선정 시점 이전 데이터만 필터링
             if 'datetime' in chart_df.columns:
-                historical_data = chart_df[chart_df['datetime'] <= selected_time].copy()
+                # 선정 시간을 timezone-naive로 변환하여 pandas datetime64[ns]와 비교
+                selected_time_naive = selected_time.replace(tzinfo=None)
+                historical_data = chart_df[chart_df['datetime'] <= selected_time_naive].copy()
             else:
                 historical_data = chart_df.copy()
             
@@ -390,7 +393,9 @@ class IntradayStockManager:
             
             # 선정 시점 이후 데이터만 추출 (실시간 데이터)
             if 'datetime' in chart_df.columns:
-                realtime_data = chart_df[chart_df['datetime'] > selected_time].copy()
+                # 선정 시간을 timezone-naive로 변환하여 pandas datetime64[ns]와 비교
+                selected_time_naive = selected_time.replace(tzinfo=None)
+                realtime_data = chart_df[chart_df['datetime'] > selected_time_naive].copy()
             else:
                 # datetime 컬럼이 없으면 시간 비교로 대체
                 realtime_data = chart_df.copy()

@@ -17,7 +17,7 @@ class VolumeBollingerBands:
     """
     
     @staticmethod
-    def calculate_volume_ma(volume_data: pd.Series, ma_period: int = 3) -> pd.Series:
+    def calculate_volume_moving_average(volume_data: pd.Series, ma_period: int = 3) -> pd.Series:
         """
         거래량의 단순이동평균 계산 (Static Method)
         
@@ -31,8 +31,8 @@ class VolumeBollingerBands:
         return volume_data.rolling(window=ma_period, min_periods=1).mean()
     
     @staticmethod
-    def calculate_bollinger_bands(volume_data: pd.Series, period: int = 20, 
-                                multiplier: float = 2.0, ma_period: int = 3) -> Tuple[pd.Series, pd.Series, pd.Series]:
+    def calculate_volume_bollinger_bands(volume_data: pd.Series, period: int = 20, 
+                                        multiplier: float = 2.0, ma_period: int = 3) -> Tuple[pd.Series, pd.Series, pd.Series]:
         """
         거래량 볼린저밴드 계산 (Static Method)
         
@@ -46,7 +46,7 @@ class VolumeBollingerBands:
         - Tuple[중심선, 상한선, 하한선] (각각 pandas Series)
         """
         # 1단계: 거래량 이동평균 계산
-        volume_ma = VolumeBollingerBands.calculate_volume_ma(volume_data, ma_period)
+        volume_ma = VolumeBollingerBands.calculate_volume_moving_average(volume_data, ma_period)
         
         # 2단계: 거래량 이동평균의 이동평균(중심선) 계산
         center_line = volume_ma.rolling(window=period, min_periods=1).mean()
@@ -131,8 +131,8 @@ class VolumeBollingerBands:
         return concentration_ratio < threshold
     
     @staticmethod
-    def get_signals(volume_data: pd.Series, period: int = 20, multiplier: float = 2.0, 
-                   ma_period: int = 3) -> pd.DataFrame:
+    def get_volume_signals(volume_data: pd.Series, period: int = 20, multiplier: float = 2.0, 
+                          ma_period: int = 3) -> pd.DataFrame:
         """
         거래량 볼린저밴드 신호 생성 (Static Method)
         
@@ -145,12 +145,12 @@ class VolumeBollingerBands:
         Returns:
         - 신호 데이터프레임
         """
-        center_line, upper_band, lower_band = VolumeBollingerBands.calculate_bollinger_bands(
+        center_line, upper_band, lower_band = VolumeBollingerBands.calculate_volume_bollinger_bands(
             volume_data, period, multiplier, ma_period)
         
         signals = pd.DataFrame(index=volume_data.index)
         signals['volume'] = volume_data
-        signals['volume_ma'] = VolumeBollingerBands.calculate_volume_ma(volume_data, ma_period)
+        signals['volume_ma'] = VolumeBollingerBands.calculate_volume_moving_average(volume_data, ma_period)
         signals['center_line'] = center_line
         signals['upper_band'] = upper_band
         signals['lower_band'] = lower_band
@@ -181,7 +181,7 @@ class VolumeBollingerBands:
         - figsize: 차트 크기
         - save_path: 저장 경로 (선택사항)
         """
-        center_line, upper_band, lower_band = VolumeBollingerBands.calculate_bollinger_bands(
+        center_line, upper_band, lower_band = VolumeBollingerBands.calculate_volume_bollinger_bands(
             volume_data, period, multiplier, ma_period)
         
         # 서브플롯 설정
@@ -249,12 +249,12 @@ class VolumeBollingerBands:
     
     def calculate_volume_ma(self, volume_data: pd.Series) -> pd.Series:
         """인스턴스 메서드 (Static Method 호출)"""
-        return VolumeBollingerBands.calculate_volume_ma(volume_data, self.ma_period)
+        return VolumeBollingerBands.calculate_volume_moving_average(volume_data, self.ma_period)
     
     def calculate_bollinger_bands(self, volume_data: pd.Series) -> Tuple[pd.Series, pd.Series, pd.Series]:
         """인스턴스 메서드 (Static Method 호출)"""
-        return VolumeBollingerBands.calculate_bollinger_bands(volume_data, self.period, self.multiplier, self.ma_period)
+        return VolumeBollingerBands.calculate_volume_bollinger_bands(volume_data, self.period, self.multiplier, self.ma_period)
     
     def get_signals(self, volume_data: pd.Series) -> pd.DataFrame:
         """인스턴스 메서드 (Static Method 호출)"""
-        return VolumeBollingerBands.get_signals(volume_data, self.period, self.multiplier, self.ma_period)
+        return VolumeBollingerBands.get_volume_signals(volume_data, self.period, self.multiplier, self.ma_period)

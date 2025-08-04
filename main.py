@@ -23,7 +23,7 @@ from db.database_manager import DatabaseManager
 from api.kis_api_manager import KISAPIManager
 from config.settings import load_trading_config
 from utils.logger import setup_logger
-from utils.korean_time import now_kst, get_market_status, is_market_open
+from utils.korean_time import now_kst, get_market_status, is_market_open, KST
 from post_market_chart_generator import PostMarketChartGenerator
 
 
@@ -182,7 +182,7 @@ class DayTradingBot:
 
             self.logger.info("🤖 매매 의사결정 태스크 시작")
             
-            last_condition_check = datetime(2000, 1, 1)  # 초기값
+            last_condition_check = datetime(2000, 1, 1, tzinfo=KST)  # 초기값
             
             while self.is_running:
                 if not is_market_open():
@@ -192,7 +192,7 @@ class DayTradingBot:
                 current_time = now_kst()
 
                 # 🆕 장중 조건검색 체크
-                if (current_time - last_condition_check).total_seconds() >= 5 * 60:  # 5분
+                if (current_time - last_condition_check).total_seconds() >= 1 * 60:  # 1분
                     await self._check_condition_search()
                     last_condition_check = current_time
                 
