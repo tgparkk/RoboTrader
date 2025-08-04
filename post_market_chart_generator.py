@@ -55,10 +55,10 @@ class TradingStrategyConfig:
             description="가격박스 지지/저항선과 이등분선을 활용한 매매"
         ),
         "strategy2": TradingStrategy(
-            name="볼린저밴드+이등분선", 
-            timeframe="3min",
-            indicators=["bollinger_bands", "bisector_line"],
-            description="볼린저밴드와 이등분선을 활용한 매매"
+            name="다중볼린저밴드+이등분선", 
+            timeframe="1min",
+            indicators=["multi_bollinger_bands", "bisector_line"],
+            description="다중 볼린저밴드와 이등분선을 활용한 매매"
         ),
         "strategy3": TradingStrategy(
             name="다중볼린저밴드",
@@ -318,58 +318,94 @@ class PostMarketChartGenerator:
     
     async def get_historical_chart_data(self, stock_code: str, target_date: str) -> Optional[pd.DataFrame]:
         """
-        특정 날짜의 분봉 데이터 조회 (비동기)
+        특정 날짜의 전체 분봉 데이터 조회 (분할 조회로 전체 거래시간 커버)
         
         Args:
             stock_code: 종목코드
             target_date: 조회 날짜 (YYYYMMDD)
             
         Returns:
-            pd.DataFrame: 분봉 데이터
+            pd.DataFrame: 전체 거래시간 분봉 데이터 (09:00~15:30)
         """
         try:
-            self.logger.info(f"{stock_code} {target_date} 분봉 데이터 조회 시작")
+            self.logger.info(f"{stock_code} {target_date} 전체 분봉 데이터 조회 시작")
             
-            # 동기 API 호출을 비동기로 래핑
-            result = await asyncio.to_thread(
-                get_inquire_time_dailychartprice,
-                stock_code=stock_code,
-                input_date=target_date,
-                input_hour="153000",  # 15:30 장마감
-                past_data_yn="Y"
-            )
+            # 분할 조회로 전체 거래시간 데이터 수집
+            all_data = []
             
-            if result is None:
-                self.logger.error(f"{stock_code} {target_date} 분봉 데이터 조회 실패")
+            # 15:30부터 거슬러 올라가면서 조회 (API는 최신 데이터부터 제공)
+            # 1회 호출당 최대 120분 데이터 → 4번 호출로 전체 커버 (390분)
+            time_points = ["153000", "133000", "113000", "093000"]  # 15:30, 13:30, 11:30, 09:30
+            
+            for i, end_time in enumerate(time_points):
+                try:
+                    self.logger.info(f"{stock_code} 분봉 데이터 조회 {i+1}/4: {end_time[:2]}:{end_time[2:4]}까지")
+                    result = await asyncio.to_thread(
+                        get_inquire_time_dailychartprice,
+                        stock_code=stock_code,
+                        input_date=target_date,
+                        input_hour=end_time,
+                        past_data_yn="Y"
+                    )
+                    
+                    if result is None:
+                        self.logger.warning(f"{stock_code} {end_time} 시점 분봉 데이터 조회 실패")
+                        continue
+                    
+                    summary_df, chart_df = result
+                    
+                    if chart_df.empty:
+                        self.logger.warning(f"{stock_code} {end_time} 시점 분봉 데이터 없음")
+                        continue
+                    
+                    # 데이터 검증
+                    required_columns = ['open', 'high', 'low', 'close', 'volume']
+                    missing_columns = [col for col in required_columns if col not in chart_df.columns]
+                    
+                    if missing_columns:
+                        self.logger.warning(f"{stock_code} {end_time} 필수 컬럼 누락: {missing_columns}")
+                        continue
+                    
+                    # 숫자 데이터 타입 변환
+                    for col in required_columns:
+                        chart_df[col] = pd.to_numeric(chart_df[col], errors='coerce')
+                    
+                    # 유효하지 않은 데이터 제거
+                    chart_df = chart_df.dropna(subset=required_columns)
+                    
+                    if not chart_df.empty:
+                        all_data.append(chart_df)
+                        self.logger.info(f"{stock_code} {end_time} 시점 데이터 수집 완료: {len(chart_df)}건")
+                    
+                    # API 호출 간격 조절
+                    await asyncio.sleep(0.1)
+                    
+                except Exception as e:
+                    self.logger.error(f"{stock_code} {end_time} 시점 분봉 데이터 조회 중 오류: {e}")
+                    continue
+            
+            # 수집된 모든 데이터 결합
+            if not all_data:
+                self.logger.error(f"{stock_code} {target_date} 모든 시간대 분봉 데이터 조회 실패")
                 return None
             
-            summary_df, chart_df = result
+            # 데이터프레임 결합 및 정렬
+            combined_df = pd.concat(all_data, ignore_index=True)
             
-            if chart_df.empty:
-                self.logger.warning(f"{stock_code} {target_date} 분봉 데이터 없음")
-                return None
+            # 시간순 정렬 (오름차순)
+            if 'datetime' in combined_df.columns:
+                combined_df = combined_df.sort_values('datetime').reset_index(drop=True)
+            elif 'time' in combined_df.columns:
+                combined_df = combined_df.sort_values('time').reset_index(drop=True)
             
-            # 데이터 검증
-            required_columns = ['open', 'high', 'low', 'close', 'volume']
-            missing_columns = [col for col in required_columns if col not in chart_df.columns]
+            # 중복 데이터 제거
+            if 'datetime' in combined_df.columns:
+                combined_df = combined_df.drop_duplicates(subset=['datetime'], keep='first')
+            elif 'time' in combined_df.columns:
+                combined_df = combined_df.drop_duplicates(subset=['time'], keep='first')
             
-            if missing_columns:
-                self.logger.error(f"필수 컬럼 누락: {missing_columns}")
-                return None
-            
-            # 숫자 데이터 타입 확인
-            for col in required_columns:
-                chart_df[col] = pd.to_numeric(chart_df[col], errors='coerce')
-            
-            # 유효하지 않은 데이터 제거
-            chart_df = chart_df.dropna(subset=required_columns)
-            
-            if chart_df.empty:
-                self.logger.warning(f"{stock_code} {target_date} 유효한 분봉 데이터 없음")
-                return None
-            
-            self.logger.info(f"{stock_code} {target_date} 분봉 데이터 조회 성공: {len(chart_df)}건")
-            return chart_df
+            self.logger.info(f"{stock_code} {target_date} 전체 분봉 데이터 조합 완료: {len(combined_df)}건")
+            return combined_df
             
         except Exception as e:
             self.logger.error(f"{stock_code} {target_date} 분봉 데이터 조회 오류: {e}")
@@ -438,6 +474,9 @@ class PostMarketChartGenerator:
             # 전략별 지표 표시
             self._draw_strategy_indicators(ax1, data, strategy, indicators_data)
             
+            # 매수 신호 표시 (빨간색 화살표)
+            self._draw_buy_signals(ax1, data, strategy)
+            
             # 거래량 차트
             self._draw_volume_chart(ax2, data)
             
@@ -488,8 +527,8 @@ class PostMarketChartGenerator:
                 # 캔들 색상 결정
                 color = 'red' if close_price >= open_price else 'blue'
                 
-                # High-Low 선
-                ax.plot([x, x], [low_price, high_price], color='black', linewidth=1)
+                # High-Low 선 (캔들과 같은 색으로)
+                ax.plot([x, x], [low_price, high_price], color=color, linewidth=1)
                 
                 # 캔들 몸통
                 candle_height = abs(close_price - open_price)
@@ -497,11 +536,12 @@ class PostMarketChartGenerator:
                 
                 if candle_height > 0:
                     candle = Rectangle((x - 0.3, candle_bottom), 0.6, candle_height,
-                                     facecolor=color, edgecolor='black', alpha=0.8)
+                                     facecolor=color, edgecolor=color, alpha=0.8)
                     ax.add_patch(candle)
                 else:
+                    # 시가와 종가가 같은 경우 (십자선)
                     ax.plot([x - 0.3, x + 0.3], [close_price, close_price], 
-                           color='black', linewidth=2)
+                           color=color, linewidth=2)
                            
         except Exception as e:
             self.logger.error(f"캔들스틱 그리기 오류: {e}")
@@ -526,6 +566,71 @@ class PostMarketChartGenerator:
         except Exception as e:
             self.logger.error(f"지표 그리기 오류: {e}")
     
+    def _draw_buy_signals(self, ax, data: pd.DataFrame, strategy: TradingStrategy):
+        """매수 신호 표시 (빨간색 화살표)"""
+        try:
+            # 전략별 매수 신호 계산
+            buy_signals = self._calculate_buy_signals(data, strategy)
+            
+            if buy_signals is not None and buy_signals.any():
+                # 매수 신호가 있는 지점의 가격
+                buy_prices = data.loc[buy_signals, 'close']
+                buy_indices = data.index[buy_signals]
+                
+                # 빨간색 화살표로 표시
+                ax.scatter(buy_indices, buy_prices, 
+                          color='red', s=150, marker='^', 
+                          label='매수신호', zorder=10, edgecolors='darkred', linewidth=2)
+                
+                self.logger.info(f"매수 신호 {buy_signals.sum()}개 표시됨")
+            
+        except Exception as e:
+            self.logger.error(f"매수 신호 표시 오류: {e}")
+    
+    def _calculate_buy_signals(self, data: pd.DataFrame, strategy: TradingStrategy) -> pd.Series:
+        """전략별 매수 신호 계산"""
+        try:
+            buy_signals = pd.Series(False, index=data.index)
+            
+            # 전략별 매수 신호 계산
+            for indicator_name in strategy.indicators:
+                if indicator_name == "price_box":
+                    # 가격박스 매수 신호
+                    price_signals = PriceBox.generate_trading_signals(data['close'])
+                    if 'buy_signal' in price_signals.columns:
+                        buy_signals |= price_signals['buy_signal']
+                
+                elif indicator_name == "bollinger_bands":
+                    # 볼린저밴드 매수 신호
+                    bb_signals = BollingerBands.generate_trading_signals(data['close'])
+                    if 'buy_signal' in bb_signals.columns:
+                        buy_signals |= bb_signals['buy_signal']
+                
+                elif indicator_name == "multi_bollinger_bands":
+                    # 다중 볼린저밴드 매수 신호
+                    if 'volume' in data.columns:
+                        multi_bb_signals = MultiBollingerBands.generate_trading_signals(
+                            data['close'], data['volume'])
+                    else:
+                        multi_bb_signals = MultiBollingerBands.generate_trading_signals(data['close'])
+                    
+                    if 'buy_signal' in multi_bb_signals.columns:
+                        buy_signals |= multi_bb_signals['buy_signal']
+                
+                elif indicator_name == "bisector_line":
+                    # 이등분선 기반 매수 신호 (OHLC 데이터 필요)
+                    if all(col in data.columns for col in ['open', 'high', 'low', 'close']):
+                        bisector_signals = BisectorLine.generate_trading_signals(data)
+                        # 이등분선의 경우 tradable_zone을 매수 신호로 사용
+                        if 'tradable_zone' in bisector_signals.columns:
+                            buy_signals |= bisector_signals['tradable_zone']
+            
+            return buy_signals
+            
+        except Exception as e:
+            self.logger.error(f"매수 신호 계산 오류: {e}")
+            return pd.Series(False, index=data.index)
+    
     def _draw_price_box(self, ax, box_data):
         """가격박스 그리기"""
         try:
@@ -547,8 +652,8 @@ class PostMarketChartGenerator:
         """이등분선 그리기"""
         try:
             if 'line_values' in bisector_data:
-                ax.plot(bisector_data['line_values'], color='green', linestyle='-', 
-                       alpha=0.8, label='이등분선')
+                ax.plot(bisector_data['line_values'], color='blue', linestyle='-', 
+                       alpha=0.8, label='이등분선', linewidth=2)
         except Exception as e:
             self.logger.error(f"이등분선 그리기 오류: {e}")
     
