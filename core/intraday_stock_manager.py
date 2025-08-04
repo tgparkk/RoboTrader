@@ -102,7 +102,7 @@ class IntradayStockManager:
                 # 장 시간 체크
                 if not is_market_open():
                     self.logger.warning(f"⚠️ 장 시간이 아님. {stock_code} 추가 보류")
-                    return False
+                    #return False
                 
                 # 종목 데이터 객체 생성
                 stock_data = StockMinuteData(

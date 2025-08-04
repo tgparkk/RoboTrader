@@ -8,6 +8,7 @@ from typing import Optional, Dict, Any
 from telegram import Bot, Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram.error import TelegramError
+from telegram.request import HTTPXRequest
 
 from utils.logger import setup_logger
 
@@ -20,7 +21,15 @@ class TelegramNotifier:
         self.chat_id = chat_id
         self.logger = setup_logger(__name__)
         
-        self.bot = Bot(token=bot_token)
+        # 연결 풀 설정으로 타임아웃 문제 해결
+        request = HTTPXRequest(
+            connection_pool_size=8,
+            connect_timeout=30.0,
+            read_timeout=30.0,
+            write_timeout=30.0,
+            pool_timeout=30.0
+        )
+        self.bot = Bot(token=bot_token, request=request)
         self.application = None
         self.is_initialized = False
         self.is_polling = False
@@ -48,15 +57,27 @@ class TelegramNotifier:
             me = await self.bot.get_me()
             self.logger.info(f"봇 연결 성공: @{me.username}")
             
-            # 기존 웹훅 제거 (다중 인스턴스 충돌 방지)
+            # 기존 웹훅 제거 (다중 인스턴스 충돌 방지) - 타임아웃 추가
             try:
-                await self.bot.delete_webhook(drop_pending_updates=True)
+                await asyncio.wait_for(
+                    self.bot.delete_webhook(drop_pending_updates=True),
+                    timeout=10.0  # 10초 타임아웃
+                )
                 self.logger.info("기존 웹훅 정리 완료")
+            except asyncio.TimeoutError:
+                self.logger.warning("웹훅 정리 타임아웃 (무시하고 계속)")
             except Exception as webhook_error:
                 self.logger.warning(f"웹훅 정리 중 오류 (무시 가능): {webhook_error}")
             
-            # Application 생성
-            self.application = Application.builder().token(self.bot_token).build()
+            # Application 생성 - 동일한 request 설정 사용
+            request = HTTPXRequest(
+                connection_pool_size=8,
+                connect_timeout=30.0,
+                read_timeout=30.0,
+                write_timeout=30.0,
+                pool_timeout=30.0
+            )
+            self.application = Application.builder().token(self.bot_token).request(request).build()
             
             # 명령어 핸들러 등록
             self._register_commands()
