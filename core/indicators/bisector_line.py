@@ -21,14 +21,27 @@ class BisectorLine:
         """
         이등분선 계산 (Static Method)
         
+        각 시점에서 그 시점까지의 누적 최고가와 최저가의 평균
+        - 10:00 이등분선 = (09:00~10:00까지 최고가 + 09:00~10:00까지 최저가) / 2
+        - 14:00 이등분선 = (09:00~14:00까지 최고가 + 09:00~14:00까지 최저가) / 2
+        
         Parameters:
         - high_data: 고가 데이터 (pandas Series)
         - low_data: 저가 데이터 (pandas Series)
         
         Returns:
-        - 이등분선 데이터 (pandas Series)
+        - 이등분선 데이터 (pandas Series) - 시간에 따라 변하는 누적 계산값
         """
-        return (high_data + low_data) / 2
+        # 각 시점까지의 누적 최고가 (expanding max)
+        cumulative_high = high_data.expanding().max()
+        
+        # 각 시점까지의 누적 최저가 (expanding min)
+        cumulative_low = low_data.expanding().min()
+        
+        # 각 시점의 이등분선 = (그 시점까지의 최고가 + 그 시점까지의 최저가) / 2
+        bisector_line = (cumulative_high + cumulative_low) / 2
+        
+        return bisector_line
     
     @staticmethod
     def analyze_price_position(close_price: pd.Series, bisector_line: pd.Series, 

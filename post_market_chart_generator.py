@@ -4,11 +4,14 @@
 import asyncio
 import pandas as pd
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')  # GUI가 없는 백엔드 설정 (비동기 환경에서 안전)
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from matplotlib.patches import Rectangle
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Tuple, Any
+from dataclasses import dataclass, field
 import sys
 from pathlib import Path
 import warnings
@@ -26,6 +29,65 @@ from core.candidate_selector import CandidateSelector
 from core.intraday_stock_manager import IntradayStockManager
 from utils.logger import setup_logger
 from utils.korean_time import now_kst
+from core.indicators.price_box import PriceBox
+from core.indicators.bisector_line import BisectorLine
+from core.indicators.bollinger_bands import BollingerBands
+from core.indicators.multi_bollinger_bands import MultiBollingerBands
+
+
+@dataclass
+class TradingStrategy:
+    """거래 전략 설정"""
+    name: str
+    timeframe: str  # "1min" or "3min"
+    indicators: List[str]
+    description: str
+
+
+class TradingStrategyConfig:
+    """거래 전략 설정 관리"""
+    
+    STRATEGIES = {
+        "strategy1": TradingStrategy(
+            name="가격박스+이등분선",
+            timeframe="1min",
+            indicators=["price_box", "bisector_line"],
+            description="가격박스 지지/저항선과 이등분선을 활용한 매매"
+        ),
+        "strategy2": TradingStrategy(
+            name="볼린저밴드+이등분선", 
+            timeframe="3min",
+            indicators=["bollinger_bands", "bisector_line"],
+            description="볼린저밴드와 이등분선을 활용한 매매"
+        ),
+        "strategy3": TradingStrategy(
+            name="다중볼린저밴드",
+            timeframe="1min", 
+            indicators=["multi_bollinger_bands"],
+            description="여러 기간의 볼린저밴드를 활용한 매매"
+        )
+    }
+    
+    @classmethod
+    def get_strategy(cls, strategy_name: str) -> Optional[TradingStrategy]:
+        """전략 정보 조회"""
+        return cls.STRATEGIES.get(strategy_name)
+    
+    @classmethod
+    def get_all_strategies(cls) -> Dict[str, TradingStrategy]:
+        """모든 전략 정보 조회"""
+        return cls.STRATEGIES
+
+
+@dataclass  
+class ChartData:
+    """차트 데이터와 전략 정보"""
+    stock_code: str
+    stock_name: str
+    timeframe: str
+    strategy: TradingStrategy
+    price_data: pd.DataFrame
+    indicators_data: Dict[str, Any] = field(default_factory=dict)
 
 
 class PostMarketChartGenerator:
@@ -48,6 +110,12 @@ class PostMarketChartGenerator:
         # 차트 설정
         plt.rcParams['font.family'] = ['Malgun Gothic', 'DejaVu Sans']
         plt.rcParams['axes.unicode_minus'] = False
+        
+        # 지표 인스턴스 초기화
+        self.price_box_indicator = PriceBox()
+        self.bisector_indicator = BisectorLine()
+        self.bollinger_indicator = BollingerBands()
+        self.multi_bollinger_indicator = MultiBollingerBands()
         
         self.logger.info("장 마감 후 차트 생성기 초기화 완료")
     
@@ -105,9 +173,152 @@ class PostMarketChartGenerator:
             self.logger.error(f"조건검색 종목 조회 오류: {e}")
             return []
     
-    def get_historical_chart_data(self, stock_code: str, target_date: str) -> Optional[pd.DataFrame]:
+    def calculate_indicators(self, data: pd.DataFrame, strategy: TradingStrategy) -> Dict[str, Any]:
         """
-        특정 날짜의 분봉 데이터 조회
+        전략에 따른 지표 계산
+        
+        Args:
+            data: 가격 데이터
+            strategy: 거래 전략
+            
+        Returns:
+            Dict: 계산된 지표 데이터
+        """
+        try:
+            indicators_data = {}
+            
+            if 'close' not in data.columns:
+                self.logger.warning("가격 데이터에 'close' 컬럼이 없음")
+                return {}
+            
+            for indicator_name in strategy.indicators:
+                if indicator_name == "price_box":
+                    # 가격박스 계산
+                    try:
+                        price_box_result = PriceBox.calculate_price_box(data['close'])
+                        if price_box_result and 'center_line' in price_box_result:
+                            indicators_data["price_box"] = {
+                                'center': price_box_result['center_line'],
+                                'resistance': price_box_result['upper_band'],
+                                'support': price_box_result['lower_band']
+                            }
+                    except Exception as e:
+                        self.logger.error(f"가격박스 계산 오류: {e}")
+                
+                elif indicator_name == "bisector_line":
+                    # 이등분선 계산
+                    try:
+                        if 'high' in data.columns and 'low' in data.columns:
+                            bisector_values = BisectorLine.calculate_bisector_line(data['high'], data['low'])
+                            if bisector_values is not None:
+                                indicators_data["bisector_line"] = {
+                                    'line_values': bisector_values
+                                }
+                    except Exception as e:
+                        self.logger.error(f"이등분선 계산 오류: {e}")
+                
+                elif indicator_name == "bollinger_bands":
+                    # 볼린저밴드 계산
+                    try:
+                        bb_result = BollingerBands.calculate_bollinger_bands(data['close'])
+                        if bb_result and 'upper_band' in bb_result:
+                            indicators_data["bollinger_bands"] = {
+                                'upper': bb_result['upper_band'],
+                                'middle': bb_result['sma'],
+                                'lower': bb_result['lower_band']
+                            }
+                    except Exception as e:
+                        self.logger.error(f"볼린저밴드 계산 오류: {e}")
+                
+                elif indicator_name == "multi_bollinger_bands":
+                    # 다중 볼린저밴드 계산
+                    try:
+                        multi_bb_data = {}
+                        periods = [20, 30, 40, 50]  # MultiBollingerBands.PERIODS
+                        
+                        for period in periods:
+                            bb_result = BollingerBands.calculate_bollinger_bands(data['close'], period=period)
+                            if bb_result and 'upper_band' in bb_result:
+                                multi_bb_data[f"{period}"] = {
+                                    'upper': bb_result['upper_band'],
+                                    'middle': bb_result['sma'],
+                                    'lower': bb_result['lower_band']
+                                }
+                        
+                        if multi_bb_data:
+                            indicators_data["multi_bollinger_bands"] = multi_bb_data
+                            
+                    except Exception as e:
+                        self.logger.error(f"다중 볼린저밴드 계산 오류: {e}")
+            
+            return indicators_data
+            
+        except Exception as e:
+            self.logger.error(f"지표 계산 오류: {e}")
+            return {}
+    
+    def get_timeframe_data(self, stock_code: str, target_date: str, timeframe: str) -> Optional[pd.DataFrame]:
+        """
+        지정된 시간프레임의 데이터 조회
+        
+        Args:
+            stock_code: 종목코드
+            target_date: 날짜
+            timeframe: 시간프레임 ("1min", "3min")
+            
+        Returns:
+            pd.DataFrame: 시간프레임 데이터
+        """
+        try:
+            # 1분봉 데이터를 기본으로 조회
+            base_data = asyncio.run(self.get_historical_chart_data(stock_code, target_date))
+            
+            if base_data is None or base_data.empty:
+                return None
+            
+            if timeframe == "1min":
+                return base_data
+            elif timeframe == "3min":
+                # 1분봉을 3분봉으로 변환
+                return self._resample_to_3min(base_data)
+            else:
+                self.logger.warning(f"지원하지 않는 시간프레임: {timeframe}")
+                return base_data
+                
+        except Exception as e:
+            self.logger.error(f"시간프레임 데이터 조회 오류: {e}")
+            return None
+    
+    def _resample_to_3min(self, data: pd.DataFrame) -> pd.DataFrame:
+        """1분봉을 3분봉으로 변환"""
+        try:
+            if 'datetime' not in data.columns:
+                return data
+            
+            # datetime을 인덱스로 설정
+            data = data.set_index('datetime')
+            
+            # 3분봉으로 리샘플링
+            resampled = data.resample('3T').agg({
+                'open': 'first',
+                'high': 'max', 
+                'low': 'min',
+                'close': 'last',
+                'volume': 'sum'
+            })
+            
+            # NaN 제거 후 인덱스 리셋
+            resampled = resampled.dropna().reset_index()
+            
+            return resampled
+            
+        except Exception as e:
+            self.logger.error(f"3분봉 변환 오류: {e}")
+            return data
+    
+    async def get_historical_chart_data(self, stock_code: str, target_date: str) -> Optional[pd.DataFrame]:
+        """
+        특정 날짜의 분봉 데이터 조회 (비동기)
         
         Args:
             stock_code: 종목코드
@@ -119,8 +330,9 @@ class PostMarketChartGenerator:
         try:
             self.logger.info(f"{stock_code} {target_date} 분봉 데이터 조회 시작")
             
-            # 일별분봉조회 API 사용 (해당 날짜의 장마감 시간까지)
-            result = get_inquire_time_dailychartprice(
+            # 동기 API 호출을 비동기로 래핑
+            result = await asyncio.to_thread(
+                get_inquire_time_dailychartprice,
                 stock_code=stock_code,
                 input_date=target_date,
                 input_hour="153000",  # 15:30 장마감
@@ -163,11 +375,407 @@ class PostMarketChartGenerator:
             self.logger.error(f"{stock_code} {target_date} 분봉 데이터 조회 오류: {e}")
             return None
     
-    def create_post_market_candlestick_chart(self, stock_code: str, stock_name: str, 
+    def _create_chart_sync(self, stock_code: str, stock_name: str, 
+                          chart_df: pd.DataFrame, target_date: str,
+                          selection_reason: str = "") -> Optional[str]:
+        """동기 차트 생성 함수 (전략 기반)"""
+        try:
+            if chart_df.empty:
+                self.logger.error("차트 데이터가 비어있음")
+                return None
+            
+            self.logger.info(f"{stock_code} {target_date} 전략 기반 차트 생성 시작")
+            
+            # 모든 전략에 대해 차트 생성 (3개 전략)
+            strategies = TradingStrategyConfig.get_all_strategies()
+            
+            for strategy_key, strategy in strategies.items():
+                try:
+                    # 전략별 시간프레임 데이터 조회
+                    timeframe_data = self.get_timeframe_data(stock_code, target_date, strategy.timeframe)
+                    
+                    if timeframe_data is None or timeframe_data.empty:
+                        self.logger.warning(f"{strategy.name} - 데이터 없음")
+                        continue
+                    
+                    # 전략별 지표 계산
+                    indicators_data = self.calculate_indicators(timeframe_data, strategy)
+                    
+                    # 차트 생성
+                    chart_path = self._create_strategy_chart(
+                        stock_code, stock_name, target_date, strategy, 
+                        timeframe_data, indicators_data, selection_reason
+                    )
+                    
+                    if chart_path:
+                        self.logger.info(f"✅ {strategy.name} 차트 생성: {chart_path}")
+                        return chart_path  # 첫 번째 성공한 차트 반환
+                    
+                except Exception as e:
+                    self.logger.error(f"{strategy.name} 차트 생성 오류: {e}")
+                    continue
+            
+            # 모든 전략이 실패한 경우 기본 차트 생성
+            return self._create_basic_chart(stock_code, stock_name, chart_df, target_date, selection_reason)
+            
+        except Exception as e:
+            self.logger.error(f"전략 기반 차트 생성 오류: {e}")
+            plt.close()
+            return None
+    
+    def _create_strategy_chart(self, stock_code: str, stock_name: str, target_date: str,
+                              strategy: TradingStrategy, data: pd.DataFrame, 
+                              indicators_data: Dict[str, Any], selection_reason: str) -> Optional[str]:
+        """전략별 차트 생성"""
+        try:
+            # 서브플롯 설정 (가격 + 거래량)
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 12), 
+                                         gridspec_kw={'height_ratios': [3, 1]})
+            
+            # 기본 캔들스틱 차트
+            self._draw_candlestick(ax1, data)
+            
+            # 전략별 지표 표시
+            self._draw_strategy_indicators(ax1, data, strategy, indicators_data)
+            
+            # 거래량 차트
+            self._draw_volume_chart(ax2, data)
+            
+            # 차트 제목 및 설정
+            title = f"{stock_code} {stock_name} - {strategy.name} ({strategy.timeframe})"
+            if selection_reason:
+                title += f"\n{selection_reason}"
+            
+            ax1.set_title(title, fontsize=14, fontweight='bold', pad=20)
+            ax1.set_ylabel('가격 (원)', fontsize=12)
+            ax1.grid(True, alpha=0.3)
+            ax1.legend(loc='upper left')
+            
+            ax2.set_ylabel('거래량', fontsize=12)
+            ax2.set_xlabel('시간', fontsize=12)
+            ax2.grid(True, alpha=0.3)
+            
+            # X축 시간 레이블 설정 (09:00 ~ 15:30)
+            self._set_time_axis_labels(ax1, ax2, data, strategy.timeframe)
+            
+            plt.tight_layout()
+            
+            # 파일 저장
+            timestamp = now_kst().strftime("%Y%m%d_%H%M%S")
+            filename = f"strategy_chart_{stock_code}_{strategy.timeframe}_{target_date}_{timestamp}.png"
+            filepath = Path(filename)
+            
+            plt.savefig(filepath, dpi=150, bbox_inches='tight')
+            plt.close()
+            
+            return str(filepath)
+            
+        except Exception as e:
+            self.logger.error(f"전략 차트 생성 실패: {e}")
+            plt.close()
+            return None
+    
+    def _draw_candlestick(self, ax, data: pd.DataFrame):
+        """캔들스틱 차트 그리기"""
+        try:
+            for idx, row in data.iterrows():
+                x = idx
+                open_price = row['open']
+                high_price = row['high']
+                low_price = row['low']
+                close_price = row['close']
+                
+                # 캔들 색상 결정
+                color = 'red' if close_price >= open_price else 'blue'
+                
+                # High-Low 선
+                ax.plot([x, x], [low_price, high_price], color='black', linewidth=1)
+                
+                # 캔들 몸통
+                candle_height = abs(close_price - open_price)
+                candle_bottom = min(open_price, close_price)
+                
+                if candle_height > 0:
+                    candle = Rectangle((x - 0.3, candle_bottom), 0.6, candle_height,
+                                     facecolor=color, edgecolor='black', alpha=0.8)
+                    ax.add_patch(candle)
+                else:
+                    ax.plot([x - 0.3, x + 0.3], [close_price, close_price], 
+                           color='black', linewidth=2)
+                           
+        except Exception as e:
+            self.logger.error(f"캔들스틱 그리기 오류: {e}")
+    
+    def _draw_strategy_indicators(self, ax, data: pd.DataFrame, strategy: TradingStrategy, 
+                                 indicators_data: Dict[str, Any]):
+        """전략별 지표 그리기"""
+        try:
+            for indicator_name in strategy.indicators:
+                if indicator_name in indicators_data:
+                    indicator_data = indicators_data[indicator_name]
+                    
+                    if indicator_name == "price_box":
+                        self._draw_price_box(ax, indicator_data)
+                    elif indicator_name == "bisector_line":
+                        self._draw_bisector_line(ax, indicator_data)
+                    elif indicator_name == "bollinger_bands":
+                        self._draw_bollinger_bands(ax, indicator_data)
+                    elif indicator_name == "multi_bollinger_bands":
+                        self._draw_multi_bollinger_bands(ax, indicator_data)
+                        
+        except Exception as e:
+            self.logger.error(f"지표 그리기 오류: {e}")
+    
+    def _draw_price_box(self, ax, box_data):
+        """가격박스 그리기"""
+        try:
+            if 'resistance' in box_data and 'support' in box_data:
+                # 가격박스는 시간에 따라 변하는 값이므로 plot() 사용
+                ax.plot(box_data['resistance'], color='red', linestyle='--', 
+                       alpha=0.7, label='저항선', linewidth=1.5)
+                ax.plot(box_data['support'], color='blue', linestyle='--', 
+                       alpha=0.7, label='지지선', linewidth=1.5)
+                
+                # 중심선도 있다면 추가
+                if 'center' in box_data and box_data['center'] is not None:
+                    ax.plot(box_data['center'], color='orange', linestyle='-', 
+                           alpha=0.6, label='중심선', linewidth=1)
+        except Exception as e:
+            self.logger.error(f"가격박스 그리기 오류: {e}")
+    
+    def _draw_bisector_line(self, ax, bisector_data):
+        """이등분선 그리기"""
+        try:
+            if 'line_values' in bisector_data:
+                ax.plot(bisector_data['line_values'], color='green', linestyle='-', 
+                       alpha=0.8, label='이등분선')
+        except Exception as e:
+            self.logger.error(f"이등분선 그리기 오류: {e}")
+    
+    def _draw_bollinger_bands(self, ax, bb_data):
+        """볼린저밴드 그리기"""
+        try:
+            if all(k in bb_data for k in ['upper', 'middle', 'lower']):
+                ax.plot(bb_data['upper'], color='red', linestyle='-', alpha=0.6, label='볼린저 상단')
+                ax.plot(bb_data['middle'], color='blue', linestyle='-', alpha=0.8, label='볼린저 중심')
+                ax.plot(bb_data['lower'], color='red', linestyle='-', alpha=0.6, label='볼린저 하단')
+        except Exception as e:
+            self.logger.error(f"볼린저밴드 그리기 오류: {e}")
+    
+    def _draw_multi_bollinger_bands(self, ax, multi_bb_data):
+        """다중 볼린저밴드 그리기"""
+        try:
+            colors = ['orange', 'purple', 'brown']
+            for i, (period, bb_data) in enumerate(multi_bb_data.items()):
+                if i < len(colors) and all(k in bb_data for k in ['upper', 'middle', 'lower']):
+                    color = colors[i]
+                    ax.plot(bb_data['upper'], color=color, linestyle='--', alpha=0.5, 
+                           label=f'BB{period} 상단')
+                    ax.plot(bb_data['lower'], color=color, linestyle='--', alpha=0.5, 
+                           label=f'BB{period} 하단')
+        except Exception as e:
+            self.logger.error(f"다중 볼린저밴드 그리기 오류: {e}")
+    
+    def _draw_volume_chart(self, ax, data: pd.DataFrame):
+        """거래량 차트 그리기"""
+        try:
+            for idx, row in data.iterrows():
+                x = idx
+                volume = row['volume']
+                close_price = row['close']
+                open_price = row['open']
+                
+                color = 'red' if close_price >= open_price else 'blue'
+                ax.bar(x, volume, color=color, alpha=0.6, width=0.6)
+                
+        except Exception as e:
+            self.logger.error(f"거래량 차트 그리기 오류: {e}")
+    
+    def _set_time_axis_labels(self, ax1, ax2, data: pd.DataFrame, timeframe: str):
+        """X축 시간 레이블 설정 (09:00 ~ 15:30)"""
+        try:
+            data_len = len(data)
+            if data_len == 0:
+                return
+            
+            # 전체 거래시간 데이터 검증
+            expected_len_1min = 390  # 09:00~15:30 = 6.5시간 * 60분
+            expected_len_3min = 130  # 390분 / 3분
+            
+            if timeframe == "1min" and data_len < expected_len_1min:
+                self.logger.warning(f"1분봉 데이터 부족: {data_len}/{expected_len_1min}")
+            elif timeframe == "3min" and data_len < expected_len_3min:
+                self.logger.warning(f"3분봉 데이터 부족: {data_len}/{expected_len_3min}")
+            
+            # 시간프레임에 따른 간격 설정
+            if timeframe == "1min":
+                # 1분봉: 390분 (09:00~15:30) -> 30분 간격으로 표시
+                interval_minutes = 30
+                total_trading_minutes = 390  # 6.5시간 * 60분
+            else:  # 3min
+                # 3분봉: 130개 캔들 -> 15개 간격으로 표시  
+                interval_minutes = 45  # 15 * 3분
+                total_trading_minutes = 390
+            
+            # 시간 레이블 생성
+            time_labels = []
+            x_positions = []
+            
+            # 09:00부터 15:30까지의 시간 레이블 생성
+            start_hour = 9
+            start_minute = 0
+            end_hour = 15
+            end_minute = 30
+            
+            # 현재 시간을 추적
+            current_hour = start_hour
+            current_minute = start_minute
+            
+            # 데이터 길이에 따른 시간 간격 계산
+            if timeframe == "1min":
+                # 1분봉: 데이터 인덱스가 곧 분단위
+                positions_interval = interval_minutes  # 30분 간격
+            else:  # 3min
+                # 3분봉: 3분마다 하나의 캔들
+                positions_interval = interval_minutes // 3  # 15개 캔들 간격
+            
+            # 전체 거래시간 기준으로 레이블 생성 (09:00 ~ 15:30)
+            current_minutes = start_hour * 60 + start_minute  # 09:00 = 540분
+            end_minutes = end_hour * 60 + end_minute  # 15:30 = 930분
+            
+            while current_minutes <= end_minutes:
+                hour = current_minutes // 60
+                minute = current_minutes % 60
+                
+                if timeframe == "1min":
+                    # 1분봉: 분단위 인덱스
+                    data_index = current_minutes - (start_hour * 60 + start_minute)
+                else:  # 3min
+                    # 3분봉: 3분 단위 인덱스
+                    data_index = (current_minutes - (start_hour * 60 + start_minute)) // 3
+                
+                # 전체 거래시간 레이블 표시 (데이터 유무와 관계없이)
+                time_label = f"{hour:02d}:{minute:02d}"
+                time_labels.append(time_label)
+                x_positions.append(data_index)
+                
+                # 다음 시간으로 이동
+                current_minutes += interval_minutes
+            
+            # X축 레이블 설정
+            if x_positions and time_labels:
+                ax1.set_xticks(x_positions)
+                ax1.set_xticklabels(time_labels, rotation=45, fontsize=10)
+                ax2.set_xticks(x_positions)
+                ax2.set_xticklabels(time_labels, rotation=45, fontsize=10)
+                
+                # X축 범위 설정 (전체 거래시간: 09:00~15:30)
+                if timeframe == "1min":
+                    # 1분봉: 390분 (6.5시간 * 60분)
+                    max_index = 389  # 0부터 389까지 = 390분
+                else:  # 3min
+                    # 3분봉: 130개 캔들 (390분 / 3분)
+                    max_index = 129  # 0부터 129까지 = 130개
+                
+                ax1.set_xlim(-0.5, max_index + 0.5)
+                ax2.set_xlim(-0.5, max_index + 0.5)
+            
+        except Exception as e:
+            self.logger.error(f"시간 축 레이블 설정 오류: {e}")
+    
+    def _set_basic_time_axis_labels(self, ax, data: pd.DataFrame):
+        """기본 차트용 X축 시간 레이블 설정 (09:00 ~ 15:30)"""
+        try:
+            data_len = len(data)
+            if data_len == 0:
+                return
+            
+            # 전체 거래시간 데이터 검증 (기본 차트는 1분봉)
+            expected_len = 390  # 09:00~15:30 = 6.5시간 * 60분
+            if data_len < expected_len:
+                self.logger.warning(f"1분봉 데이터 부족: {data_len}/{expected_len}")
+            
+            # 1분봉 기준으로 설정 (기본 차트는 1분봉 사용)
+            interval_minutes = 30  # 30분 간격으로 표시
+            
+            # 시간 레이블 생성
+            time_labels = []
+            x_positions = []
+            
+            # 09:00부터 15:30까지의 시간 레이블 생성
+            start_hour = 9
+            start_minute = 0
+            end_hour = 15
+            end_minute = 30
+            
+            # 전체 거래시간 기준으로 레이블 생성 (09:00 ~ 15:30)
+            current_minutes = start_hour * 60 + start_minute  # 09:00 = 540분
+            end_minutes = end_hour * 60 + end_minute  # 15:30 = 930분
+            
+            while current_minutes <= end_minutes:
+                hour = current_minutes // 60
+                minute = current_minutes % 60
+                
+                # 1분봉: 분단위 인덱스
+                data_index = current_minutes - (start_hour * 60 + start_minute)
+                
+                # 전체 거래시간 레이블 표시 (데이터 유무와 관계없이)
+                time_label = f"{hour:02d}:{minute:02d}"
+                time_labels.append(time_label)
+                x_positions.append(data_index)
+                
+                # 다음 시간으로 이동 (30분 간격)
+                current_minutes += interval_minutes
+            
+            # X축 레이블 설정
+            if x_positions and time_labels:
+                ax.set_xticks(x_positions)
+                ax.set_xticklabels(time_labels, rotation=45, fontsize=10)
+                
+                # X축 범위 설정 (전체 거래시간: 09:00~15:30)
+                # 1분봉: 390분 (6.5시간 * 60분)
+                max_index = 389  # 0부터 389까지 = 390분
+                ax.set_xlim(-0.5, max_index + 0.5)
+                
+        except Exception as e:
+            self.logger.error(f"기본 차트 시간 축 레이블 설정 오류: {e}")
+    
+    def _create_basic_chart(self, stock_code: str, stock_name: str, 
+                           chart_df: pd.DataFrame, target_date: str,
+                           selection_reason: str = "") -> Optional[str]:
+        """기본 차트 생성 (폴백용)"""
+        try:
+            fig, ax = plt.subplots(1, 1, figsize=(12, 8))
+            
+            if 'close' in chart_df.columns:
+                ax.plot(chart_df['close'], label='가격', linewidth=2)
+                ax.set_title(f"{stock_code} {stock_name} - {target_date}")
+                ax.set_ylabel('가격 (원)')
+                ax.grid(True, alpha=0.3)
+                ax.legend()
+                
+                # 기본 차트도 시간축 설정
+                self._set_basic_time_axis_labels(ax, chart_df)
+            
+            timestamp = now_kst().strftime("%Y%m%d_%H%M%S")
+            filename = f"basic_chart_{stock_code}_{target_date}_{timestamp}.png"
+            filepath = Path(filename)
+            
+            plt.savefig(filepath, dpi=150, bbox_inches='tight')
+            plt.close()
+            
+            return str(filepath)
+            
+        except Exception as e:
+            self.logger.error(f"기본 차트 생성 오류: {e}")
+            plt.close()
+            return None
+    
+    async def create_post_market_candlestick_chart(self, stock_code: str, stock_name: str, 
                                            chart_df: pd.DataFrame, target_date: str,
                                            selection_reason: str = "") -> Optional[str]:
         """
-        장 마감 후 캔들스틱 차트 생성
+        장 마감 후 캔들스틱 차트 생성 (비동기 래퍼)
         
         Args:
             stock_code: 종목코드
@@ -180,133 +788,16 @@ class PostMarketChartGenerator:
             str: 저장된 파일 경로
         """
         try:
-            if chart_df.empty:
-                self.logger.error("차트 데이터가 비어있음")
-                return None
-            
-            self.logger.info(f"{stock_code} {target_date} 장 마감 후 캔들스틱 차트 생성 시작")
-            
-            # 그래프 설정
-            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 12), 
-                                         gridspec_kw={'height_ratios': [3, 1]})
-            
-            # 데이터 준비
-            data = chart_df.copy()
-            data['x_pos'] = range(len(data))
-            
-            # 캔들스틱 차트 그리기
-            for idx, row in data.iterrows():
-                x = row['x_pos']
-                open_price = row['open']
-                high_price = row['high']
-                low_price = row['low']
-                close_price = row['close']
-                volume = row['volume']
-                
-                # 캔들 색상 결정 (상승: 빨강, 하락: 파랑)
-                color = 'red' if close_price >= open_price else 'blue'
-                
-                # High-Low 선 그리기
-                ax1.plot([x, x], [low_price, high_price], color='black', linewidth=1)
-                
-                # 캔들 몸통 그리기
-                candle_height = abs(close_price - open_price)
-                candle_bottom = min(open_price, close_price)
-                
-                if candle_height > 0:
-                    # 실체가 있는 캔들
-                    candle = Rectangle((x - 0.3, candle_bottom), 0.6, candle_height,
-                                     facecolor=color, edgecolor='black', alpha=0.8)
-                    ax1.add_patch(candle)
-                else:
-                    # 도지 캔들
-                    ax1.plot([x - 0.3, x + 0.3], [close_price, close_price], 
-                           color='black', linewidth=2)
-                
-                # 거래량 바 차트
-                ax2.bar(x, volume, color=color, alpha=0.6, width=0.6)
-            
-            # 차트 제목 및 레이블 설정
-            chart_title = f"{stock_code} {stock_name} - {target_date} 장 마감 후 분봉 차트"
-            if selection_reason:
-                chart_title += f"\n{selection_reason}"
-            
-            ax1.set_title(chart_title, fontsize=16, fontweight='bold', pad=20)
-            ax1.set_ylabel('가격 (원)', fontsize=12)
-            ax1.grid(True, alpha=0.3)
-            
-            ax2.set_ylabel('거래량', fontsize=12)
-            ax2.set_xlabel('시간 (분)', fontsize=12)
-            ax2.grid(True, alpha=0.3)
-            
-            # X축 시간 레이블 설정
-            if len(data) > 0:
-                time_labels = []
-                x_positions = []
-                
-                # 장 시작부터 마감까지의 주요 시간대 표시
-                interval = max(1, len(data) // 12)  # 약 12개 레이블
-                for i in range(0, len(data), interval):
-                    x_positions.append(i)
-                    if 'time' in data.columns:
-                        time_str = str(data.iloc[i]['time']).zfill(6)
-                        time_label = f"{time_str[:2]}:{time_str[2:4]}"
-                    else:
-                        # 장 시작 시간을 09:00으로 가정하고 계산
-                        minutes_from_start = i
-                        start_hour = 9
-                        start_minute = 0
-                        total_minutes = start_hour * 60 + start_minute + minutes_from_start
-                        hour = total_minutes // 60
-                        minute = total_minutes % 60
-                        time_label = f"{hour:02d}:{minute:02d}"
-                    time_labels.append(time_label)
-                
-                ax1.set_xticks(x_positions)
-                ax1.set_xticklabels(time_labels, rotation=45)
-                ax2.set_xticks(x_positions)
-                ax2.set_xticklabels(time_labels, rotation=45)
-            
-            # 가격 및 거래량 통계 정보 추가
-            if len(data) > 0:
-                start_price = data.iloc[0]['open']
-                end_price = data.iloc[-1]['close']
-                high_price = data['high'].max()
-                low_price = data['low'].min()
-                total_volume = data['volume'].sum()
-                price_change = end_price - start_price
-                price_change_rate = (price_change / start_price * 100) if start_price > 0 else 0
-                
-                stats_text = (f"시가: {start_price:,.0f}원\n"
-                            f"종가: {end_price:,.0f}원\n"
-                            f"고가: {high_price:,.0f}원\n"
-                            f"저가: {low_price:,.0f}원\n"
-                            f"변화: {price_change:+,.0f}원 ({price_change_rate:+.2f}%)\n"
-                            f"거래량: {total_volume:,.0f}주\n"
-                            f"분봉수: {len(data)}개")
-                
-                ax1.text(0.02, 0.98, stats_text, transform=ax1.transAxes, 
-                        verticalalignment='top', bbox=dict(boxstyle='round', 
-                        facecolor='lightblue', alpha=0.8), fontsize=10)
-            
-            plt.tight_layout()
-            
-            # 파일 저장
-            timestamp = now_kst().strftime("%Y%m%d_%H%M%S")
-            filename = f"post_market_chart_{stock_code}_{target_date}_{timestamp}.png"
-            filepath = Path(filename)
-            
-            plt.savefig(filepath, dpi=150, bbox_inches='tight')
-            self.logger.info(f"장 마감 후 차트 저장 완료: {filepath}")
-            
-            plt.close()  # 메모리 절약을 위해 차트 닫기
-            return str(filepath)
-                
+            # 동기 차트 생성을 별도 스레드에서 실행
+            result = await asyncio.to_thread(
+                self._create_chart_sync, stock_code, stock_name, chart_df, target_date, selection_reason
+            )
+            return result
         except Exception as e:
             self.logger.error(f"장 마감 후 캔들스틱 차트 생성 오류: {e}")
             return None
     
-    def generate_charts_for_selected_stocks(self, target_date: str = "20250801") -> Dict[str, Any]:
+    async def generate_charts_for_selected_stocks(self, target_date: str = "20250801") -> Dict[str, Any]:
         """
         선정된 종목들의 차트 일괄 생성
         
@@ -345,13 +836,11 @@ class PostMarketChartGenerator:
                     continue
                 
                 try:
-                    self.logger.info(f"{stock_code}({stock_name}) 차트 생성 중...")
-                    
                     # 분봉 데이터 조회
-                    chart_df = self.get_historical_chart_data(stock_code, target_date)
+                    chart_df = await self.get_historical_chart_data(stock_code, target_date)
                     
                     if chart_df is None or chart_df.empty:
-                        self.logger.warning(f"{stock_code} 데이터 없음")
+                        self.logger.warning(f"⚠️ {stock_code} 데이터 없음")
                         results['stock_results'].append({
                             'stock_code': stock_code,
                             'stock_name': stock_name,
@@ -363,7 +852,7 @@ class PostMarketChartGenerator:
                     
                     # 차트 생성
                     selection_reason = f"조건검색 급등주 (등락률: {change_rate}%)"
-                    chart_file = self.create_post_market_candlestick_chart(
+                    chart_file = await self.create_post_market_candlestick_chart(
                         stock_code=stock_code,
                         stock_name=stock_name,
                         chart_df=chart_df,
@@ -382,7 +871,7 @@ class PostMarketChartGenerator:
                             'change_rate': change_rate
                         })
                         results['success_count'] += 1
-                        self.logger.info(f"{stock_code} 차트 생성 성공")
+                        self.logger.info(f"✅ {stock_code} 차트 생성 성공")
                     else:
                         results['stock_results'].append({
                             'stock_code': stock_code,
@@ -391,10 +880,10 @@ class PostMarketChartGenerator:
                             'error': '차트 생성 실패'
                         })
                         results['failed_count'] += 1
-                        self.logger.error(f"{stock_code} 차트 생성 실패")
+                        self.logger.error(f"❌ {stock_code} 차트 생성 실패")
                 
                 except Exception as e:
-                    self.logger.error(f"{stock_code} 처리 중 오류: {e}")
+                    self.logger.error(f"❌ {stock_code} 처리 중 오류: {e}")
                     results['stock_results'].append({
                         'stock_code': stock_code,
                         'stock_name': stock_name,
@@ -486,7 +975,7 @@ class PostMarketChartGenerator:
                     self.logger.info(f"📈 {stock_code}({stock_name}) 차트 생성 중...")
                     
                     # 분봉 데이터 조회
-                    chart_df = self.get_historical_chart_data(stock_code, target_date)
+                    chart_df = await self.get_historical_chart_data(stock_code, target_date)
                     
                     if chart_df is None or chart_df.empty:
                         self.logger.warning(f"⚠️ {stock_code} 데이터 없음")
@@ -499,7 +988,7 @@ class PostMarketChartGenerator:
                         continue
                     
                     # 차트 생성
-                    chart_file = self.create_post_market_candlestick_chart(
+                    chart_file = await self.create_post_market_candlestick_chart(
                         stock_code=stock_code,
                         stock_name=stock_name,
                         chart_df=chart_df,
@@ -527,61 +1016,24 @@ class PostMarketChartGenerator:
                         self.logger.error(f"❌ {stock_code} 차트 생성 실패")
                 
                 except Exception as e:
-                    self.logger.error(f"❌ {stock_code} 차트 생성 중 오류: {e}")
+                    self.logger.error(f"❌ {stock_code} 처리 중 오류: {e}")
                     stock_results.append({
                         'stock_code': stock_code,
                         'stock_name': stock_name,
                         'success': False,
                         'error': str(e)
                     })
-                    continue
             
-            # 결과 구성
-            results = {
-                'success': True,
-                'target_date': target_date,
-                'total_stocks': len(selected_stocks),
+            # 결과 반환
+            total_stocks = len(selected_stocks)
+            return {
+                'success': success_count > 0,
                 'success_count': success_count,
-                'failed_count': len(selected_stocks) - success_count,
+                'total_stocks': total_stocks,
                 'chart_files': chart_files,
                 'stock_results': stock_results,
-                'generation_time': current_time.strftime('%H:%M:%S')
+                'message': f"차트 생성 완료: {success_count}/{total_stocks}개 성공"
             }
-            
-            # 텔레그램 알림 전송 (제공된 경우)
-            if telegram_integration and success_count > 0:
-                try:
-                    summary_message = (f"🎨 장 마감 후 차트 생성 완료\n"
-                                     f"📊 생성된 차트: {success_count}/{len(selected_stocks)}개\n"
-                                     f"📅 날짜: {target_date}\n"
-                                     f"🕰️ 생성 시간: {current_time.strftime('%H:%M:%S')}")
-                    
-                    # 생성된 차트 파일 목록 추가
-                    if chart_files:
-                        summary_message += "\n\n📈 생성된 차트:"
-                        for i, file in enumerate(chart_files[:5], 1):  # 최대 5개만 표시
-                            filename = Path(file).name
-                            summary_message += f"\n  {i}. {filename}"
-                        
-                        if len(chart_files) > 5:
-                            summary_message += f"\n  ... 외 {len(chart_files) - 5}개"
-                    
-                    await telegram_integration.notify_system_status(summary_message)
-                except Exception as e:
-                    self.logger.error(f"텔레그램 알림 전송 실패: {e}")
-            elif telegram_integration and success_count == 0:
-                try:
-                    error_message = f"⚠️ 장 마감 후 차트 생성 실패\n선정 종목: {len(selected_stocks)}개"
-                    await telegram_integration.notify_system_status(error_message)
-                except Exception as e:
-                    self.logger.error(f"텔레그램 알림 전송 실패: {e}")
-            
-            if success_count > 0:
-                self.logger.info(f"🎯 장 마감 후 차트 생성 완료: {success_count}개 성공")
-            else:
-                self.logger.warning("⚠️ 장 마감 후 차트 생성 결과 없음")
-            
-            return results
             
         except Exception as e:
             self.logger.error(f"❌ 장 마감 후 차트 생성 오류: {e}")
@@ -589,46 +1041,14 @@ class PostMarketChartGenerator:
 
 
 def main():
-    """메인 실행 함수"""
+    """테스트용 메인 함수"""
     try:
-        print("장 마감 후 차트 생성기 테스트 시작")
-        
-        # 차트 생성기 객체 생성 및 초기화
+        print("장 마감 후 차트 생성기 테스트")
         generator = PostMarketChartGenerator()
-        
-        if not generator.initialize():
-            print("시스템 초기화 실패")
-            return
-        
-        # 2025년 8월 1일 데이터로 차트 생성
-        target_date = "20250801"
-        print(f"{target_date} 선정 종목 차트 생성 중...")
-        
-        results = generator.generate_charts_for_selected_stocks(target_date)
-        
-        if results.get('success', True):  # success 키가 없으면 성공으로 간주
-            print("차트 생성 완료!")
-            print(f"결과: {results.get('summary', 'N/A')}")
-            
-            if results.get('chart_files'):
-                print("생성된 차트 파일:")
-                for file in results['chart_files']:
-                    print(f"  - {file}")
-                    
-            # 성공한 종목들 요약
-            success_stocks = [
-                stock for stock in results.get('stock_results', []) 
-                if stock.get('success', False)
-            ]
-            
-            if success_stocks:
-                print("\n성공한 종목들:")
-                for stock in success_stocks:
-                    print(f"  - {stock['stock_code']}({stock['stock_name']}): "
-                          f"{stock['data_count']}분봉, 등락률 {stock['change_rate']}%")
+        if generator.initialize():
+            print("초기화 성공")
         else:
-            print(f"차트 생성 실패: {results.get('error', 'Unknown error')}")
-        
+            print("초기화 실패")
     except Exception as e:
         print(f"메인 실행 오류: {e}")
 

@@ -315,7 +315,8 @@ class DayTradingBot:
             last_api_refresh = now_kst()
             last_market_check = now_kst()
             last_intraday_update = now_kst()  # 🆕 장중 데이터 업데이트 시간
-            last_chart_generation = datetime(2000, 1, 1)  # 🆕 장 마감 후 차트 생성 시간
+            last_chart_generation = datetime(2000, 1, 1, tzinfo=KST)  # 🆕 장 마감 후 차트 생성 시간
+            chart_generation_count = 0  # 🆕 차트 생성 횟수 카운터
 
             self.logger.info("🔥 DEBUG: while 루프 진입 시도")  # 디버깅용
             while self.is_running:
@@ -333,15 +334,19 @@ class DayTradingBot:
                         await self._update_intraday_data()
                     last_intraday_update = current_time
                 
-                # 🆕 장 마감 후 차트 생성 (장 마감 후 항상 실행 가능)
-                if not is_market_open():  # 장 마감 시에만
-                    if (current_time - last_chart_generation).total_seconds() >= 1 * 60:  # 10분 간격으로 체크
-                        self.logger.info(f"🔥 DEBUG: 차트 생성 실행 시작")  # 디버깅용
+                # 🆕 장 마감 후 차트 생성 (장 마감 후 두 번만 실행)
+                if not is_market_open() and chart_generation_count < 2:  # 장 마감 시에만, 최대 2번
+                    if (current_time - last_chart_generation).total_seconds() >= 1 * 60:  # 1분 간격으로 체크
+                        self.logger.info(f"🔥 DEBUG: 차트 생성 실행 시작 ({chart_generation_count + 1}/2)")  # 디버깅용
                         await self._generate_post_market_charts()
-                        self.logger.info(f"🔥 DEBUG: 차트 생성 실행 완료")  # 디버깅용
+                        self.logger.info(f"🔥 DEBUG: 차트 생성 실행 완료 ({chart_generation_count + 1}/2)")  # 디버깅용
                         last_chart_generation = current_time
+                        chart_generation_count += 1
+                        
+                        if chart_generation_count >= 2:
+                            self.logger.info("✅ 장 마감 후 차트 생성 완료 (2회 실행 완료)")
                 
-                # 30분마다 시스템 상태 로그 # 1/2분 대기로 변경
+                # 30분마다 시스템 상태 로그 # 30초 대기로 변경
                 await asyncio.sleep(30)  
                 
                 # 30분마다 시스템 상태 로깅
