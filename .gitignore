@@ -1,5 +1,6 @@
 # 민감한 설정 파일
 config/key.ini
+token_info.json
 
 # Python
 __pycache__/

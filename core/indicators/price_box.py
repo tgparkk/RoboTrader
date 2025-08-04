@@ -167,37 +167,55 @@ class PriceBox:
         # 중심선 근처
         near_center = abs(prices - center_line) / center_line <= tolerance
         
-        # 하한선에서 반등 (지지 확인)
+        # 하한선 터치 (지지선 근처 도달)
+        lower_touch = prices <= lower_band * (1 + tolerance)
+        
+        # 하한선에서 지지 확인 (터치 후 반등)
+        support_confirmed = pd.Series(False, index=prices.index)
+        for i in range(2, len(prices)):
+            # 최근 3봉 중 하한선 터치가 있고, 현재 가격이 하한선보다 높으면 지지 확인
+            recent_touch = lower_touch.iloc[i-2:i+1].any()
+            current_above_support = prices.iloc[i] > lower_band.iloc[i] * (1 + tolerance)
+            if recent_touch and current_above_support:
+                support_confirmed.iloc[i] = True
+        
+        # 하한선에서 반등 (즉시 반등, 기존 로직 유지)
         support_bounce = (prices.shift(1) <= lower_band * (1 + tolerance)) & (prices > lower_band * (1 + tolerance))
         
         # 상한선에서 하락 (저항 확인)
         resistance_reject = (prices.shift(1) >= upper_band * (1 - tolerance)) & (prices < upper_band * (1 - tolerance))
         
-        # 중심선 돌파
+        # 중심선 돌파 (상향)
         center_breakout_up = (prices.shift(1) <= center_line) & (prices > center_line)
         center_breakout_down = (prices.shift(1) >= center_line) & (prices < center_line)
+        
+        # 중심선 이탈 (하향) - 손절 신호용
+        center_break_down = (prices.shift(1) >= center_line) & (prices < center_line)
         
         return {
             'near_lower': near_lower,
             'near_upper': near_upper,
             'near_center': near_center,
+            'lower_touch': lower_touch,
+            'support_confirmed': support_confirmed,
             'support_bounce': support_bounce,
             'resistance_reject': resistance_reject,
             'center_breakout_up': center_breakout_up,
-            'center_breakout_down': center_breakout_down
+            'center_breakout_down': center_breakout_down,
+            'center_break_down': center_break_down
         }
     
     @staticmethod
     def detect_first_box_touch(prices: pd.Series, lower_band: pd.Series, upper_band: pd.Series,
-                              lookback_period: int = 60) -> Dict[str, pd.Series]:
+                              lookback_period: int = 120) -> Dict[str, pd.Series]:
         """
-        첫 박스 터치 감지 (Static Method)
+        첫 박스 터치 감지 (Static Method) - 더 엄격한 조건
         
         Parameters:
         - prices: 가격 데이터
         - lower_band: 박스하한선
         - upper_band: 박스상한선
-        - lookback_period: 첫 터치 확인 기간
+        - lookback_period: 첫 터치 확인 기간 (2시간으로 증가)
         
         Returns:
         - 첫 박스 터치 신호들
@@ -206,20 +224,24 @@ class PriceBox:
         first_upper_touch = pd.Series(False, index=prices.index)
         
         for i in range(lookback_period, len(prices)):
-            # 과거 lookback_period 동안 하한선 터치 여부 확인
-            past_lower_touches = (prices.iloc[i-lookback_period:i] <= lower_band.iloc[i-lookback_period:i] * 1.005).any()
-            current_lower_touch = prices.iloc[i] <= lower_band.iloc[i] * 1.005
+            # 과거 lookback_period 동안 하한선 터치 여부 확인 (더 엄격한 조건)
+            past_lower_touches = (prices.iloc[i-lookback_period:i] <= lower_band.iloc[i-lookback_period:i] * 1.002).any()
+            current_lower_touch = prices.iloc[i] <= lower_band.iloc[i] * 1.002
             
-            # 과거에 터치 없고 현재 터치하면 첫 터치
+            # 과거에 터치 없고 현재 터치하면서 반등 조건도 만족해야 함
             if not past_lower_touches and current_lower_touch:
-                first_lower_touch.iloc[i] = True
+                # 추가 조건: 다음 몇 봉에서 실제 반등이 있는지 확인 (미래 정보 사용하지 않음)
+                # 대신 현재 봉에서 하한선 근처에서 마감되는지만 확인
+                if prices.iloc[i] > lower_band.iloc[i] * 0.998:  # 하한선 아래 0.2% 이내
+                    first_lower_touch.iloc[i] = True
             
-            # 상한선도 동일 로직
-            past_upper_touches = (prices.iloc[i-lookback_period:i] >= upper_band.iloc[i-lookback_period:i] * 0.995).any()
-            current_upper_touch = prices.iloc[i] >= upper_band.iloc[i] * 0.995
+            # 상한선도 동일 로직 (더 엄격한 조건)
+            past_upper_touches = (prices.iloc[i-lookback_period:i] >= upper_band.iloc[i-lookback_period:i] * 0.998).any()
+            current_upper_touch = prices.iloc[i] >= upper_band.iloc[i] * 0.998
             
             if not past_upper_touches and current_upper_touch:
-                first_upper_touch.iloc[i] = True
+                if prices.iloc[i] < upper_band.iloc[i] * 1.002:
+                    first_upper_touch.iloc[i] = True
         
         return {
             'first_lower_touch': first_lower_touch,
@@ -270,37 +292,53 @@ class PriceBox:
         signals['first_upper_touch'] = first_touch['first_upper_touch']
         
         # 매수 신호
-        # 1. 하한선에서 지지 확인 후 매수
-        signals['buy_support'] = signals['support_bounce']
-        
-        # 2. 지지 확인 후 중심선 돌파시 매수 (안전한 방법)
-        signals['buy_center_breakout'] = (
-            signals['support_bounce'].shift(1).fillna(False) & 
-            signals['center_breakout_up']
-        )
-        
-        # 3. 첫 하한선 터치 (가장 확률 높은 자리)
+        # 1. 첫 하한선 터치 (가장 확률 높은 자리) - 즉시 매수
         signals['buy_first_touch'] = signals['first_lower_touch']
+        
+        # 2. 하한선에서 즉시 반등 매수 (리스크 높음)
+        signals['buy_support_bounce'] = signals['support_bounce']
+        
+        # 3. 안전한 매수: 지지 확인 후 중심선 돌파 (권장)
+        # 지지가 확인된 상태에서 중심선을 돌파하는 경우
+        signals['buy_safe'] = pd.Series(False, index=signals.index)
+        for i in range(10, len(signals)):  # 최소 10봉 이후부터 확인
+            # 최근 10봉 내에 지지 확인이 있었고, 현재 중심선 돌파하는 경우
+            recent_support_confirmed = signals['support_confirmed'].iloc[i-10:i].any()
+            current_center_breakout = signals['center_breakout_up'].iloc[i]
+            
+            if recent_support_confirmed and current_center_breakout:
+                signals['buy_safe'].iloc[i] = True
         
         # 매도 신호
         # 상한선에서 매도
         signals['sell_resistance'] = signals['resistance_reject']
         
-        # 통합 매수/매도 신호
+        # 박스 폭 계산 (매수신호 필터링에 사용되므로 먼저 계산)
+        signals['box_width'] = signals['upper_band'] - signals['lower_band']
+        signals['box_width_pct'] = (signals['box_width'] / signals['center_line']) * 100
+        
+        # 통합 매수신호 (매우 엄격한 조건)
         signals['buy_signal'] = (
-            signals['buy_support'] | 
-            signals['buy_center_breakout'] | 
-            signals['buy_first_touch']
+            signals['buy_first_touch'] |           # 첫 터치 (가장 확률 높음)
+            signals['buy_safe']                    # 지지확인 후 중심선 돌파 (안전)
         )
+        
+        # 추가 필터링: 박스 폭이 너무 좁거나 넓으면 제외
+        box_width_filter = (signals['box_width_pct'] > 1.0) & (signals['box_width_pct'] < 8.0)
+        signals['buy_signal'] = signals['buy_signal'] & box_width_filter
         
         signals['sell_signal'] = signals['sell_resistance']
         
-        # 시간 기반 손절 로직 (10분 내외 반응 없으면 손절)
+        # 손절 로직 추가
+        # 1. 시간 기반 손절 (10분 내외 반응 없으면 손절)
         if hasattr(timestamps, 'to_pydatetime'):
             signals['time_based_stop_loss'] = PriceBox.calculate_time_based_stop_loss(
                 signals, stop_loss_minutes)
         else:
             signals['time_based_stop_loss'] = False
+            
+        # 2. 가격 기반 손절 로직
+        signals['stop_loss_signal'] = PriceBox.calculate_price_based_stop_loss(signals)
         
         # 박스 위치 분석
         signals['price_position'] = 'middle'
@@ -308,11 +346,65 @@ class PriceBox:
         signals.loc[signals['near_upper'], 'price_position'] = 'upper_zone'
         signals.loc[signals['near_center'], 'price_position'] = 'center_zone'
         
-        # 박스 폭 계산
-        signals['box_width'] = signals['upper_band'] - signals['lower_band']
-        signals['box_width_pct'] = (signals['box_width'] / signals['center_line']) * 100
-        
         return signals
+    
+    @staticmethod
+    def calculate_price_based_stop_loss(signals: pd.DataFrame) -> pd.Series:
+        """
+        가격 기반 손절 계산 (Static Method)
+        - 중심선 이탈 시 손절
+        - 직전 저점 이탈 시 손절  
+        - 매수가 대비 -3% 손실 시 손절
+        
+        Parameters:
+        - signals: 신호 데이터프레임
+        
+        Returns:
+        - 가격 기반 손절 신호
+        """
+        stop_loss_signal = pd.Series(False, index=signals.index)
+        buy_positions = {}  # 매수 포지션 추적 {매수시점: 매수가격}
+        
+        for i in range(len(signals)):
+            current_price = signals['price'].iloc[i]
+            
+            # 매수 신호 발생 시 포지션 추가
+            if signals['buy_signal'].iloc[i]:
+                buy_positions[i] = current_price
+            
+            # 기존 포지션에 대한 손절 체크
+            positions_to_remove = []
+            for buy_idx, buy_price in buy_positions.items():
+                # 1. 중심선 이탈 손절
+                center_line_value = signals['center_line'].iloc[i]
+                if current_price < center_line_value:
+                    stop_loss_signal.iloc[i] = True
+                    positions_to_remove.append(buy_idx)
+                    continue
+                    
+                # 2. 직전 저점 이탈 손절 (매수 이후 최저점 계산)
+                if i > buy_idx + 2:  # 최소 2봉 이후부터 체크
+                    recent_low = signals['price'].iloc[buy_idx:i].min()
+                    if current_price < recent_low * 0.99:  # 직전 저점 1% 하회
+                        stop_loss_signal.iloc[i] = True
+                        positions_to_remove.append(buy_idx)
+                        continue
+                
+                # 3. -3% 손실 손절
+                if current_price < buy_price * 0.97:
+                    stop_loss_signal.iloc[i] = True
+                    positions_to_remove.append(buy_idx)
+                    continue
+            
+            # 손절된 포지션 제거
+            for buy_idx in positions_to_remove:
+                del buy_positions[buy_idx]
+                
+            # 매도 신호 발생 시 모든 포지션 정리
+            if signals['sell_signal'].iloc[i]:
+                buy_positions.clear()
+        
+        return stop_loss_signal
     
     @staticmethod
     def calculate_time_based_stop_loss(signals: pd.DataFrame, 
@@ -400,12 +492,19 @@ class PriceBox:
             ax.scatter(signals.index[first_touch_points], signals['price'][first_touch_points],
                       color='gold', s=150, marker='*', label='첫 하한선터치', zorder=6)
         
-        # 시간 기반 손절
-        if 'time_based_stop_loss' in signals.columns:
-            stop_loss_points = signals['time_based_stop_loss']
+        # 손절 신호
+        if 'stop_loss_signal' in signals.columns:
+            stop_loss_points = signals['stop_loss_signal']
             if stop_loss_points.any():
                 ax.scatter(signals.index[stop_loss_points], signals['price'][stop_loss_points],
-                          color='orange', s=80, marker='x', label='시간손절', zorder=5)
+                          color='orange', s=80, marker='x', label='손절신호', zorder=5)
+        
+        # 시간 기반 손절 (추가 표시)
+        if 'time_based_stop_loss' in signals.columns:
+            time_stop_points = signals['time_based_stop_loss']
+            if time_stop_points.any():
+                ax.scatter(signals.index[time_stop_points], signals['price'][time_stop_points],
+                          color='purple', s=60, marker='s', label='시간손절', zorder=5)
         
         ax.set_title(f'{title}')
         ax.set_ylabel('가격')
