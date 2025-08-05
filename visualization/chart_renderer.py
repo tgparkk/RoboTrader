@@ -359,12 +359,23 @@ class ChartRenderer:
             if 'upper_convergence' in multi_bb_data:
                 convergence_data = self._align_data_length(multi_bb_data['upper_convergence'], data_len, data)
                 
-                # 밀집 구간 배경 표시
-                for i in range(len(convergence_data)):
-                    if convergence_data[i]:
-                        x_start = x_positions[i] - 0.4
-                        x_end = x_positions[i] + 0.4
-                        ax.axvspan(x_start, x_end, alpha=0.2, color='yellow')
+                # 밀집 구간 배경 표시 (안전한 인덱스 범위 체크)
+                max_len = min(len(convergence_data), len(x_positions))
+                for i in range(max_len):
+                    try:
+                        # 안전한 데이터 접근
+                        if hasattr(convergence_data, 'iloc'):
+                            convergence_value = convergence_data.iloc[i]
+                        else:
+                            convergence_value = convergence_data[i]
+                        
+                        if convergence_value and i < len(x_positions):
+                            x_start = x_positions[i] - 0.4
+                            x_end = x_positions[i] + 0.4
+                            ax.axvspan(x_start, x_end, alpha=0.2, color='yellow')
+                    except (IndexError, KeyError):
+                        # 인덱스 오류 시 무시
+                        continue
                         
         except Exception as e:
             self.logger.error(f"다중 볼린저밴드 그리기 오류: {e}")
@@ -526,8 +537,11 @@ class ChartRenderer:
                     return dt.hour, dt.minute
                 time_values = data['datetime']
             
-            # 시간 간격 설정 (30분 간격으로 표시)
-            interval_minutes = 30
+            # 시간 간격 설정 (timeframe에 따라)
+            if timeframe == "5min":
+                interval_minutes = 5  # 5분봉은 5분 간격으로 표시
+            else:
+                interval_minutes = 30  # 1분봉, 3분봉은 30분 간격으로 표시
             
             # 시간 레이블과 위치 생성
             time_labels = []
@@ -545,7 +559,10 @@ class ChartRenderer:
             
             if timeframe == "1min":
                 total_candles = total_trading_minutes  # 390개 캔들
-                step = interval_minutes  # 30분 간격
+                step = interval_minutes  # 30분 간격 (또는 5분)
+            elif timeframe == "5min":
+                total_candles = total_trading_minutes // 5  # 78개 캔들 (390분 / 5분)
+                step = interval_minutes  # 5분 간격
             else:  # 3min
                 total_candles = total_trading_minutes // 3  # 130개 캔들
                 step = interval_minutes // 3  # 10개 캔들 간격
@@ -562,6 +579,8 @@ class ChartRenderer:
                 # 해당 시간의 데이터 인덱스 계산 (연속)
                 if timeframe == "1min":
                     data_index = current_time_minutes - start_minutes  # 분 단위
+                elif timeframe == "5min":
+                    data_index = (current_time_minutes - start_minutes) // 5  # 5분 단위
                 else:  # 3min
                     data_index = (current_time_minutes - start_minutes) // 3  # 3분 단위
                 

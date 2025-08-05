@@ -49,11 +49,11 @@ class TradingDecisionEngine:
     
     async def analyze_buy_decision(self, trading_stock, combined_data) -> Tuple[bool, str]:
         """
-        매수 판단 분석
+        매수 판단 분석 (전략별 적절한 시간프레임 사용)
         
         Args:
             trading_stock: 거래 종목 객체
-            combined_data: 분봉 데이터
+            combined_data: 1분봉 데이터 (기본 데이터)
             
         Returns:
             Tuple[매수신호여부, 매수사유]
@@ -68,17 +68,17 @@ class TradingDecisionEngine:
             if self._is_already_holding(stock_code):
                 return False, f"이미 보유 중인 종목 (매수 제외)"
             
-            # 전략 1: 가격박스 + 이등분선 매수 신호
+            # 전략 1: 가격박스 + 이등분선 매수 신호 (1분봉 사용)
             signal_result, reason = self._check_price_box_bisector_buy_signal(combined_data)
             if signal_result:
                 return True, f"가격박스+이등분선: {reason}"
             
-            ## 전략 2: 볼린저밴드 + 이등분선 매수 신호
+            ## 전략 2: 볼린저밴드 + 이등분선 매수 신호 (1분봉 사용)
             #signal_result, reason = self._check_bollinger_bisector_buy_signal(combined_data)
             #if signal_result:
             #    return True, f"볼린저밴드+이등분선: {reason}"
             
-            # 전략 3: 다중 볼린저밴드 매수 신호
+            # 전략 3: 다중 볼린저밴드 매수 신호 (5분봉 사용)
             signal_result, reason = self._check_multi_bollinger_buy_signal(combined_data)
             if signal_result:
                 return True, f"다중볼린저밴드: {reason}"
@@ -692,16 +692,46 @@ class TradingDecisionEngine:
                 data = data.copy()
                 data.index = pd.date_range(start='09:00', periods=len(data), freq='1min')
             
-            # HTS와 동일하게 09:00 기준 5분봉으로 리샘플링
-            # 수동으로 5분 단위로 그룹핑하여 정확한 시간 맞춤
+            # HTS와 동일하게 시간 기준 5분봉으로 그룹핑
             data_5min_list = []
             
-            # 5분 단위로 그룹핑 (09:00~09:05, 09:05~09:10, ...)
-            for i in range(0, len(data), 5):
-                group = data.iloc[i:i+5]
+            # 시간을 분 단위로 변환 (09:00 = 0분 기준)
+            if hasattr(data.index, 'hour'):
+                data['minutes_from_9am'] = (data.index.hour - 9) * 60 + data.index.minute
+            else:
+                # datetime 인덱스가 아닌 경우 순차적으로 처리
+                data['minutes_from_9am'] = range(len(data))
+            
+            # 5분 단위로 그룹핑 (0-4분→그룹0, 5-9분→그룹1, ...)
+            # 하지만 실제로는 5분간의 데이터를 포함해야 함
+            grouped = data.groupby(data['minutes_from_9am'] // 5)
+            
+            for group_id, group in grouped:
                 if len(group) > 0:
-                    # 5분봉 시간은 그룹의 마지막 시간 사용
-                    end_time = group.index[-1]
+                    # 5분봉 시간은 해당 구간의 끝 + 1분 (5분간 포함)
+                    # 예: 09:00~09:04 → 09:05, 09:05~09:09 → 09:10
+                    base_minute = group_id * 5
+                    end_minute = base_minute + 5  # 5분 후가 캔들 시간
+                    
+                    # 09:00 기준으로 계산한 절대 시간
+                    target_hour = 9 + (end_minute // 60)
+                    target_min = end_minute % 60
+                    
+                    # 실제 5분봉 시간 생성 (구간 끝 + 1분)
+                    if hasattr(data.index, 'date') and len(data.index) > 0:
+                        base_date = data.index[0].date()
+                        end_time = pd.Timestamp.combine(base_date, pd.Timestamp(hour=target_hour, minute=target_min, second=0).time())
+                    else:
+                        # 인덱스가 datetime이 아닌 경우 기본값 사용
+                        end_time = pd.Timestamp(f'2023-01-01 {target_hour:02d}:{target_min:02d}:00')
+                    
+                    # 15:30을 넘지 않도록 제한
+                    if target_hour > 15 or (target_hour == 15 and target_min > 30):
+                        if hasattr(data.index, 'date') and len(data.index) > 0:
+                            base_date = data.index[0].date()
+                            end_time = pd.Timestamp.combine(base_date, pd.Timestamp(hour=15, minute=30, second=0).time())
+                        else:
+                            end_time = pd.Timestamp('2023-01-01 15:30:00')
                     
                     data_5min_list.append({
                         'datetime': end_time,

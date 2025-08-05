@@ -240,33 +240,59 @@ class DataProcessor:
             return data
     
     def _resample_to_5min(self, data: pd.DataFrame) -> pd.DataFrame:
-        """1분봉을 5분봉으로 변환 (HTS와 동일한 방식)"""
+        """1분봉을 5분봉으로 변환 (HTS와 동일한 방식 - 시간 기준 그룹핑)"""
         try:
             if data is None or len(data) < 5:
                 return data
             
             # 시간 컬럼 확인 및 datetime 생성
+            data = data.copy()
             if 'datetime' in data.columns:
-                data = data.copy()
                 data['datetime'] = pd.to_datetime(data['datetime'])
             elif 'date' in data.columns and 'time' in data.columns:
-                data = data.copy()
                 # date와 time을 datetime으로 결합
                 data['datetime'] = pd.to_datetime(data['date'].astype(str) + ' ' + data['time'].astype(str))
+            elif 'time' in data.columns:
+                # time만 있는 경우 (HHMMSS 형식)
+                time_str = data['time'].astype(str).str.zfill(6)
+                data['datetime'] = pd.to_datetime('2023-01-01 ' + time_str.str[:2] + ':' + time_str.str[2:4] + ':' + time_str.str[4:6])
             else:
-                # datetime 컬럼이 없으면 인덱스를 생성
-                data = data.copy()
+                # datetime 컬럼이 없으면 09:00부터 순차적으로 생성
                 data['datetime'] = pd.date_range(start='09:00', periods=len(data), freq='1min')
             
-            # HTS와 동일하게 09:00 기준 5분봉으로 수동 그룹핑
+            # 시간순 정렬 (중요!)
+            data = data.sort_values('datetime').reset_index(drop=True)
+            
+            # HTS와 동일하게 시간 기준으로 5분봉 그룹핑
             data_5min_list = []
             
-            # 5분 단위로 그룹핑 (09:00~09:05, 09:05~09:10, ...)
-            for i in range(0, len(data), 5):
-                group = data.iloc[i:i+5]
+            # 시간을 분 단위로 변환 (09:00 = 0분 기준)
+            data['minutes_from_9am'] = (data['datetime'].dt.hour - 9) * 60 + data['datetime'].dt.minute
+            
+            # 5분 단위로 그룹핑 (0-4분→그룹0, 5-9분→그룹1, ...)
+            # 하지만 실제로는 5분간의 데이터를 포함해야 함
+            grouped = data.groupby(data['minutes_from_9am'] // 5)
+            
+            for group_id, group in grouped:
                 if len(group) > 0:
-                    # 5분봉 시간은 그룹의 마지막 시간 사용
-                    end_time = group['datetime'].iloc[-1]
+                    # 5분봉 시간은 해당 구간의 끝 + 1분 (5분간 포함)
+                    # 예: 09:00~09:04 → 09:05, 09:05~09:09 → 09:10
+                    base_minute = group_id * 5
+                    end_minute = base_minute + 5  # 5분 후가 캔들 시간
+                    
+                    # 09:00 기준으로 계산한 절대 시간
+                    target_hour = 9 + (end_minute // 60)
+                    target_min = end_minute % 60
+                    
+                    # 실제 5분봉 시간 생성 (구간 끝 + 1분)
+                    base_date = data['datetime'].iloc[0]
+                    end_time = pd.Timestamp(year=base_date.year, month=base_date.month, day=base_date.day, 
+                                          hour=target_hour, minute=target_min, second=0)
+                    
+                    # 15:30을 넘지 않도록 제한
+                    if target_hour > 15 or (target_hour == 15 and target_min > 30):
+                        end_time = pd.Timestamp(year=base_date.year, month=base_date.month, day=base_date.day,
+                                              hour=15, minute=30, second=0)
                     
                     data_5min_list.append({
                         'datetime': end_time,
@@ -274,7 +300,9 @@ class DataProcessor:
                         'high': group['high'].max(),
                         'low': group['low'].min(), 
                         'close': group['close'].iloc[-1],
-                        'volume': group['volume'].sum()
+                        'volume': group['volume'].sum(),
+                        # 추가 정보
+                        'time': end_time.strftime('%H%M%S') if hasattr(end_time, 'strftime') else None
                     })
             
             data_5min = pd.DataFrame(data_5min_list)
@@ -282,6 +310,10 @@ class DataProcessor:
             self.logger.debug(f"📊 HTS 방식 5분봉 변환: {len(data)}개 → {len(data_5min)}개 완료")
             if not data_5min.empty:
                 self.logger.debug(f"시간 범위: {data_5min['datetime'].iloc[0]} ~ {data_5min['datetime'].iloc[-1]}")
+                # 시간 간격 확인
+                if len(data_5min) > 1:
+                    time_diffs = data_5min['datetime'].diff().dropna()
+                    self.logger.debug(f"5분봉 시간 간격: {time_diffs.iloc[0] if len(time_diffs) > 0 else 'N/A'}")
             
             return data_5min
             
