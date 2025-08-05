@@ -11,7 +11,7 @@ from utils.logger import setup_logger
 class TradingStrategy:
     """거래 전략 설정"""
     name: str
-    timeframe: str  # "1min" or "3min"
+    timeframe: str  # "1min", "3min", or "5min"
     indicators: List[str]
     description: str
     enabled: bool = True
@@ -43,16 +43,16 @@ class StrategyManager:
         ),
         "strategy2": TradingStrategy(
             name="다중볼린저밴드+이등분선", 
-            timeframe="1min",
+            timeframe="5min",
             indicators=["multi_bollinger_bands", "bisector_line"],
-            description="다중 볼린저밴드와 이등분선을 활용한 매매",
+            description="다중 볼린저밴드와 이등분선을 활용한 매매 (5분봉)",
             priority=2
         ),
         "strategy3": TradingStrategy(
             name="다중볼린저밴드",
-            timeframe="1min", 
+            timeframe="5min", 
             indicators=["multi_bollinger_bands"],
-            description="여러 기간의 볼린저밴드를 활용한 매매",
+            description="여러 기간의 볼린저밴드를 활용한 매매 (5분봉)",
             priority=3
         )
     }
@@ -167,7 +167,7 @@ class StrategyManager:
                 return False
             
             # 시간프레임 검증
-            if strategy.timeframe not in ["1min", "3min"]:
+            if strategy.timeframe not in ["1min", "3min", "5min"]:
                 return False
             
             # 지표 검증

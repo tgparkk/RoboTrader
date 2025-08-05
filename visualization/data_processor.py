@@ -201,6 +201,9 @@ class DataProcessor:
             elif timeframe == "3min":
                 # 1분봉을 3분봉으로 변환
                 return self._resample_to_3min(base_data)
+            elif timeframe == "5min":
+                # 1분봉을 5분봉으로 변환 (HTS와 동일한 방식)
+                return self._resample_to_5min(base_data)
             else:
                 self.logger.warning(f"지원하지 않는 시간프레임: {timeframe}")
                 return base_data
@@ -234,6 +237,56 @@ class DataProcessor:
             
         except Exception as e:
             self.logger.error(f"3분봉 변환 오류: {e}")
+            return data
+    
+    def _resample_to_5min(self, data: pd.DataFrame) -> pd.DataFrame:
+        """1분봉을 5분봉으로 변환 (HTS와 동일한 방식)"""
+        try:
+            if data is None or len(data) < 5:
+                return data
+            
+            # 시간 컬럼 확인 및 datetime 생성
+            if 'datetime' in data.columns:
+                data = data.copy()
+                data['datetime'] = pd.to_datetime(data['datetime'])
+            elif 'date' in data.columns and 'time' in data.columns:
+                data = data.copy()
+                # date와 time을 datetime으로 결합
+                data['datetime'] = pd.to_datetime(data['date'].astype(str) + ' ' + data['time'].astype(str))
+            else:
+                # datetime 컬럼이 없으면 인덱스를 생성
+                data = data.copy()
+                data['datetime'] = pd.date_range(start='09:00', periods=len(data), freq='1min')
+            
+            # HTS와 동일하게 09:00 기준 5분봉으로 수동 그룹핑
+            data_5min_list = []
+            
+            # 5분 단위로 그룹핑 (09:00~09:05, 09:05~09:10, ...)
+            for i in range(0, len(data), 5):
+                group = data.iloc[i:i+5]
+                if len(group) > 0:
+                    # 5분봉 시간은 그룹의 마지막 시간 사용
+                    end_time = group['datetime'].iloc[-1]
+                    
+                    data_5min_list.append({
+                        'datetime': end_time,
+                        'open': group['open'].iloc[0],
+                        'high': group['high'].max(),
+                        'low': group['low'].min(), 
+                        'close': group['close'].iloc[-1],
+                        'volume': group['volume'].sum()
+                    })
+            
+            data_5min = pd.DataFrame(data_5min_list)
+            
+            self.logger.debug(f"📊 HTS 방식 5분봉 변환: {len(data)}개 → {len(data_5min)}개 완료")
+            if not data_5min.empty:
+                self.logger.debug(f"시간 범위: {data_5min['datetime'].iloc[0]} ~ {data_5min['datetime'].iloc[-1]}")
+            
+            return data_5min
+            
+        except Exception as e:
+            self.logger.error(f"❌ 5분봉 변환 오류: {e}")
             return data
     
     def calculate_indicators(self, data: pd.DataFrame, strategy) -> Dict[str, Any]:

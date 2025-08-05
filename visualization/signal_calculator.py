@@ -72,25 +72,15 @@ class SignalCalculator:
                         buy_signals |= bb_buy_signals
                 
                 elif indicator_name == "multi_bollinger_bands":
-                    # 다중 볼린저밴드 매수 신호 (5분봉 기준이지만 간단히 처리)
-                    # 실제 매매에서는 5분봉을 사용하지만, 차트에서는 1분봉 데이터로 근사 처리
+                    # 다중 볼린저밴드 매수 신호 (5분봉 기준)
+                    # 이제 5분봉 데이터를 사용하므로 정확한 신호 계산 가능
                     if 'volume' in data.columns:
                         multi_bb_signals = MultiBollingerBands.generate_trading_signals(
                             data['close'], data['volume'])
                     else:
                         multi_bb_signals = MultiBollingerBands.generate_trading_signals(data['close'])
                     
-                    # 실제 매매와 차이가 있을 수 있음을 표시하기 위해 신호를 약간 필터링
-                    if 'buy_signal' in multi_bb_signals.columns:
-                        # 5분봉 단위로 신호를 그룹화하여 더 보수적으로 처리
-                        buy_signal_filtered = multi_bb_signals['buy_signal'].copy()
-                        for i in range(0, len(buy_signal_filtered), 5):
-                            group = buy_signal_filtered.iloc[i:i+5]
-                            if group.any():  # 5분 구간 내에 신호가 있으면
-                                # 해당 구간의 마지막에만 신호 유지
-                                buy_signal_filtered.iloc[i:i+4] = False
-                        multi_bb_signals['buy_signal'] = buy_signal_filtered
-                    
+                    # 5분봉 데이터이므로 추가 필터링 없이 신호 사용
                     if 'buy_signal' in multi_bb_signals.columns:
                         multi_bb_buy_signals = multi_bb_signals['buy_signal']
                         original_count = multi_bb_buy_signals.sum()
@@ -99,7 +89,7 @@ class SignalCalculator:
                         if bisector_filter is not None:
                             multi_bb_buy_signals = multi_bb_buy_signals & bisector_filter
                             filtered_count = multi_bb_buy_signals.sum()
-                            self.logger.info(f"다중볼린저밴드 매수신호: {original_count}개 → {filtered_count}개 (이등분선 필터 적용)")
+                            self.logger.info(f"다중볼밴 매수신호: {original_count}개 → {filtered_count}개 (이등분선 필터 적용)")
                         
                         buy_signals |= multi_bb_buy_signals
             
