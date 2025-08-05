@@ -395,9 +395,9 @@ class DayTradingBot:
                 
                 if is_chart_time and chart_generation_count < 2:  # 16~24시 시간대에만, 최대 2번
                     if (current_time - last_chart_generation).total_seconds() >= 1 * 60:  # 1분 간격으로 체크
-                        self.logger.info(f"🔥 DEBUG: 차트 생성 실행 시작 ({chart_generation_count + 1}/2)")  # 디버깅용
+                        #self.logger.info(f"🔥 DEBUG: 차트 생성 실행 시작 ({chart_generation_count + 1}/2)")  # 디버깅용
                         await self._generate_post_market_charts()
-                        self.logger.info(f"🔥 DEBUG: 차트 생성 실행 완료 ({chart_generation_count + 1}/2)")  # 디버깅용
+                        #self.logger.info(f"🔥 DEBUG: 차트 생성 실행 완료 ({chart_generation_count + 1}/2)")  # 디버깅용
                         last_chart_generation = current_time
                         chart_generation_count += 1
                         

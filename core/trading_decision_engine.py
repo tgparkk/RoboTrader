@@ -389,7 +389,7 @@ class TradingDecisionEngine:
             return False, ""
     
     def _check_multi_bollinger_buy_signal(self, data) -> Tuple[bool, str]:
-        """전략 3: 다중 볼린저밴드 매수 신호 확인"""
+        """전략 3: 다중 볼린저밴드 매수 신호 확인 (5분봉 기준)"""
         try:
             from core.indicators.multi_bollinger_bands import MultiBollingerBands
             
@@ -398,10 +398,15 @@ class TradingDecisionEngine:
             if not all(col in data.columns for col in required_cols):
                 return False, "필요한 데이터 컬럼 부족"
             
-            prices = data['close']
-            volume_data = data['volume'] if 'volume' in data.columns else None
+            # 1분봉 데이터를 5분봉으로 변환
+            data_5min = self._convert_to_5min_data(data)
+            if data_5min is None or len(data_5min) < 30:
+                return False, "5분봉 데이터 부족"
             
-            # 다중 볼린저밴드 신호 계산
+            prices = data_5min['close']
+            volume_data = data_5min['volume'] if 'volume' in data_5min.columns else None
+            
+            # 다중 볼린저밴드 신호 계산 (5분봉 기준)
             signals = MultiBollingerBands.generate_trading_signals(prices, volume_data)
             
             current_idx = len(signals) - 1
@@ -517,14 +522,19 @@ class TradingDecisionEngine:
             return False, ""
     
     def _check_multi_bollinger_stop_loss(self, data, buy_price, current_price) -> Tuple[bool, str]:
-        """다중 볼린저밴드 전략 손절 조건"""
+        """다중 볼린저밴드 전략 손절 조건 (5분봉 기준)"""
         try:
             from core.indicators.multi_bollinger_bands import MultiBollingerBands
             
-            prices = data['close']
-            volume_data = data['volume'] if 'volume' in data.columns else None
+            # 1분봉 데이터를 5분봉으로 변환
+            data_5min = self._convert_to_5min_data(data)
+            if data_5min is None or len(data_5min) < 20:
+                return False, "5분봉 데이터 부족"
             
-            # 다중 볼린저밴드 신호 계산
+            prices = data_5min['close']
+            volume_data = data_5min['volume'] if 'volume' in data_5min.columns else None
+            
+            # 다중 볼린저밴드 신호 계산 (5분봉 기준)
             signals = MultiBollingerBands.generate_trading_signals(prices, volume_data)
             
             # 손절 조건 1: 이등분선 이탈
@@ -655,3 +665,56 @@ class TradingDecisionEngine:
         except Exception as e:
             self.logger.error(f"❌ 가상 잔고 정보 조회 오류: {e}")
             return {}
+    
+    def _convert_to_5min_data(self, data: pd.DataFrame) -> Optional[pd.DataFrame]:
+        """1분봉 데이터를 5분봉으로 변환"""
+        try:
+            if data is None or len(data) < 5:
+                return None
+            
+            # 시간 컬럼 확인 및 변환
+            if 'datetime' in data.columns:
+                data = data.copy()
+                data['datetime'] = pd.to_datetime(data['datetime'])
+                data = data.set_index('datetime')
+            elif 'date' in data.columns and 'time' in data.columns:
+                data = data.copy()
+                # date와 time을 datetime으로 결합
+                data['datetime'] = pd.to_datetime(data['date'].astype(str) + ' ' + data['time'].astype(str))
+                data = data.set_index('datetime')
+            else:
+                # datetime 인덱스가 없으면 인덱스를 생성
+                data = data.copy()
+                data.index = pd.date_range(start='09:00', periods=len(data), freq='1min')
+            
+            # HTS와 동일하게 09:00 기준 5분봉으로 리샘플링
+            # 수동으로 5분 단위로 그룹핑하여 정확한 시간 맞춤
+            data_5min_list = []
+            
+            # 5분 단위로 그룹핑 (09:00~09:05, 09:05~09:10, ...)
+            for i in range(0, len(data), 5):
+                group = data.iloc[i:i+5]
+                if len(group) > 0:
+                    # 5분봉 시간은 그룹의 마지막 시간 사용
+                    end_time = group.index[-1]
+                    
+                    data_5min_list.append({
+                        'datetime': end_time,
+                        'open': group['open'].iloc[0],
+                        'high': group['high'].max(),
+                        'low': group['low'].min(), 
+                        'close': group['close'].iloc[-1],
+                        'volume': group['volume'].sum()
+                    })
+            
+            data_5min = pd.DataFrame(data_5min_list)
+            
+            self.logger.debug(f"📊 HTS 방식 5분봉 변환: {len(data)}개 → {len(data_5min)}개 완료")
+            if not data_5min.empty:
+                self.logger.debug(f"시간 범위: {data_5min['datetime'].iloc[0]} ~ {data_5min['datetime'].iloc[-1]}")
+            
+            return data_5min
+            
+        except Exception as e:
+            self.logger.error(f"❌ 5분봉 변환 오류: {e}")
+            return None

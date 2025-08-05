@@ -291,11 +291,19 @@ class PostMarketChartGenerator:
             try:
                 multi_bb_strategy = self.strategy_manager.get_strategy('multi_bollinger')
                 if multi_bb_strategy:
-                    indicator_cache_key = f"{stock_code}_{target_date}_1min_multi_bollinger"
+                    indicator_cache_key = f"{stock_code}_{target_date}_5min_multi_bollinger"
                     multi_bb_indicators = self._get_cached_indicators(indicator_cache_key, timeframe_data, multi_bb_strategy)
                     
+                    # 다중볼린저밴드는 5분봉 기준이므로 전략 정보 수정
+                    multi_bb_strategy_5min = type(multi_bb_strategy)(
+                        multi_bb_strategy.name,
+                        "5min",  # timeframe을 5min으로 변경
+                        multi_bb_strategy.indicators,
+                        multi_bb_strategy.description + " (5분봉 기준)"
+                    )
+                    
                     multi_bb_path = self.chart_renderer.create_strategy_chart(
-                        stock_code, stock_name, target_date, multi_bb_strategy,
+                        stock_code, stock_name, target_date, multi_bb_strategy_5min,
                         timeframe_data, multi_bb_indicators, selection_reason,
                         chart_suffix="multi_bollinger"
                     )
