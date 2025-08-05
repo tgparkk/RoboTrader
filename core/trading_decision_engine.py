@@ -411,6 +411,11 @@ class TradingDecisionEngine:
             
             current_idx = len(signals) - 1
             
+            # 매수 조건: 다중볼밴 돌파신호 (새로운 강세패턴)
+            if signals['buy_multi_breakout'].iloc[-1]:
+                return True, "다중볼밴 돌파신호"
+            
+            # 기존 매수 조건들 (보조 신호로 유지)
             # 매수 조건 1: 밀집된 상한선 돌파 시 매수
             if signals['buy_breakout'].iloc[-1]:
                 return True, "상한선 밀집 돌파"

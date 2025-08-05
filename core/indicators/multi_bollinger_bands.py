@@ -99,6 +99,36 @@ class MultiBollingerBands:
         return breakout
     
     @staticmethod
+    def detect_multi_breakout_signal(prices: pd.Series, multi_bb: Dict[str, Dict[str, pd.Series]]) -> pd.Series:
+        """
+        다중볼밴 돌파신호 감지 (Static Method)
+        
+        Crossup(C,BBandsUp(50,2)) and Crossup(C,BBandsUp(40,2)) and Crossup(C,BBandsUp(30,2))
+        
+        Parameters:
+        - prices: 가격 데이터
+        - multi_bb: 다중 볼린저밴드 데이터
+        
+        Returns:
+        - 다중볼밴 돌파신호 (Boolean Series)
+        """
+        # 30, 40, 50 기간 상한선 동시 돌파 확인
+        target_periods = [30, 40, 50]
+        
+        # 각 기간별 상한선 crossup 계산
+        crossup_signals = []
+        for period in target_periods:
+            upper_band = multi_bb[period]['upper_band']
+            # Crossup: 전봉에서는 상한선 아래, 현재봉에서는 상한선 위
+            crossup = (prices.shift(1) <= upper_band.shift(1)) & (prices > upper_band)
+            crossup_signals.append(crossup)
+        
+        # 모든 상한선을 동시에 돌파하는 경우
+        multi_breakout = crossup_signals[0] & crossup_signals[1] & crossup_signals[2]
+        
+        return multi_breakout
+    
+    @staticmethod
     def calculate_retracement_levels(breakout_candle_high: float, breakout_candle_low: float, 
                                    bisector_line: float) -> Dict[str, float]:
         """
@@ -164,6 +194,10 @@ class MultiBollingerBands:
         signals['upper_breakout'] = MultiBollingerBands.detect_upper_breakout(
             prices, multi_bb, signals['upper_convergence'])
         
+        # 다중볼밴 돌파신호 감지 (새로운 강세패턴)
+        signals['multi_breakout_signal'] = MultiBollingerBands.detect_multi_breakout_signal(
+            prices, multi_bb)
+        
         # 중심선 (기준: 20 기간)
         signals['center_line'] = multi_bb[20]['sma']
         
@@ -192,17 +226,21 @@ class MultiBollingerBands:
         
         # 매매 신호 생성
         
-        # 1. 밀집된 상한선 돌파 시 매수
+        # 1. 다중볼밴 돌파신호 (새로운 강세패턴 매수 전략)
+        signals['buy_multi_breakout'] = signals['multi_breakout_signal']
+        
+        # 기존 매수 신호들 (참고용 유지)
+        # 2. 밀집된 상한선 돌파 시 매수
         signals['buy_breakout'] = signals['upper_breakout']
         
-        # 2. 조정 매수 신호 (돌파 후 되돌림)
+        # 3. 조정 매수 신호 (돌파 후 되돌림)
         signals['potential_retracement_buy'] = (
             signals['upper_breakout'].shift(1) &  # 전봉에 돌파
             ~signals['upper_breakout'] &         # 현재는 돌파 아님
             (prices < signals['price'].shift(1))  # 조정 중
         )
         
-        # 3. 중심선 지지 매수
+        # 4. 중심선 지지 매수
         signals['buy_center_support'] = (
             signals['upper_breakout'].rolling(5).sum() > 0 &  # 최근 5봉 내 돌파 있었음
             (prices <= signals['center_line'] * 1.01) &      # 중심선 근처
@@ -215,6 +253,10 @@ class MultiBollingerBands:
             # 거래량 밀집 후 확장 조건 추가
             vol_condition = signals['vol_concentrated'].shift(1) & signals['vol_expanding']
             
+            # 다중볼밴 돌파신호에 거래량 조건 적용
+            signals['buy_multi_breakout'] = signals['buy_multi_breakout'] & vol_condition
+            
+            # 기존 신호들에도 거래량 조건 적용
             signals['buy_breakout'] = signals['buy_breakout'] & vol_condition
             signals['buy_center_support'] = signals['buy_center_support'] & vol_condition
         
@@ -231,12 +273,8 @@ class MultiBollingerBands:
         # 3. -3% 손실 (별도 계산 필요)
         signals['stop_loss_3pct'] = False  # 매수가 기준으로 별도 계산
         
-        # 통합 신호
-        signals['buy_signal'] = (
-            signals['buy_breakout'] |
-            signals['potential_retracement_buy'] |
-            signals['buy_center_support']
-        )
+        # 통합 신호 (다중볼밴 돌파신호를 주 매수 전략으로 사용)
+        signals['buy_signal'] = signals['buy_multi_breakout']
         
         signals['sell_signal'] = (
             signals['stop_bisector'] |
@@ -322,11 +360,18 @@ class MultiBollingerBands:
                                    label='상한선 밀집')
                     break
         
-        # 매수 신호
+        # 매수 신호 (다중볼밴 돌파신호)
         buy_points = signals['buy_signal']
         if buy_points.any():
             ax1.scatter(signals.index[buy_points], signals['price'][buy_points],
-                       color='green', s=100, marker='^', label='매수신호', zorder=5)
+                       color='hotpink', s=100, marker='^', label='다중볼밴 돌파신호', zorder=5)
+        
+        # 기존 돌파신호 (참고용)
+        if 'buy_breakout' in signals.columns:
+            old_buy_points = signals['buy_breakout']
+            if old_buy_points.any():
+                ax1.scatter(signals.index[old_buy_points], signals['price'][old_buy_points],
+                           color='lightgreen', s=50, marker='o', label='기존 돌파신호', zorder=4, alpha=0.7)
         
         # 매도 신호
         sell_points = signals['sell_signal']
