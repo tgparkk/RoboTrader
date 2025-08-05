@@ -161,7 +161,7 @@ class DatabaseManager:
                     UPDATE candidate_stocks 
                     SET status = 'inactive' 
                     WHERE DATE(selection_date) = DATE(?)
-                ''', (selection_date.isoformat(),))
+                ''', (selection_date.strftime('%Y-%m-%d %H:%M:%S'),))
                 
                 # 새로운 후보 종목 저장
                 for candidate in candidates:
@@ -172,7 +172,7 @@ class DatabaseManager:
                     ''', (
                         candidate.code,
                         candidate.name,
-                        selection_date.isoformat(),
+                        selection_date.strftime('%Y-%m-%d %H:%M:%S'),
                         candidate.score,
                         candidate.reason
                     ))
@@ -201,7 +201,7 @@ class DatabaseManager:
                         VALUES (?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         stock_code,
-                        record.date_time.isoformat(),
+                        record.date_time.strftime('%Y-%m-%d %H:%M:%S'),
                         record.open_price,
                         record.high_price,
                         record.low_price,
@@ -236,7 +236,7 @@ class DatabaseManager:
                     ORDER BY selection_date DESC, score DESC
                 '''
                 
-                df = pd.read_sql_query(query, conn, params=(start_date.isoformat(),))
+                df = pd.read_sql_query(query, conn, params=(start_date.strftime('%Y-%m-%d %H:%M:%S'),))
                 df['selection_date'] = pd.to_datetime(df['selection_date'])
                 
                 self.logger.info(f"후보 종목 이력 {len(df)}건 조회 ({days}일)")
@@ -265,7 +265,7 @@ class DatabaseManager:
                     ORDER BY date_time ASC
                 '''
                 
-                df = pd.read_sql_query(query, conn, params=(stock_code, start_date.isoformat()))
+                df = pd.read_sql_query(query, conn, params=(stock_code, start_date.strftime('%Y-%m-%d %H:%M:%S')))
                 df['date_time'] = pd.to_datetime(df['date_time'])
                 
                 self.logger.debug(f"{stock_code} 가격 이력 {len(df)}건 조회")
@@ -299,7 +299,7 @@ class DatabaseManager:
                     ORDER BY c.selection_date DESC, c.score DESC
                 '''
                 
-                df = pd.read_sql_query(query, conn, params=(start_date.isoformat(),))
+                df = pd.read_sql_query(query, conn, params=(start_date.strftime('%Y-%m-%d %H:%M:%S'),))
                 df['selection_date'] = pd.to_datetime(df['selection_date'])
                 
                 return df
@@ -326,7 +326,7 @@ class DatabaseManager:
                     ORDER BY date DESC
                 '''
                 
-                df = pd.read_sql_query(query, conn, params=(start_date.isoformat(),))
+                df = pd.read_sql_query(query, conn, params=(start_date.strftime('%Y-%m-%d %H:%M:%S'),))
                 df['date'] = pd.to_datetime(df['date'])
                 
                 return df
@@ -347,13 +347,13 @@ class DatabaseManager:
                 cursor.execute('''
                     DELETE FROM candidate_stocks 
                     WHERE selection_date < ?
-                ''', (cutoff_date.isoformat(),))
+                ''', (cutoff_date.strftime('%Y-%m-%d %H:%M:%S'),))
                 
                 # 오래된 가격 데이터 삭제
                 cursor.execute('''
                     DELETE FROM stock_prices 
                     WHERE date_time < ?
-                ''', (cutoff_date.isoformat(),))
+                ''', (cutoff_date.strftime('%Y-%m-%d %H:%M:%S'),))
                 
                 conn.commit()
                 self.logger.info(f"{keep_days}일 이전 데이터 정리 완료")
@@ -395,7 +395,7 @@ class DatabaseManager:
                     INSERT INTO virtual_trading_records 
                     (stock_code, stock_name, action, quantity, price, timestamp, strategy, reason, is_test)
                     VALUES (?, ?, 'BUY', ?, ?, ?, ?, ?, 1)
-                ''', (stock_code, stock_name, quantity, price, timestamp.isoformat(), strategy, reason))
+                ''', (stock_code, stock_name, quantity, price, timestamp.strftime('%Y-%m-%d %H:%M:%S'), strategy, reason))
                 
                 buy_record_id = cursor.lastrowid
                 conn.commit()
@@ -440,7 +440,7 @@ class DatabaseManager:
                     (stock_code, stock_name, action, quantity, price, timestamp, strategy, reason, 
                      is_test, profit_loss, profit_rate, buy_record_id)
                     VALUES (?, ?, 'SELL', ?, ?, ?, ?, ?, 1, ?, ?, ?)
-                ''', (stock_code, stock_name, quantity, price, timestamp.isoformat(), 
+                ''', (stock_code, stock_name, quantity, price, timestamp.strftime('%Y-%m-%d %H:%M:%S'), 
                       strategy, reason, profit_loss, profit_rate, buy_record_id))
                 
                 conn.commit()
@@ -538,7 +538,7 @@ class DatabaseManager:
                         ORDER BY s.timestamp DESC
                     '''
                 
-                df = pd.read_sql_query(query, conn, params=(start_date.isoformat(),))
+                df = pd.read_sql_query(query, conn, params=(start_date.strftime('%Y-%m-%d %H:%M:%S'),))
                 
                 if not df.empty:
                     if include_open:

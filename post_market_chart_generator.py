@@ -209,8 +209,21 @@ class PostMarketChartGenerator:
                     self.logger.error(f"{strategy.name} 차트 생성 오류: {e}")
                     continue
             
-            # 모든 전략이 실패한 경우
-            self.logger.warning("모든 전략 차트 생성 실패")
+            # 모든 전략이 실패한 경우 기본 차트 생성
+            self.logger.warning("모든 전략 차트 생성 실패 - 기본 차트 생성 시도")
+            if chart_df is not None:
+                return self.chart_renderer.create_basic_chart(
+                    stock_code, stock_name, chart_df, target_date, selection_reason
+                )
+            else:
+                # 기본 1분봉 데이터로 기본 차트 생성
+                base_data = await self._get_cached_data(stock_code, target_date, "1min")
+                if base_data is not None:
+                    return self.chart_renderer.create_basic_chart(
+                        stock_code, stock_name, base_data, target_date, selection_reason
+                    )
+            
+            self.logger.warning("기본 차트 생성도 실패")
             return None
             
         except Exception as e:
@@ -453,12 +466,12 @@ class PostMarketChartGenerator:
             market_close_minute = 30
             
             if current_time.hour < market_close_hour or (current_time.hour == market_close_hour and current_time.minute < market_close_minute):
-                self.logger.debug("아직 장 마감 시간이 아님 - 차트 생성 건너뛰기")
+                #self.logger.debug("아직 장 마감 시간이 아님 - 차트 생성 건너뛰기")
                 return {'success': False, 'message': '아직 장 마감 시간이 아님'}
             
             # 주말이나 공휴일 체크
             if current_time.weekday() >= 5:  # 토요일(5), 일요일(6)
-                self.logger.debug("주말 - 차트 생성 건너뛰기")
+                #self.logger.debug("주말 - 차트 생성 건너뛰기")
                 return {'success': False, 'message': '주말'}
             
             self.logger.info("🎨 장 마감 후 선정 종목 차트 생성 시작")

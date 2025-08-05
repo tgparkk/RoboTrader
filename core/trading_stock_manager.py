@@ -80,7 +80,7 @@ class TradingStockManager:
                 
                 # 이미 존재하는 종목인지 확인
                 if stock_code in self.trading_stocks:
-                    self.logger.debug(f"📊 {stock_code}({stock_name}): 이미 관리 중인 종목")
+                    #self.logger.debug(f"📊 {stock_code}({stock_name}): 이미 관리 중인 종목")
                     return True
                 
                 # TradingStock 객체 생성

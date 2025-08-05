@@ -55,7 +55,8 @@ class DayTradingBot:
         self.decision_engine = TradingDecisionEngine(
             db_manager=self.db_manager, 
             telegram_integration=self.telegram,
-            trading_manager=self.trading_manager
+            trading_manager=self.trading_manager,
+            api_manager=self.api_manager
         )  # 🆕 매매 판단 엔진
         self.chart_generator = None  # 🆕 장 마감 후 차트 생성기 (지연 초기화)
         
@@ -220,6 +221,10 @@ class DayTradingBot:
             # 매도 판단: 포지션 보유 종목들  
             for trading_stock in positioned_stocks:
                 await self._analyze_sell_decision(trading_stock)
+            
+            # 추가: DB에서 미체결 가상 포지션 직접 확인하여 매도 판단
+            if hasattr(self, 'db_manager') and self.db_manager:
+                await self._analyze_virtual_positions_for_sell()
                 
         except Exception as e:
             self.logger.error(f"❌ 매매 판단 시스템 오류: {e}")
@@ -282,13 +287,55 @@ class DayTradingBot:
         except Exception as e:
             self.logger.error(f"❌ {trading_stock.stock_code} 매도 판단 오류: {e}")
     
-    
-    
-    
-    
-    
-    
-    
+    async def _analyze_virtual_positions_for_sell(self):
+        """DB에서 미체결 가상 포지션을 조회하여 매도 판단"""
+        try:
+            # DB에서 미체결 가상 포지션 조회
+            open_positions = self.db_manager.get_virtual_open_positions()
+            
+            if open_positions.empty:
+                return
+            
+            self.logger.info(f"🔍 미체결 가상 포지션 {len(open_positions)}개에 대해 매도 판단 실행")
+            
+            for _, position in open_positions.iterrows():
+                stock_code = position['stock_code']
+                stock_name = position['stock_name']
+                
+                try:
+                    # 차트 데이터 조회
+                    combined_data = self.intraday_manager.get_combined_chart_data(stock_code)
+                    if combined_data is None or len(combined_data) < 30:
+                        continue
+                    
+                    # 임시 TradingStock 객체 생성
+                    from core.models import TradingStock, Position
+                    trading_stock = TradingStock(
+                        stock_code=stock_code,
+                        stock_name=stock_name,
+                        selection_reason="가상매수"
+                    )
+                    
+                    # 가상 포지션 정보 설정
+                    trading_stock._virtual_buy_record_id = position['id']
+                    trading_stock._virtual_buy_price = position['buy_price']
+                    trading_stock._virtual_quantity = position['quantity']
+                    trading_stock.set_position(position['quantity'], position['buy_price'])
+                    
+                    # 매도 판단 실행
+                    sell_signal, sell_reason = await self.decision_engine.analyze_sell_decision(trading_stock, combined_data)
+                    
+                    if sell_signal:
+                        self.logger.info(f"📉 가상 포지션 매도 신호: {stock_code}({stock_name}) - {sell_reason}")
+                        
+                        # 가상 매도 실행
+                        await self.decision_engine.execute_virtual_sell(trading_stock, combined_data, sell_reason)
+                        
+                except Exception as e:
+                    self.logger.error(f"❌ 가상 포지션 매도 판단 오류 ({stock_code}): {e}")
+                    
+        except Exception as e:
+            self.logger.error(f"❌ 가상 포지션 매도 판단 시스템 오류: {e}")
     
     async def _telegram_task(self):
         """텔레그램 태스크"""
@@ -317,10 +364,11 @@ class DayTradingBot:
             last_intraday_update = now_kst()  # 🆕 장중 데이터 업데이트 시간
             last_chart_generation = datetime(2000, 1, 1, tzinfo=KST)  # 🆕 장 마감 후 차트 생성 시간
             chart_generation_count = 0  # 🆕 차트 생성 횟수 카운터
+            last_chart_reset_date = now_kst().date()  # 🆕 차트 카운터 리셋 기준 날짜
 
             self.logger.info("🔥 DEBUG: while 루프 진입 시도")  # 디버깅용
             while self.is_running:
-                self.logger.info(f"🔥 DEBUG: while 루프 실행 중 - is_running: {self.is_running}")  # 디버깅용
+                #self.logger.info(f"🔥 DEBUG: while 루프 실행 중 - is_running: {self.is_running}")  # 디버깅용
                 current_time = now_kst()
                 
                 # API 24시간마다 재초기화
@@ -334,8 +382,18 @@ class DayTradingBot:
                         await self._update_intraday_data()
                     last_intraday_update = current_time
                 
-                # 🆕 장 마감 후 차트 생성 (장 마감 후 두 번만 실행)
-                if not is_market_open() and chart_generation_count < 2:  # 장 마감 시에만, 최대 2번
+                # 🆕 차트 생성 카운터 매일 리셋
+                current_date = current_time.date()
+                if current_date != last_chart_reset_date:
+                    chart_generation_count = 0  # 새로운 날이면 카운터 리셋
+                    last_chart_reset_date = current_date
+                    self.logger.info(f"📅 새로운 날 - 차트 생성 카운터 리셋 ({current_date})")
+                
+                # 🆕 장 마감 후 차트 생성 (16:00~24:00 시간대에 두 번만 실행)
+                current_hour = current_time.hour
+                is_chart_time = (16 <= current_hour <= 23) and current_time.weekday() < 5  # 평일 16~24시
+                
+                if is_chart_time and chart_generation_count < 2:  # 16~24시 시간대에만, 최대 2번
                     if (current_time - last_chart_generation).total_seconds() >= 1 * 60:  # 1분 간격으로 체크
                         self.logger.info(f"🔥 DEBUG: 차트 생성 실행 시작 ({chart_generation_count + 1}/2)")  # 디버깅용
                         await self._generate_post_market_charts()
@@ -343,8 +401,8 @@ class DayTradingBot:
                         last_chart_generation = current_time
                         chart_generation_count += 1
                         
-                        if chart_generation_count >= 2:
-                            self.logger.info("✅ 장 마감 후 차트 생성 완료 (2회 실행 완료)")
+                        if chart_generation_count >= 1:
+                            self.logger.info("✅ 장 마감 후 차트 생성 완료 (1회 실행 완료)")
                 
                 # 30분마다 시스템 상태 로그 # 30초 대기로 변경
                 await asyncio.sleep(30)  

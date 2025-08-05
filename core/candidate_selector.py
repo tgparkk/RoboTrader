@@ -469,7 +469,7 @@ class CandidateSelector:
             from config.settings import HTS_ID
             from api.kis_market_api import get_psearch_result
             
-            self.logger.info(f"🔍 종목조건검색조회 실행: seq={seq}")
+            #self.logger.info(f"🔍 종목조건검색조회 실행: seq={seq}")
             
             # HTS_ID 확인
             if not HTS_ID:

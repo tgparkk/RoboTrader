@@ -91,7 +91,7 @@ class IntradayStockManager:
                 
                 # 이미 존재하는 종목인지 확인
                 if stock_code in self.selected_stocks:
-                    self.logger.debug(f"📊 {stock_code}({stock_name}): 이미 관리 중인 종목")
+                    #self.logger.debug(f"📊 {stock_code}({stock_name}): 이미 관리 중인 종목")
                     return True
                 
                 # 최대 관리 종목 수 체크

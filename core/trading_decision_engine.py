@@ -21,7 +21,7 @@ class TradingDecisionEngine:
     5. 가상 매매 실행
     """
     
-    def __init__(self, db_manager=None, telegram_integration=None, trading_manager=None):
+    def __init__(self, db_manager=None, telegram_integration=None, trading_manager=None, api_manager=None):
         """
         초기화
         
@@ -29,14 +29,21 @@ class TradingDecisionEngine:
             db_manager: 데이터베이스 관리자
             telegram_integration: 텔레그램 연동
             trading_manager: 거래 종목 관리자
+            api_manager: API 관리자 (계좌 정보 조회용)
         """
         self.logger = setup_logger(__name__)
         self.db_manager = db_manager
         self.telegram = telegram_integration
         self.trading_manager = trading_manager
+        self.api_manager = api_manager
         
         # 가상 매매 설정
-        self.virtual_investment_amount = 10000  # 1만원 기준
+        self.virtual_investment_amount = 10000  # 기본값 (실제 계좌 조회 실패시 사용)
+        self.virtual_balance = 0  # 가상 잔고 (실제 계좌 잔고로 초기화됨)
+        self.initial_balance = 0  # 시작 잔고 (수익률 계산용)
+        
+        # 장 시작 전에 실제 계좌 잔고로 가상 잔고 초기화
+        self._initialize_virtual_balance()
         
         self.logger.info("🧠 매매 판단 엔진 초기화 완료")
     
@@ -66,10 +73,10 @@ class TradingDecisionEngine:
             if signal_result:
                 return True, f"가격박스+이등분선: {reason}"
             
-            # 전략 2: 볼린저밴드 + 이등분선 매수 신호
-            signal_result, reason = self._check_bollinger_bisector_buy_signal(combined_data)
-            if signal_result:
-                return True, f"볼린저밴드+이등분선: {reason}"
+            ## 전략 2: 볼린저밴드 + 이등분선 매수 신호
+            #signal_result, reason = self._check_bollinger_bisector_buy_signal(combined_data)
+            #if signal_result:
+            #    return True, f"볼린저밴드+이등분선: {reason}"
             
             # 전략 3: 다중 볼린저밴드 매수 신호
             signal_result, reason = self._check_multi_bollinger_buy_signal(combined_data)
@@ -99,6 +106,25 @@ class TradingDecisionEngine:
             
             current_price = combined_data['close'].iloc[-1]
             
+            # 가상 포지션 정보 복원 (DB에서 미체결 포지션 조회)
+            if not trading_stock.position and self.db_manager:
+                open_positions = self.db_manager.get_virtual_open_positions()
+                stock_positions = open_positions[open_positions['stock_code'] == trading_stock.stock_code]
+                
+                if not stock_positions.empty:
+                    latest_position = stock_positions.iloc[0]
+                    buy_record_id = latest_position['id']
+                    buy_price = latest_position['buy_price']
+                    quantity = latest_position['quantity']
+                    
+                    # 가상 포지션 정보를 trading_stock에 복원
+                    trading_stock._virtual_buy_record_id = buy_record_id
+                    trading_stock._virtual_buy_price = buy_price
+                    trading_stock._virtual_quantity = quantity
+                    trading_stock.set_position(quantity, buy_price)
+                    
+                    self.logger.debug(f"🔄 가상 포지션 복원: {trading_stock.stock_code} {quantity}주 @{buy_price:,.0f}원")
+            
             # 손절 조건 확인
             stop_loss_signal, stop_reason = self._check_stop_loss_conditions(trading_stock, combined_data)
             if stop_loss_signal:
@@ -122,8 +148,13 @@ class TradingDecisionEngine:
             stock_name = trading_stock.stock_name
             current_price = combined_data['close'].iloc[-1]
             
-            # 가상 매수 수량 설정
+            # 가상 매수 수량 설정 (가상 잔고 확인)
+            if self.virtual_balance < self.virtual_investment_amount:
+                self.logger.warning(f"⚠️ 가상 잔고 부족: {self.virtual_balance:,.0f}원 < {self.virtual_investment_amount:,.0f}원")
+                return
+            
             quantity = max(1, int(self.virtual_investment_amount / current_price))
+            total_cost = quantity * current_price
             
             # 전략명 추출
             if "가격박스" in buy_reason:
@@ -145,6 +176,9 @@ class TradingDecisionEngine:
                 )
                 
                 if buy_record_id:
+                    # 가상 잔고에서 매수 금액 차감
+                    self._update_virtual_balance(-total_cost, "매수")
+                    
                     # 가상 포지션 정보를 trading_stock에 저장
                     trading_stock._virtual_buy_record_id = buy_record_id
                     trading_stock._virtual_buy_price = current_price
@@ -154,7 +188,7 @@ class TradingDecisionEngine:
                     trading_stock.set_position(quantity, current_price)
                     
                     self.logger.info(f"🎯 가상 매수 완료: {stock_code}({stock_name}) "
-                                   f"{quantity}주 @{current_price:,.0f}원 총 {quantity * current_price:,.0f}원")
+                                   f"{quantity}주 @{current_price:,.0f}원 총 {total_cost:,.0f}원")
                     
                     # 텔레그램 알림
                     if self.telegram:
@@ -216,6 +250,10 @@ class TradingDecisionEngine:
                 )
                 
                 if success:
+                    # 가상 잔고에 매도 금액 추가
+                    total_received = quantity * current_price
+                    self._update_virtual_balance(total_received, "매도")
+                    
                     # 가상 포지션 정보 정리
                     for attr in ['_virtual_buy_record_id', '_virtual_buy_price', '_virtual_quantity']:
                         if hasattr(trading_stock, attr):
@@ -553,3 +591,67 @@ class TradingDecisionEngine:
             self.logger.error(f"❌ 보유 종목 확인 오류 ({stock_code}): {e}")
             # 오류 발생시 안전하게 False 반환 (매수 허용)
             return False
+    
+    def _initialize_virtual_balance(self):
+        """실제 계좌 잔고로 가상 잔고 초기화"""
+        try:
+            if not self.api_manager:
+                self.logger.warning("⚠️ API 관리자가 없어 가상 잔고를 기본값으로 설정")
+                self.virtual_balance = 1000000  # 100만원 기본값
+                self.initial_balance = self.virtual_balance
+                return
+            
+            # 실제 계좌 잔고 조회
+            account_info = self.api_manager.get_account_balance_quick()
+            
+            if account_info and account_info.available_amount > 0:
+                self.virtual_balance = account_info.available_amount
+                self.initial_balance = self.virtual_balance
+                self.virtual_investment_amount = self.virtual_balance * 0.20  # 잔고의 20%
+                
+                self.logger.info(f"💰 가상 잔고 초기화: {self.virtual_balance:,.0f}원 (실제 계좌 기준)")
+                self.logger.info(f"💵 건당 투자금액: {self.virtual_investment_amount:,.0f}원")
+            else:
+                # 계좌 조회 실패시 기본값 사용
+                self.virtual_balance = 1000000  # 100만원 기본값
+                self.initial_balance = self.virtual_balance
+                self.logger.warning(f"⚠️ 계좌 조회 실패로 가상 잔고를 기본값으로 설정: {self.virtual_balance:,.0f}원")
+                
+        except Exception as e:
+            # 오류 발생시 기본값 사용
+            self.virtual_balance = 1000000  # 100만원 기본값
+            self.initial_balance = self.virtual_balance
+            self.logger.error(f"❌ 가상 잔고 초기화 오류: {e}")
+            self.logger.info(f"💰 가상 잔고를 기본값으로 설정: {self.virtual_balance:,.0f}원")
+    
+    def _update_virtual_balance(self, amount: float, transaction_type: str):
+        """가상 잔고 업데이트"""
+        try:
+            old_balance = self.virtual_balance
+            self.virtual_balance += amount
+            
+            # 수익률 계산
+            profit_rate = ((self.virtual_balance - self.initial_balance) / self.initial_balance) * 100 if self.initial_balance > 0 else 0
+            
+            self.logger.info(f"💰 가상 잔고 업데이트 ({transaction_type}): {old_balance:,.0f}원 → {self.virtual_balance:,.0f}원 "
+                           f"(변동: {amount:+,.0f}원, 총수익률: {profit_rate:+.2f}%)")
+            
+        except Exception as e:
+            self.logger.error(f"❌ 가상 잔고 업데이트 오류: {e}")
+    
+    def get_virtual_balance_info(self) -> dict:
+        """가상 잔고 정보 반환"""
+        try:
+            profit_amount = self.virtual_balance - self.initial_balance
+            profit_rate = (profit_amount / self.initial_balance) * 100 if self.initial_balance > 0 else 0
+            
+            return {
+                'current_balance': self.virtual_balance,
+                'initial_balance': self.initial_balance,
+                'profit_amount': profit_amount,
+                'profit_rate': profit_rate,
+                'investment_per_trade': self.virtual_investment_amount
+            }
+        except Exception as e:
+            self.logger.error(f"❌ 가상 잔고 정보 조회 오류: {e}")
+            return {}

@@ -693,7 +693,7 @@ def get_psearch_result(user_id: str, seq: str, tr_cont: str = "") -> Optional[pd
     }
     
     try:
-        logger.debug(f"🔍 종목조건검색조회: user_id={user_id}, seq={seq}")
+        #logger.debug(f"🔍 종목조건검색조회: user_id={user_id}, seq={seq}")
         res = kis._url_fetch(url, tr_id, tr_cont, params)
         
         if res and res.isOK():

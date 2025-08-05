@@ -248,7 +248,7 @@ def _process_chart_data(chart_df: pd.DataFrame) -> pd.DataFrame:
         elif 'date' in chart_df.columns and 'time' in chart_df.columns:
             chart_df = chart_df.sort_values(['date', 'time']).reset_index(drop=True)
         
-        logger.debug(f"📊 분봉 데이터 전처리 완료: {len(chart_df)}건")
+        #logger.debug(f"📊 분봉 데이터 전처리 완료: {len(chart_df)}건")
         return chart_df
         
     except Exception as e:
@@ -395,7 +395,7 @@ def get_inquire_time_itemchartprice(div_code: str = "J", stock_code: str = "",
     }
     
     try:
-        logger.debug(f"📊 주식당일분봉조회: {stock_code}, 시간={input_hour}")
+        #logger.debug(f"📊 주식당일분봉조회: {stock_code}, 시간={input_hour}")
         res = kis._url_fetch(url, tr_id, tr_cont, params)
         
         if res and res.isOK():
@@ -414,7 +414,7 @@ def get_inquire_time_itemchartprice(div_code: str = "J", stock_code: str = "",
                 # 데이터 타입 변환 및 정리
                 chart_df = _process_chart_data(chart_df)
                 
-            logger.info(f"✅ {stock_code} 당일분봉조회 성공: {len(chart_df)}건 (최대 30건)")
+            #logger.info(f"✅ {stock_code} 당일분봉조회 성공: {len(chart_df)}건 (최대 30건)")
             return summary_df, chart_df
             
         else:

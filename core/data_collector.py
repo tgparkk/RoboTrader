@@ -66,7 +66,7 @@ class RealTimeDataCollector:
         while self.is_running:
             # 장중에만 데이터 수집
             if not is_market_open():
-                self.logger.debug("장 마감 시간 - 데이터 수집 중단")
+                #self.logger.debug("장 마감 시간 - 데이터 수집 중단")
                 await asyncio.sleep(60)  # 1분 대기
                 continue
             
