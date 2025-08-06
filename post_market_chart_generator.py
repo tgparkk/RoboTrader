@@ -4,6 +4,7 @@
 """
 import asyncio
 import sys
+import pandas as pd
 from pathlib import Path
 from typing import Optional, Dict, List, Any
 from datetime import datetime
@@ -136,14 +137,27 @@ class PostMarketChartGenerator:
         
         return data
     
-    def _get_cached_indicators(self, cache_key: str, data, strategy):
+    async def _get_cached_indicators(self, cache_key: str, data, strategy, stock_code: str):
         """캐시된 지표 데이터 조회 (없으면 새로 계산)"""
         if cache_key in self._indicator_cache:
             self.logger.debug(f"캐시에서 지표 조회: {cache_key}")
             return self._indicator_cache[cache_key]
         
         # 캐시에 없으면 새로 계산
-        indicators_data = self.data_processor.calculate_indicators(data, strategy)
+        # 가격박스가 포함된 전략이면 일봉 데이터도 수집
+        daily_data = None
+        current_price = None
+        
+        if "price_box" in strategy.indicators:
+            # 29일 일봉 데이터 수집
+            daily_data = await self._collect_daily_data_for_chart(stock_code)
+            # 현재가 추출 (분봉 데이터의 마지막 종가)
+            if not data.empty and 'close' in data.columns:
+                current_price = float(data['close'].iloc[-1])
+        
+        # 일봉 데이터를 포함한 지표 계산
+        indicators_data = self.data_processor.calculate_indicators_with_daily_data(
+            data, strategy, daily_data, current_price)
         
         # 캐시에 저장
         if indicators_data:
@@ -193,7 +207,7 @@ class PostMarketChartGenerator:
                     
                     # 전략별 지표 계산 (캐시 활용)
                     indicator_cache_key = f"{stock_code}_{target_date}_{strategy.timeframe}_{strategy_key}"
-                    indicators_data = self._get_cached_indicators(indicator_cache_key, timeframe_data, strategy)
+                    indicators_data = await self._get_cached_indicators(indicator_cache_key, timeframe_data, strategy, stock_code)
                     
                     # 차트 생성
                     chart_path = self.chart_renderer.create_strategy_chart(
@@ -272,7 +286,7 @@ class PostMarketChartGenerator:
                 price_box_strategy = self.strategy_manager.get_strategy('price_box')
                 if price_box_strategy:
                     indicator_cache_key = f"{stock_code}_{target_date}_1min_price_box"
-                    price_box_indicators = self._get_cached_indicators(indicator_cache_key, timeframe_data, price_box_strategy)
+                    price_box_indicators = await self._get_cached_indicators(indicator_cache_key, timeframe_data, price_box_strategy, stock_code)
                     
                     price_box_path = self.chart_renderer.create_strategy_chart(
                         stock_code, stock_name, target_date, price_box_strategy,
@@ -298,7 +312,7 @@ class PostMarketChartGenerator:
                         self.logger.warning("5분봉 데이터 없음")
                     else:
                         indicator_cache_key = f"{stock_code}_{target_date}_5min_multi_bollinger"
-                        multi_bb_indicators = self._get_cached_indicators(indicator_cache_key, timeframe_data_5min, multi_bb_strategy)
+                        multi_bb_indicators = await self._get_cached_indicators(indicator_cache_key, timeframe_data_5min, multi_bb_strategy, stock_code)
                         
                         # 다중볼린저밴드는 5분봉 기준이므로 전략 정보 수정
                         multi_bb_strategy_5min = type(multi_bb_strategy)(
@@ -490,6 +504,57 @@ class PostMarketChartGenerator:
         except Exception as e:
             self.logger.error(f"❌ 장 마감 후 차트 생성 오류: {e}")
             return {'success': False, 'error': str(e)}
+    
+    async def _collect_daily_data_for_chart(self, stock_code: str) -> Optional[pd.DataFrame]:
+        """
+        TMA30 계산용 59일 일봉 데이터 수집
+        
+        Args:
+            stock_code: 종목코드
+            
+        Returns:
+            pd.DataFrame: 59일 일봉 데이터 (None: 실패)
+        """
+        try:
+            from api.kis_market_api import get_inquire_daily_itemchartprice
+            from datetime import timedelta
+            
+            # 59일 전 날짜 계산 (영업일 기준으로 여유있게 80일 전부터)
+            end_date = now_kst().strftime("%Y%m%d")
+            start_date = (now_kst() - timedelta(days=90)).strftime("%Y%m%d")
+            
+            self.logger.info(f"📊 {stock_code} TMA30 계산용 59일 일봉 데이터 수집 시작 ({start_date} ~ {end_date})")
+            
+            # 일봉 데이터 조회
+            daily_data = get_inquire_daily_itemchartprice(
+                output_dv="2",  # 상세 데이터
+                div_code="J",   # 주식
+                itm_no=stock_code,
+                inqr_strt_dt=start_date,
+                inqr_end_dt=end_date,
+                period_code="D",  # 일봉
+                adj_prc="1"     # 원주가
+            )
+            
+            if daily_data is None or daily_data.empty:
+                self.logger.warning(f"⚠️ {stock_code} TMA30용 일봉 데이터 조회 실패 또는 빈 데이터")
+                return None
+            
+            # 최근 59일 데이터만 선택 (오늘 제외)
+            if len(daily_data) > 59:
+                daily_data = daily_data.head(59)
+            
+            # 데이터 정렬 (오래된 날짜부터)
+            if 'stck_bsop_date' in daily_data.columns:
+                daily_data = daily_data.sort_values('stck_bsop_date', ascending=True)
+            
+            self.logger.info(f"✅ {stock_code} TMA30용 일봉 데이터 수집 성공! ({len(daily_data)}일)")
+            
+            return daily_data
+            
+        except Exception as e:
+            self.logger.error(f"❌ {stock_code} TMA30용 일봉 데이터 수집 오류: {e}")
+            return None
 
 
 def main():

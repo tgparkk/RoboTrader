@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-from typing import Tuple, Optional, Dict
+from typing import Tuple, Optional, Dict, Any
 from datetime import datetime, timedelta
 
 
@@ -110,6 +110,213 @@ class PriceBox:
             'std_down': std_down_series,
             'deviation': deviation
         }
+    
+    @staticmethod
+    def calculate_tma30_with_59days(daily_data: pd.DataFrame, current_price: float) -> Dict[str, Any]:
+        """
+        정확한 30일 삼각이동평균(TMA30) 계산
+        
+        Parameters:
+        - daily_data: 과거 59일 일봉 데이터
+        - current_price: 현재 가격 (오늘)
+        
+        Returns:
+        - TMA30 계산 결과
+        """
+        try:
+            print(f"🔺 TMA30 계산 시작 (59일 데이터 → TMA30)")
+            
+            # 1단계: 종가 컬럼 찾기
+            close_col = None
+            possible_close_cols = ['stck_clpr', 'close', 'Close', 'CLOSE', 'clpr']
+            
+            for col in possible_close_cols:
+                if col in daily_data.columns:
+                    close_col = col
+                    break
+            
+            if close_col is None:
+                print(f"❌ 종가 컬럼을 찾을 수 없습니다. 사용 가능한 컬럼: {daily_data.columns.tolist()}")
+                return {'error': '종가 컬럼을 찾을 수 없습니다'}
+            
+            print(f"   ✅ 종가 컬럼 발견: {close_col}")
+            
+            # 2단계: 59일 종가 데이터 추출
+            daily_closes = daily_data[close_col].astype(float).tolist()
+            print(f"   ✅ 59일 종가 데이터: {len(daily_closes)}개")
+            print(f"   📈 종가 범위: {min(daily_closes):.0f} ~ {max(daily_closes):.0f}")
+            
+            if len(daily_closes) < 59:
+                print(f"⚠️ 데이터 부족: {len(daily_closes)}일 (최소 59일 필요)")
+                return {'error': f'데이터 부족: {len(daily_closes)}일 (최소 59일 필요)'}
+            
+            # 3단계: 60일 데이터 구성 (59일 일봉 + 오늘 현재가)
+            all_prices = daily_closes + [current_price]
+            print(f"   ✅ 60일 전체 데이터 구성 완료")
+            print(f"   📊 최근 5일: {all_prices[-5:]}")
+            
+            # 4단계: 1차 - 30일 SMA 계산 (rolling window)
+            sma30_series = []
+            for i in range(29, len(all_prices)):  # 30번째부터 계산 가능
+                window_30 = all_prices[i-29:i+1]  # 30일 윈도우
+                sma30 = sum(window_30) / 30
+                sma30_series.append(sma30)
+            
+            print(f"   ✅ 1단계: 30일 SMA 계산 완료 ({len(sma30_series)}개)")
+            print(f"   📊 SMA30 범위: {min(sma30_series):.2f} ~ {max(sma30_series):.2f}")
+            
+            # 5단계: 2차 - SMA30의 30일 평균 → TMA30
+            if len(sma30_series) >= 30:
+                # 마지막 30개 SMA30 값의 평균
+                latest_30_sma = sma30_series[-30:]
+                tma30 = sum(latest_30_sma) / 30
+                print(f"   ✅ 2단계: TMA30 계산 완료")
+                print(f"   🎯 최종 TMA30: {tma30:.2f}")
+            else:
+                # 데이터가 부족하면 가능한 만큼으로 계산
+                tma30 = sum(sma30_series) / len(sma30_series)
+                print(f"   ⚠️ 데이터 부족으로 근사 TMA30 계산: {tma30:.2f}")
+            
+            print(f"   📊 TMA30 계산 완료 (59+1일 데이터 사용)")
+            
+            return {
+                'success': True,
+                'tma30': tma30,
+                'sma30_latest': sma30_series[-1] if sma30_series else 0,
+                'data_count': len(all_prices),
+                'sma_count': len(sma30_series),
+                'price_range': f"{min(all_prices):.0f} ~ {max(all_prices):.0f}"
+            }
+            
+        except Exception as e:
+            print(f"❌ 30일 이동평균 계산 오류: {e}")
+            import traceback
+            traceback.print_exc()
+            return {'error': str(e)}
+    
+    @staticmethod
+    def debug_daily_data_collection(daily_data: pd.DataFrame, current_price: float) -> Dict[str, Any]:
+        """
+        일봉 데이터 수집 디버깅 함수
+        """
+        try:
+            print(f"🔍 일봉 데이터 디버깅 시작")
+            print(f"   - daily_data 타입: {type(daily_data)}")
+            print(f"   - daily_data 크기: {daily_data.shape if daily_data is not None else 'None'}")
+            print(f"   - current_price: {current_price}")
+            
+            if daily_data is None:
+                return {'error': 'daily_data가 None입니다'}
+            
+            if daily_data.empty:
+                return {'error': 'daily_data가 비어있습니다'}
+            
+            print(f"   - 컬럼 목록: {daily_data.columns.tolist()}")
+            print(f"   - 데이터 샘플 (처음 3행):")
+            print(daily_data.head(3).to_string())
+            
+            # 종가 컬럼 찾기
+            close_col = None
+            for col in daily_data.columns:
+                if 'clpr' in col or 'close' in col.lower():
+                    close_col = col
+                    break
+            
+            if close_col is None:
+                return {'error': f'종가 컬럼을 찾을 수 없습니다. 사용 가능한 컬럼: {daily_data.columns.tolist()}'}
+            
+            print(f"   - 사용할 종가 컬럼: {close_col}")
+            
+            # 종가 데이터 추출
+            closes = pd.to_numeric(daily_data[close_col], errors='coerce')
+            closes = closes.dropna()
+            
+            print(f"   - 유효한 종가 데이터 개수: {len(closes)}")
+            print(f"   - 종가 범위: {closes.min():.0f} ~ {closes.max():.0f}")
+            
+            if len(closes) == 0:
+                return {'error': '유효한 종가 데이터가 없습니다'}
+            
+            # 간단한 30일 단순이동평균 테스트
+            combined = pd.concat([closes, pd.Series([current_price])], ignore_index=True)
+            simple_ma = combined.mean()
+            
+            print(f"   - 전체 평균: {simple_ma:.2f}")
+            print(f"   - 마지막 5개 종가: {closes.tail(5).tolist()}")
+            
+            return {
+                'success': True,
+                'close_column': close_col,
+                'data_count': len(closes),
+                'price_range': f"{closes.min():.0f} ~ {closes.max():.0f}",
+                'simple_average': simple_ma,
+                'closes': closes,
+                'combined': combined
+            }
+            
+        except Exception as e:
+            print(f"❌ 디버깅 오류: {e}")
+            import traceback
+            traceback.print_exc()
+            return {'error': str(e)}
+    
+    @staticmethod
+    def calculate_price_box_with_daily_data(daily_data: pd.DataFrame, current_price: float,
+                                          std_multiplier: float = 2.0) -> Dict[str, float]:
+        """
+        일봉 데이터와 현재가를 조합한 가격박스 계산 (HTS 방식)
+        
+        Parameters:
+        - daily_data: 과거 29일 일봉 데이터
+        - current_price: 현재 가격 (오늘)
+        - std_multiplier: 표준편차 배수
+        
+        Returns:
+        - 가격박스 값들 (단일 값)
+        """
+        try:
+            # 일봉 종가 추출
+            if 'stck_clpr' in daily_data.columns:
+                daily_closes = pd.to_numeric(daily_data['stck_clpr'], errors='coerce')
+            elif 'close' in daily_data.columns:
+                daily_closes = pd.to_numeric(daily_data['close'], errors='coerce')
+            else:
+                # 컬럼명 추정
+                close_candidates = [col for col in daily_data.columns if 'close' in col.lower() or 'clpr' in col.lower()]
+                if close_candidates:
+                    daily_closes = pd.to_numeric(daily_data[close_candidates[0]], errors='coerce')
+                else:
+                    raise ValueError("종가 컬럼을 찾을 수 없습니다")
+            
+            # NaN 제거
+            daily_closes = daily_closes.dropna()
+            
+            if len(daily_closes) == 0:
+                raise ValueError("유효한 일봉 데이터가 없습니다")
+            
+            # 29일 + 오늘 = 30일 데이터 구성
+            combined_prices = pd.concat([daily_closes, pd.Series([current_price])], ignore_index=True)
+            
+            # 삼각이동평균 계산 (30일)
+            center_line = PriceBox.triangular_moving_average(combined_prices, 30).iloc[-1]
+            
+            # 조건부 편차 계산
+            deviation_data = PriceBox.calculate_conditional_deviations(combined_prices, 
+                                                                    pd.Series([center_line] * len(combined_prices)))
+            
+            # 박스 상/하한선 계산 (마지막 값 사용)
+            upper_band = center_line + deviation_data['avg_up'].iloc[-1] + std_multiplier * deviation_data['std_up'].iloc[-1]
+            lower_band = center_line + deviation_data['avg_down'].iloc[-1] - std_multiplier * deviation_data['std_down'].iloc[-1]
+            
+            return {
+                'center_line': center_line,
+                'upper_band': upper_band,
+                'lower_band': lower_band,
+                'data_count': len(combined_prices)
+            }
+            
+        except Exception as e:
+            raise ValueError(f"가격박스 계산 오류: {e}")
     
     @staticmethod
     def calculate_price_box(prices: pd.Series, period: int = 30, 

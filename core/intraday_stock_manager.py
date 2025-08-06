@@ -16,6 +16,7 @@ from api.kis_chart_api import (
     get_inquire_time_dailychartprice,
     get_full_trading_day_data_async
 )
+from api.kis_market_api import get_inquire_daily_itemchartprice
 
 
 logger = setup_logger(__name__)
@@ -27,8 +28,9 @@ class StockMinuteData:
     stock_code: str
     stock_name: str
     selected_time: datetime
-    historical_data: pd.DataFrame = field(default_factory=pd.DataFrame)
-    realtime_data: pd.DataFrame = field(default_factory=pd.DataFrame)
+    historical_data: pd.DataFrame = field(default_factory=pd.DataFrame)  # 오늘 분봉 데이터
+    realtime_data: pd.DataFrame = field(default_factory=pd.DataFrame)    # 실시간 분봉 데이터
+    daily_data: pd.DataFrame = field(default_factory=pd.DataFrame)       # 과거 29일 일봉 데이터 (가격박스용)
     last_update: Optional[datetime] = None
     data_complete: bool = False
     
@@ -199,10 +201,14 @@ class IntradayStockManager:
                 # 시간 컬럼이 없으면 전체 데이터 사용
                 filtered_data = historical_data.copy()
             
+            # 과거 29일 일봉 데이터 수집 (가격박스 계산용)
+            daily_data = await self._collect_daily_data_for_price_box(stock_code)
+            
             # 메모리에 저장
             with self._lock:
                 if stock_code in self.selected_stocks:
                     self.selected_stocks[stock_code].historical_data = filtered_data
+                    self.selected_stocks[stock_code].daily_data = daily_data if daily_data is not None else pd.DataFrame()
                     self.selected_stocks[stock_code].data_complete = True
                     self.selected_stocks[stock_code].last_update = now_kst()
             
@@ -615,3 +621,52 @@ class IntradayStockManager:
             
         except Exception as e:
             self.logger.error(f"❌ 실시간 데이터 일괄 업데이트 오류: {e}")
+    
+    async def _collect_daily_data_for_price_box(self, stock_code: str) -> Optional[pd.DataFrame]:
+        """
+        가격박스 계산을 위한 과거 29일 일봉 데이터 수집
+        
+        Args:
+            stock_code: 종목코드
+            
+        Returns:
+            pd.DataFrame: 29일 일봉 데이터 (None: 실패)
+        """
+        try:
+            # 29일 전 날짜 계산 (영업일 기준으로 여유있게 40일 전부터)
+            from datetime import timedelta
+            end_date = now_kst().strftime("%Y%m%d")
+            start_date = (now_kst() - timedelta(days=40)).strftime("%Y%m%d")
+            
+            self.logger.info(f"📊 {stock_code} 일봉 데이터 수집 시작 ({start_date} ~ {end_date})")
+            
+            # 일봉 데이터 조회
+            daily_data = get_inquire_daily_itemchartprice(
+                output_dv="2",  # 상세 데이터
+                div_code="J",   # 주식
+                itm_no=stock_code,
+                inqr_strt_dt=start_date,
+                inqr_end_dt=end_date,
+                period_code="D",  # 일봉
+                adj_prc="1"     # 원주가
+            )
+            
+            if daily_data is None or daily_data.empty:
+                self.logger.warning(f"⚠️ {stock_code} 일봉 데이터 조회 실패 또는 빈 데이터")
+                return None
+            
+            # 최근 29일 데이터만 선택 (오늘 제외)
+            if len(daily_data) > 29:
+                daily_data = daily_data.head(29)
+            
+            # 데이터 정렬 (오래된 날짜부터)
+            if 'stck_bsop_date' in daily_data.columns:
+                daily_data = daily_data.sort_values('stck_bsop_date', ascending=True)
+            
+            self.logger.info(f"✅ {stock_code} 일봉 데이터 수집 성공! ({len(daily_data)}일)")
+            
+            return daily_data
+            
+        except Exception as e:
+            self.logger.error(f"❌ {stock_code} 일봉 데이터 수집 오류: {e}")
+            return None

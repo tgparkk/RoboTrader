@@ -321,6 +321,94 @@ class DataProcessor:
             self.logger.error(f"❌ 5분봉 변환 오류: {e}")
             return data
     
+    def calculate_indicators_with_daily_data(self, data: pd.DataFrame, strategy, 
+                                            daily_data: Optional[pd.DataFrame] = None,
+                                            current_price: Optional[float] = None) -> Dict[str, Any]:
+        """
+        일봉 데이터를 포함한 지표 계산 (가격박스용)
+        
+        Args:
+            data: 분봉 가격 데이터
+            strategy: 거래 전략
+            daily_data: 과거 29일 일봉 데이터
+            current_price: 현재 가격
+            
+        Returns:
+            Dict: 계산된 지표 데이터
+        """
+        try:
+            indicators_data = {}
+            
+            if 'close' not in data.columns:
+                self.logger.warning("가격 데이터에 'close' 컬럼이 없음")
+                return {}
+            
+            for indicator_name in strategy.indicators:
+                if indicator_name == "price_box":
+                    # 가격박스 계산 (일봉 데이터 우선 사용)
+                    try:
+                        if daily_data is not None and not daily_data.empty and current_price is not None:
+                            # 완전한 가격박스 계산 (HTS 방식)
+                            price_box_result = PriceBox.calculate_price_box_with_daily_data(daily_data, current_price)
+                            
+                            # 수평선으로 표시
+                            data_len = len(data)
+                            indicators_data["price_box"] = {
+                                'center': pd.Series([price_box_result['center_line']] * data_len, index=data.index),
+                                'resistance': pd.Series([price_box_result['upper_band']] * data_len, index=data.index),
+                                'support': pd.Series([price_box_result['lower_band']] * data_len, index=data.index)
+                            }
+                            self.logger.info(f"✅ 완전한 가격박스 계산 성공: 중심선={price_box_result['center_line']:.2f}, 상한선={price_box_result['upper_band']:.2f}, 하한선={price_box_result['lower_band']:.2f} ({price_box_result['data_count']}일 데이터)")
+                        else:
+                            # 폴백: 기존 방식 (분봉 데이터만 사용)
+                            price_box_result = PriceBox.calculate_price_box(data['close'])
+                            if price_box_result and 'center_line' in price_box_result:
+                                indicators_data["price_box"] = {
+                                    'center': price_box_result['center_line'],
+                                    'resistance': price_box_result['upper_band'],
+                                    'support': price_box_result['lower_band']
+                                }
+                            self.logger.warning("가격박스 계산: 일봉 데이터 없음, 분봉 방식 사용")
+                    except Exception as e:
+                        self.logger.error(f"가격박스 계산 오류: {e}")
+                
+                elif indicator_name == "bisector_line":
+                    # 이등분선 계산
+                    try:
+                        if 'high' in data.columns and 'low' in data.columns:
+                            bisector_values = BisectorLine.calculate_bisector_line(data['high'], data['low'])
+                            if bisector_values is not None:
+                                indicators_data["bisector_line"] = {
+                                    'line_values': bisector_values
+                                }
+                    except Exception as e:
+                        self.logger.error(f"이등분선 계산 오류: {e}")
+                
+                elif indicator_name == "bollinger_bands":
+                    # 볼린저밴드 계산
+                    try:
+                        bb_result = BollingerBands.calculate_bollinger_bands(data['close'])
+                        if bb_result and 'center_line' in bb_result:
+                            indicators_data["bollinger_bands"] = bb_result
+                    except Exception as e:
+                        self.logger.error(f"볼린저밴드 계산 오류: {e}")
+                
+                elif indicator_name == "multi_bollinger_bands":
+                    # 다중 볼린저밴드 계산
+                    try:
+                        from core.indicators.multi_bollinger_bands import MultiBollingerBands
+                        multi_bb = MultiBollingerBands.calculate_multi_bollinger_bands(data['close'])
+                        if multi_bb:
+                            indicators_data["multi_bollinger_bands"] = multi_bb
+                    except Exception as e:
+                        self.logger.error(f"다중 볼린저밴드 계산 오류: {e}")
+            
+            return indicators_data
+            
+        except Exception as e:
+            self.logger.error(f"지표 계산 오류: {e}")
+            return {}
+    
     def calculate_indicators(self, data: pd.DataFrame, strategy) -> Dict[str, Any]:
         """
         전략에 따른 지표 계산
