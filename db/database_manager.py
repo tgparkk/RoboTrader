@@ -480,7 +480,7 @@ class DatabaseManager:
                 
                 df = pd.read_sql_query(query, conn)
                 if not df.empty:
-                    df['buy_time'] = pd.to_datetime(df['buy_time'])
+                    df['buy_time'] = pd.to_datetime(df['buy_time'], format='ISO8601', utc=True)
                 
                 return df
                 

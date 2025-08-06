@@ -15,6 +15,12 @@ logger = setup_logger(__name__)
 def get_order_cash(ord_dv: str = "", itm_no: str = "", qty: int = 0, unpr: int = 0,
                    tr_cont: str = "") -> Optional[pd.DataFrame]:
     """주식주문(현금) - 매수/매도"""
+    '''
+        EXCG_ID_DVSN_CD	거래소ID구분코드	String	N	3	한국거래소 : KRX
+        대체거래소 (넥스트레이드) : NXT
+        SOR (Smart Order Routing) : SOR
+        → 미입력시 KRX로 진행되며, 모의투자는 KRX만 가능
+    '''
     url = '/uapi/domestic-stock/v1/trading/order-cash'
 
     if ord_dv == "buy":
@@ -43,7 +49,8 @@ def get_order_cash(ord_dv: str = "", itm_no: str = "", qty: int = 0, unpr: int =
         "PDNO": itm_no,                         # 종목코드(6자리)
         "ORD_DVSN": "00",                       # 주문구분 00:지정가, 01:시장가
         "ORD_QTY": str(int(qty)),               # 주문주식수
-        "ORD_UNPR": str(int(unpr))              # 주문단가
+        "ORD_UNPR": str(int(unpr)),             # 주문단가
+        "EXCG_ID_DVSN_CD": "SOR"                       
     }
 
     res = kis._url_fetch(url, tr_id, tr_cont, params, postFlag=True)

@@ -309,10 +309,13 @@ class DayTradingBot:
                         continue
                     
                     # 임시 TradingStock 객체 생성
-                    from core.models import TradingStock, Position
+                    from core.models import TradingStock, Position, StockState
+                    from utils.korean_time import now_kst
                     trading_stock = TradingStock(
                         stock_code=stock_code,
                         stock_name=stock_name,
+                        state=StockState.POSITIONED,
+                        selected_time=now_kst(),
                         selection_reason="가상매수"
                     )
                     
@@ -469,7 +472,7 @@ class DayTradingBot:
             
             # 조건검색 seq 리스트 (필요에 따라 여러 조건 추가 가능)
             #condition_seqs = ["0", "1", "2"]  # 예: 0, 1, 2번 조건
-            condition_seqs = ["0"]
+            condition_seqs = ["2"]
             
             all_condition_results = []
             

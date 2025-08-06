@@ -720,7 +720,8 @@ class TradingDecisionEngine:
                     # 실제 5분봉 시간 생성 (구간 끝 + 1분)
                     if hasattr(data.index, 'date') and len(data.index) > 0:
                         base_date = data.index[0].date()
-                        end_time = pd.Timestamp.combine(base_date, pd.Timestamp(hour=target_hour, minute=target_min, second=0).time())
+                        from datetime import time
+                        end_time = pd.Timestamp.combine(base_date, time(hour=target_hour, minute=target_min, second=0))
                     else:
                         # 인덱스가 datetime이 아닌 경우 기본값 사용
                         end_time = pd.Timestamp(f'2023-01-01 {target_hour:02d}:{target_min:02d}:00')
@@ -729,7 +730,8 @@ class TradingDecisionEngine:
                     if target_hour > 15 or (target_hour == 15 and target_min > 30):
                         if hasattr(data.index, 'date') and len(data.index) > 0:
                             base_date = data.index[0].date()
-                            end_time = pd.Timestamp.combine(base_date, pd.Timestamp(hour=15, minute=30, second=0).time())
+                            from datetime import time
+                            end_time = pd.Timestamp.combine(base_date, time(hour=15, minute=30, second=0))
                         else:
                             end_time = pd.Timestamp('2023-01-01 15:30:00')
                     
