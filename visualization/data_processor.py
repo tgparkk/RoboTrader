@@ -240,7 +240,7 @@ class DataProcessor:
             return data
     
     def _resample_to_5min(self, data: pd.DataFrame) -> pd.DataFrame:
-        """1분봉을 5분봉으로 변환 (HTS와 동일한 방식 - 시간 기준 그룹핑)"""
+        """1분봉을 5분봉으로 변환 (정확한 5분 간격)"""
         try:
             if data is None or len(data) < 5:
                 return data
@@ -263,59 +263,34 @@ class DataProcessor:
             # 시간순 정렬 (중요!)
             data = data.sort_values('datetime').reset_index(drop=True)
             
-            # HTS와 동일하게 시간 기준으로 5분봉 그룹핑
-            data_5min_list = []
+            # pandas의 resample 기능을 사용하여 정확한 5분 간격으로 변환
+            data = data.set_index('datetime')
             
-            # 시간을 분 단위로 변환 (09:00 = 0분 기준)
-            data['minutes_from_9am'] = (data['datetime'].dt.hour - 9) * 60 + data['datetime'].dt.minute
+            # 5분 간격으로 리샘플링 (09:00, 09:05, 09:10, ...)
+            resampled = data.resample('5T', origin='start').agg({
+                'open': 'first',
+                'high': 'max',
+                'low': 'min',
+                'close': 'last',
+                'volume': 'sum'
+            }).dropna()
             
-            # 5분 단위로 그룹핑 (0-4분→그룹0, 5-9분→그룹1, ...)
-            # 하지만 실제로는 5분간의 데이터를 포함해야 함
-            grouped = data.groupby(data['minutes_from_9am'] // 5)
+            # 인덱스를 datetime 컬럼으로 복원
+            resampled = resampled.reset_index()
             
-            for group_id, group in grouped:
-                if len(group) > 0:
-                    # 5분봉 시간은 해당 구간의 끝 + 1분 (5분간 포함)
-                    # 예: 09:00~09:04 → 09:05, 09:05~09:09 → 09:10
-                    base_minute = group_id * 5
-                    end_minute = base_minute + 5  # 5분 후가 캔들 시간
-                    
-                    # 09:00 기준으로 계산한 절대 시간
-                    target_hour = 9 + (end_minute // 60)
-                    target_min = end_minute % 60
-                    
-                    # 실제 5분봉 시간 생성 (구간 끝 + 1분)
-                    base_date = data['datetime'].iloc[0]
-                    end_time = pd.Timestamp(year=base_date.year, month=base_date.month, day=base_date.day, 
-                                          hour=target_hour, minute=target_min, second=0)
-                    
-                    # 15:30을 넘지 않도록 제한
-                    if target_hour > 15 or (target_hour == 15 and target_min > 30):
-                        end_time = pd.Timestamp(year=base_date.year, month=base_date.month, day=base_date.day,
-                                              hour=15, minute=30, second=0)
-                    
-                    data_5min_list.append({
-                        'datetime': end_time,
-                        'open': group['open'].iloc[0],
-                        'high': group['high'].max(),
-                        'low': group['low'].min(), 
-                        'close': group['close'].iloc[-1],
-                        'volume': group['volume'].sum(),
-                        # 추가 정보
-                        'time': end_time.strftime('%H%M%S') if hasattr(end_time, 'strftime') else None
-                    })
+            # time 컬럼 추가 (HHMMSS 형식)
+            resampled['time'] = resampled['datetime'].dt.strftime('%H%M%S')
             
-            data_5min = pd.DataFrame(data_5min_list)
-            
-            self.logger.debug(f"📊 HTS 방식 5분봉 변환: {len(data)}개 → {len(data_5min)}개 완료")
-            if not data_5min.empty:
-                self.logger.debug(f"시간 범위: {data_5min['datetime'].iloc[0]} ~ {data_5min['datetime'].iloc[-1]}")
+            self.logger.debug(f"📊 5분봉 변환: {len(data)}개 → {len(resampled)}개 완료")
+            if not resampled.empty:
+                self.logger.debug(f"시간 범위: {resampled['datetime'].iloc[0]} ~ {resampled['datetime'].iloc[-1]}")
                 # 시간 간격 확인
-                if len(data_5min) > 1:
-                    time_diffs = data_5min['datetime'].diff().dropna()
-                    self.logger.debug(f"5분봉 시간 간격: {time_diffs.iloc[0] if len(time_diffs) > 0 else 'N/A'}")
+                if len(resampled) > 1:
+                    time_diffs = resampled['datetime'].diff().dropna()
+                    first_diff = time_diffs.iloc[0] if len(time_diffs) > 0 else 'N/A'
+                    self.logger.debug(f"5분봉 시간 간격: {first_diff}")
             
-            return data_5min
+            return resampled
             
         except Exception as e:
             self.logger.error(f"❌ 5분봉 변환 오류: {e}")
