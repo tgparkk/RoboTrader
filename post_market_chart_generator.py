@@ -519,11 +519,11 @@ class PostMarketChartGenerator:
             from api.kis_market_api import get_inquire_daily_itemchartprice
             from datetime import timedelta
             
-            # 59일 전 날짜 계산 (영업일 기준으로 여유있게 80일 전부터)
+            # 88일 전 날짜 계산 (영업일 기준으로 여유있게 120일 전부터)
             end_date = now_kst().strftime("%Y%m%d")
-            start_date = (now_kst() - timedelta(days=90)).strftime("%Y%m%d")
+            start_date = (now_kst() - timedelta(days=130)).strftime("%Y%m%d")
             
-            self.logger.info(f"📊 {stock_code} TMA30 계산용 59일 일봉 데이터 수집 시작 ({start_date} ~ {end_date})")
+            self.logger.info(f"📊 {stock_code} TMA30 계산용 88일 일봉 데이터 수집 시작 ({start_date} ~ {end_date})")
             
             # 일봉 데이터 조회
             daily_data = get_inquire_daily_itemchartprice(
@@ -540,15 +540,15 @@ class PostMarketChartGenerator:
                 self.logger.warning(f"⚠️ {stock_code} TMA30용 일봉 데이터 조회 실패 또는 빈 데이터")
                 return None
             
-            # 최근 59일 데이터만 선택 (오늘 제외)
-            if len(daily_data) > 59:
-                daily_data = daily_data.head(59)
+            # 최근 88일 데이터만 선택 (오늘 제외)
+            if len(daily_data) > 88:
+                daily_data = daily_data.head(88)
             
             # 데이터 정렬 (오래된 날짜부터)
             if 'stck_bsop_date' in daily_data.columns:
                 daily_data = daily_data.sort_values('stck_bsop_date', ascending=True)
             
-            self.logger.info(f"✅ {stock_code} TMA30용 일봉 데이터 수집 성공! ({len(daily_data)}일)")
+            self.logger.info(f"✅ {stock_code} TMA30용 일봉 데이터 수집 성공! ({len(daily_data)}일, 9시부터 계산 가능)")
             
             return daily_data
             

@@ -30,7 +30,7 @@ class PriceBox:
     @staticmethod
     def triangular_moving_average(prices: pd.Series, period: int = 30) -> pd.Series:
         """
-        삼각 이동평균 계산 (Static Method)
+        삼각 이동평균 계산 (HTS 방식과 동일)
         
         Parameters:
         - prices: 가격 데이터 (pandas Series)
@@ -39,11 +39,13 @@ class PriceBox:
         Returns:
         - 삼각 이동평균 (pandas Series)
         """
-        # 첫 번째 단순 이동평균
-        sma1 = prices.rolling(window=period, min_periods=1).mean()
+        # HTS와 동일하게: 정확한 기간만큼 데이터가 있어야 계산
+        # 첫 번째 단순 이동평균 (30일 필요)
+        sma1 = prices.rolling(window=period, min_periods=period).mean()
         
-        # 두 번째 단순 이동평균 (삼각 이동평균)
-        tma = sma1.rolling(window=period, min_periods=1).mean()
+        # 두 번째 단순 이동평균 (추가로 30일 더 필요 = 총 59일)
+        # 하지만 실제로는 SMA1 결과의 30일 평균이므로 min_periods=period 사용
+        tma = sma1.rolling(window=period, min_periods=period).mean()
         
         return tma
     

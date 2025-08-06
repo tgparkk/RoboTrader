@@ -348,17 +348,45 @@ class DataProcessor:
                     # 가격박스 계산 (일봉 데이터 우선 사용)
                     try:
                         if daily_data is not None and not daily_data.empty and current_price is not None:
-                            # 완전한 가격박스 계산 (HTS 방식)
-                            price_box_result = PriceBox.calculate_price_box_with_daily_data(daily_data, current_price)
+                            # 일봉 + 분봉 조합으로 정확한 곡선 형태 가격박스 계산
+                            # 1. 일봉 29일 + 현재가로 기준점 계산
+                            reference_result = PriceBox.calculate_price_box_with_daily_data(daily_data, current_price)
+                            self.logger.info(f"📊 일봉 기준 가격박스: 중심선={reference_result['center_line']:.2f}, 상한선={reference_result['upper_band']:.2f}, 하한선={reference_result['lower_band']:.2f}")
                             
-                            # 수평선으로 표시
-                            data_len = len(data)
-                            indicators_data["price_box"] = {
-                                'center': pd.Series([price_box_result['center_line']] * data_len, index=data.index),
-                                'resistance': pd.Series([price_box_result['upper_band']] * data_len, index=data.index),
-                                'support': pd.Series([price_box_result['lower_band']] * data_len, index=data.index)
-                            }
-                            self.logger.info(f"✅ 완전한 가격박스 계산 성공: 중심선={price_box_result['center_line']:.2f}, 상한선={price_box_result['upper_band']:.2f}, 하한선={price_box_result['lower_band']:.2f} ({price_box_result['data_count']}일 데이터)")
+                            # 2. 일봉 데이터와 분봉 데이터 조합하여 30일 데이터 생성
+                            combined_prices = self._combine_daily_and_intraday_data(daily_data, data, current_price)
+                            
+                            # 3. 조합된 데이터로 실시간 가격박스 계산 (곡선 형태)
+                            if combined_prices is not None and len(combined_prices) >= 30:
+                                price_box_result = PriceBox.calculate_price_box(combined_prices, period=30)
+                                if price_box_result and 'center_line' in price_box_result:
+                                    # HTS와 동일한 시간 기준으로 30분 앞으로 시프트
+                                    shift_periods = 30  # 30분 앞으로
+                                    
+                                    indicators_data["price_box"] = {
+                                        'center': price_box_result['center_line'].shift(-shift_periods),
+                                        'resistance': price_box_result['upper_band'].shift(-shift_periods), 
+                                        'support': price_box_result['lower_band'].shift(-shift_periods)
+                                    }
+                                    self.logger.info(f"✅ 일봉+분봉 조합 가격박스 계산 성공 (곡선 형태, 30분 앞으로 시프트)")
+                                else:
+                                    # 조합 실패 시 일봉 기준 수평선 사용
+                                    data_len = len(data)
+                                    indicators_data["price_box"] = {
+                                        'center': pd.Series([reference_result['center_line']] * data_len, index=data.index),
+                                        'resistance': pd.Series([reference_result['upper_band']] * data_len, index=data.index),
+                                        'support': pd.Series([reference_result['lower_band']] * data_len, index=data.index)
+                                    }
+                                    self.logger.warning("일봉+분봉 조합 실패, 일봉 기준 수평선 사용")
+                            else:
+                                # 데이터 부족 시 일봉 기준 수평선 사용
+                                data_len = len(data)
+                                indicators_data["price_box"] = {
+                                    'center': pd.Series([reference_result['center_line']] * data_len, index=data.index),
+                                    'resistance': pd.Series([reference_result['upper_band']] * data_len, index=data.index),
+                                    'support': pd.Series([reference_result['lower_band']] * data_len, index=data.index)
+                                }
+                                self.logger.warning("조합 데이터 부족, 일봉 기준 수평선 사용")
                         else:
                             # 폴백: 기존 방식 (분봉 데이터만 사용)
                             price_box_result = PriceBox.calculate_price_box(data['close'])
@@ -408,6 +436,84 @@ class DataProcessor:
         except Exception as e:
             self.logger.error(f"지표 계산 오류: {e}")
             return {}
+    
+    def _combine_daily_and_intraday_data(self, daily_data: pd.DataFrame, intraday_data: pd.DataFrame, 
+                                       current_price: Optional[float] = None) -> Optional[pd.Series]:
+        """
+        일봉 데이터와 분봉 데이터를 조합하여 30일 가격 시리즈 생성
+        
+        Args:
+            daily_data: 과거 일봉 데이터 (29일)
+            intraday_data: 당일 분봉 데이터 
+            current_price: 현재 가격 (선택사항)
+            
+        Returns:
+            pd.Series: 조합된 30일 가격 시리즈 (29일 일봉 종가 + 당일 분봉 종가들)
+        """
+        try:
+            # 1. 일봉 종가 추출 (29일)
+            close_col = None
+            for col in ['stck_clpr', 'close', 'Close', 'CLOSE', 'clpr']:
+                if col in daily_data.columns:
+                    close_col = col
+                    break
+            
+            if close_col is None:
+                self.logger.warning("일봉 데이터에서 종가 컬럼을 찾을 수 없음")
+                return None
+            
+            daily_closes = pd.to_numeric(daily_data[close_col], errors='coerce').dropna()
+            
+            if len(daily_closes) < 88:
+                self.logger.warning(f"일봉 데이터 부족: {len(daily_closes)}일 (9시부터 TMA30 계산을 위해 최소 88일 필요)")
+                return None
+            
+            # 최근 88일 선택 (당일 9시 첫 분봉부터 TMA30 계산 가능하도록)
+            daily_closes = daily_closes.tail(88)
+            
+            # 2. 분봉 종가 추출 (당일)
+            if 'close' not in intraday_data.columns:
+                self.logger.warning("분봉 데이터에 'close' 컬럼이 없음")
+                return None
+            
+            intraday_closes = pd.to_numeric(intraday_data['close'], errors='coerce').dropna()
+            
+            if len(intraday_closes) == 0:
+                self.logger.warning("유효한 분봉 종가 데이터가 없음")
+                return None
+            
+            # 3. 데이터 조합: [29일 일봉 종가] + [당일 분봉 종가들]
+            # 29일 일봉 종가를 리스트로 변환
+            daily_list = daily_closes.tolist()
+            
+            # 당일 분봉 종가를 리스트로 변환
+            intraday_list = intraday_closes.tolist()
+            
+            # 조합
+            combined_list = daily_list + intraday_list
+            
+            # pandas Series로 변환 (인덱스는 분봉 데이터와 동일하게 맞춤)
+            # 마지막 분봉 개수만큼 인덱스 사용
+            if len(intraday_list) > 0:
+                # 분봉 데이터 길이에 맞춰 전체 조합 데이터를 슬라이싱
+                combined_series = pd.Series(combined_list, index=range(len(combined_list)))
+                
+                # 분봉 인덱스에 맞게 마지막 부분만 추출하여 반환
+                intraday_length = len(intraday_data)
+                if len(combined_series) >= intraday_length:
+                    result_series = pd.Series(combined_list[-intraday_length:], index=intraday_data.index)
+                else:
+                    # 데이터가 부족한 경우 사용 가능한 모든 데이터 사용
+                    result_series = pd.Series(combined_list, index=intraday_data.index[:len(combined_list)])
+                
+                self.logger.info(f"✅ 일봉+분봉 데이터 조합 성공: 일봉 {len(daily_list)}일 (과거 88일) + 분봉 {len(intraday_list)}개 = 총 {len(combined_list)}개")
+                return result_series
+            else:
+                return None
+            
+        except Exception as e:
+            self.logger.error(f"일봉+분봉 데이터 조합 오류: {e}")
+            return None
     
     def calculate_indicators(self, data: pd.DataFrame, strategy) -> Dict[str, Any]:
         """
