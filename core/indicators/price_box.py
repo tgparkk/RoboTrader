@@ -39,20 +39,203 @@ class PriceBox:
         Returns:
         - 삼각 이동평균 (pandas Series)
         """
-        # HTS와 동일하게: 정확한 기간만큼 데이터가 있어야 계산
+        # HTS와 동일하게: 처음부터 계산 가능하도록 min_periods=1 사용
         # 첫 번째 단순 이동평균 (30일 필요)
-        sma1 = prices.rolling(window=period, min_periods=period).mean()
+        sma1 = prices.rolling(window=period, min_periods=1).mean()
         
-        # 두 번째 단순 이동평균 (추가로 30일 더 필요 = 총 59일)
-        # 하지만 실제로는 SMA1 결과의 30일 평균이므로 min_periods=period 사용
-        tma = sma1.rolling(window=period, min_periods=period).mean()
+        # 두 번째 단순 이동평균 (SMA1의 30일 평균)
+        tma = sma1.rolling(window=period, min_periods=1).mean()
         
         return tma
     
     @staticmethod
+    def ma_triangular(prices: pd.Series, period: int = 30) -> pd.Series:
+        """
+        중심선: MA(가격, 이평기간, 이평방법)
+        가격: 종가, 이평기간: 30, 이평방법: 삼각
+        
+        Parameters:
+        - prices: 종가 데이터 (pandas Series)
+        - period: 이동평균 기간 (기본값: 30)
+        
+        Returns:
+        - 삼각 이동평균 (pandas Series)
+        """
+        return PriceBox.triangular_moving_average(prices, period)
+    
+    @staticmethod
+    def avg_if(data: pd.Series, condition: int, default: float = 0.0, window: int = 30) -> pd.Series:
+        """
+        HTS의 AvgIf 함수 정확한 구현
+        각 시점에서 과거 window 기간 동안 조건에 맞는 값들의 평균
+        
+        Parameters:
+        - data: 편차 데이터 (가격 - 중심선)
+        - condition: 1 (양수만), -1 (음수만), 0 (전체)
+        - default: 조건에 맞는 값이 없을 때 기본값
+        - window: 롤링 윈도우 크기 (기본값: 30)
+        
+        Returns:
+        - 각 시점의 조건부 평균값 Series
+        """
+        result = []
+        
+        for i in range(len(data)):
+            # 현재 시점에서 과거 window 개만큼의 데이터 추출
+            start_idx = max(0, i - window + 1)
+            window_data = data.iloc[start_idx:i+1]
+            
+            # 조건에 따른 필터링
+            if condition == 1:  # 양수만 (중심선보다 높은 가격들)
+                filtered_data = window_data[window_data > 0]
+            elif condition == -1:  # 음수만 (중심선보다 낮은 가격들)
+                filtered_data = window_data[window_data < 0]
+            else:  # 전체
+                filtered_data = window_data
+            
+            # 평균 계산
+            if len(filtered_data) > 0:
+                result.append(filtered_data.mean())
+            else:
+                result.append(default)
+        
+        return pd.Series(result, index=data.index)
+    
+    @staticmethod
+    def stdev_if(data: pd.Series, condition: int, default: float = 0.0, window: int = 30) -> pd.Series:
+        """
+        HTS의 StdevIf 함수 정확한 구현
+        각 시점에서 과거 window 기간 동안 조건에 맞는 값들의 표준편차
+        
+        Parameters:
+        - data: 편차 데이터 (가격 - 중심선)
+        - condition: 1 (양수만), -1 (음수만), 0 (전체)
+        - default: 조건에 맞는 값이 없을 때 기본값
+        - window: 롤링 윈도우 크기 (기본값: 30)
+        
+        Returns:
+        - 각 시점의 조건부 표준편차 Series
+        """
+        result = []
+        
+        for i in range(len(data)):
+            # 현재 시점에서 과거 window 개만큼의 데이터 추출
+            start_idx = max(0, i - window + 1)
+            window_data = data.iloc[start_idx:i+1]
+            
+            # 조건에 따른 필터링
+            if condition == 1:  # 양수만 (중심선보다 높은 가격들)
+                filtered_data = window_data[window_data > 0]
+            elif condition == -1:  # 음수만 (중심선보다 낮은 가격들)
+                filtered_data = window_data[window_data < 0]
+            else:  # 전체
+                filtered_data = window_data
+            
+            # 표준편차 계산 (최소 2개 값 필요)
+            if len(filtered_data) > 1:
+                result.append(filtered_data.std())
+            else:
+                result.append(default)
+        
+        return pd.Series(result, index=data.index)
+    
+    @staticmethod
+    def calculate_upper_band(prices: pd.Series, period: int = 30) -> pd.Series:
+        """
+        상한선 계산
+        A = MA(가격, 이평기간, 이평방법)
+        상한선 = A + AvgIf(가격-A, 1, 0.0) + 2*StdevIf(가격-A, 1, 0.0)
+        
+        Parameters:
+        - prices: 종가 데이터
+        - period: 이동평균 기간 (기본값: 30)
+        
+        Returns:
+        - 상한선 Series
+        """
+        # 중심선 계산
+        center_line = PriceBox.ma_triangular(prices, period)
+        
+        # 편차 계산 (가격 - 중심선)
+        deviation = prices - center_line
+        
+        # AvgIf(편차, 1, 0.0) - 양수 편차의 평균 (롤링 윈도우)
+        avg_positive = PriceBox.avg_if(deviation, 1, 0.0, window=period)
+        
+        # 2 * StdevIf(편차, 1, 0.0) - 양수 편차의 표준편차 * 2 (롤링 윈도우)
+        stdev_positive = PriceBox.stdev_if(deviation, 1, 0.0, window=period) * 2
+        
+        # 상한선 = A + AvgIf + 2*StdevIf
+        upper_band = center_line + avg_positive + stdev_positive
+        
+        return upper_band
+    
+    @staticmethod
+    def calculate_lower_band(prices: pd.Series, period: int = 30) -> pd.Series:
+        """
+        하한선 계산
+        A = MA(가격, 이평기간, 이평방법)
+        하한선 = A + AvgIf(가격-A, -1, 0.0) - 2*StdevIf(가격-A, -1, 0.0)
+        
+        Parameters:
+        - prices: 종가 데이터
+        - period: 이동평균 기간 (기본값: 30)
+        
+        Returns:
+        - 하한선 Series
+        """
+        # 중심선 계산
+        center_line = PriceBox.ma_triangular(prices, period)
+        
+        # 편차 계산 (가격 - 중심선)
+        deviation = prices - center_line
+        
+        # AvgIf(편차, -1, 0.0) - 음수 편차의 평균 (롤링 윈도우)
+        avg_negative = PriceBox.avg_if(deviation, -1, 0.0, window=period)
+        
+        # 2 * StdevIf(편차, -1, 0.0) - 음수 편차의 표준편차 * 2 (롤링 윈도우)
+        stdev_negative = PriceBox.stdev_if(deviation, -1, 0.0, window=period) * 2
+        
+        # 하한선 = A + AvgIf - 2*StdevIf
+        lower_band = center_line + avg_negative - stdev_negative
+        
+        return lower_band
+    
+    @staticmethod
+    def calculate_new_price_box(prices: pd.Series, period: int = 30) -> Dict[str, pd.Series]:
+        """
+        새로운 가격박스 계산 (요구사항에 맞게 재구현)
+        
+        중심선: MA(가격, 이평기간, 이평방법) - 가격:종가, 이평기간:30, 이평방법:삼각
+        상한선: A + AvgIf(가격-A, 1, 0.0) + 2*StdevIf(가격-A, 1, 0.0)
+        하한선: A + AvgIf(가격-A, -1, 0.0) - 2*StdevIf(가격-A, -1, 0.0)
+        
+        Parameters:
+        - prices: 종가 데이터 (pandas Series)
+        - period: 이동평균 기간 (기본값: 30)
+        
+        Returns:
+        - Dict with center_line, upper_band, lower_band
+        """
+        # 중심선 계산: MA(가격, 30, 삼각)
+        center_line = PriceBox.ma_triangular(prices, period)
+        
+        # 상한선 계산
+        upper_band = PriceBox.calculate_upper_band(prices, period)
+        
+        # 하한선 계산
+        lower_band = PriceBox.calculate_lower_band(prices, period)
+        
+        return {
+            'center_line': center_line,
+            'upper_band': upper_band,
+            'lower_band': lower_band
+        }
+    
+    @staticmethod
     def calculate_conditional_deviations(prices: pd.Series, center_line: pd.Series) -> Dict[str, pd.Series]:
         """
-        조건부 편차 계산 (Static Method)
+        조건부 편차 계산 (우리가 수정한 avg_if/stdev_if 사용)
         
         Parameters:
         - prices: 가격 데이터
@@ -64,46 +247,13 @@ class PriceBox:
         # 전체 편차 계산
         deviation = prices - center_line
         
-        # 상승 편차 (이평선보다 높은 값들만)
-        upward_mask = deviation > 0
-        upward_deviations = deviation[upward_mask]
-        
-        # 하락 편차 (이평선보다 낮은 값들만)  
-        downward_mask = deviation < 0
-        downward_deviations = deviation[downward_mask]
-        
-        # 롤링 윈도우로 동적 계산
+        # 우리가 수정한 조건부 함수들 사용
         window = min(30, len(prices))
         
-        avg_up_series = pd.Series(index=prices.index, dtype=float)
-        std_up_series = pd.Series(index=prices.index, dtype=float)
-        avg_down_series = pd.Series(index=prices.index, dtype=float)
-        std_down_series = pd.Series(index=prices.index, dtype=float)
-        
-        for i in range(len(prices)):
-            start_idx = max(0, i - window + 1)
-            end_idx = i + 1
-            
-            # 현재 윈도우의 편차들
-            window_deviation = deviation.iloc[start_idx:end_idx]
-            window_upward = window_deviation[window_deviation > 0]
-            window_downward = window_deviation[window_deviation < 0]
-            
-            # 상승 편차 통계
-            if len(window_upward) > 0:
-                avg_up_series.iat[i] = window_upward.mean()
-                std_up_series.iat[i] = window_upward.std() if len(window_upward) > 1 else 0
-            else:
-                avg_up_series.iat[i] = 0
-                std_up_series.iat[i] = 0
-            
-            # 하락 편차 통계
-            if len(window_downward) > 0:
-                avg_down_series.iat[i] = window_downward.mean()
-                std_down_series.iat[i] = window_downward.std() if len(window_downward) > 1 else 0
-            else:
-                avg_down_series.iat[i] = 0
-                std_down_series.iat[i] = 0
+        avg_up_series = PriceBox.avg_if(deviation, 1, 0.0, window=window)
+        std_up_series = PriceBox.stdev_if(deviation, 1, 0.0, window=window)
+        avg_down_series = PriceBox.avg_if(deviation, -1, 0.0, window=window)
+        std_down_series = PriceBox.stdev_if(deviation, -1, 0.0, window=window)
         
         return {
             'avg_up': avg_up_series,
@@ -302,13 +452,18 @@ class PriceBox:
             # 삼각이동평균 계산 (30일)
             center_line = PriceBox.triangular_moving_average(combined_prices, 30).iloc[-1]
             
-            # 조건부 편차 계산
-            deviation_data = PriceBox.calculate_conditional_deviations(combined_prices, 
-                                                                    pd.Series([center_line] * len(combined_prices)))
+            # 편차 계산
+            deviation = combined_prices - center_line
+            
+            # 조건부 편차 계산 (우리가 수정한 함수 사용)
+            avg_positive = PriceBox.avg_if(deviation, 1, 0.0, window=30)
+            stdev_positive = PriceBox.stdev_if(deviation, 1, 0.0, window=30)
+            avg_negative = PriceBox.avg_if(deviation, -1, 0.0, window=30)
+            stdev_negative = PriceBox.stdev_if(deviation, -1, 0.0, window=30)
             
             # 박스 상/하한선 계산 (마지막 값 사용)
-            upper_band = center_line + deviation_data['avg_up'].iloc[-1] + std_multiplier * deviation_data['std_up'].iloc[-1]
-            lower_band = center_line + deviation_data['avg_down'].iloc[-1] - std_multiplier * deviation_data['std_down'].iloc[-1]
+            upper_band = center_line + avg_positive.iloc[-1] + std_multiplier * stdev_positive.iloc[-1]
+            lower_band = center_line + avg_negative.iloc[-1] - std_multiplier * stdev_negative.iloc[-1]
             
             return {
                 'center_line': center_line,
@@ -340,30 +495,41 @@ class PriceBox:
         Returns:
         - 박스 중심선, 상한선, 하한선
         """
-        # 1단계: 이동평균 계산 (박스중심선)
+        # 1단계: 이동평균 계산 (박스중심선) - A
         if ma_type == 'triangular':
             center_line = PriceBox.triangular_moving_average(prices, period)
         else:
             center_line = prices.rolling(window=period, min_periods=1).mean()
         
-        # 2단계: 조건부 편차 계산
-        deviation_data = PriceBox.calculate_conditional_deviations(prices, center_line)
+        # 2단계: 편차 계산 (가격 - A)
+        deviation = prices - center_line
         
-        # 3단계: 박스 상/하한선 계산 (정의에 따라)
-        # 상한선: A + AvgIf(편차, >0) + 2*StdevIf(편차, >0)
-        upper_band = center_line + deviation_data['avg_up'] + std_multiplier * deviation_data['std_up']
+        # 3단계: HTS 공식 정확한 구현
+        # AvgIf(가격-A, 1, 0.0): 양수 편차들의 평균
+        avg_positive = PriceBox.avg_if(deviation, 1, 0.0, window=period)
+        # StdevIf(가격-A, 1, 0.0): 양수 편차들의 표준편차
+        stdev_positive = PriceBox.stdev_if(deviation, 1, 0.0, window=period)
         
-        # 하한선: A + AvgIf(편차, <0) - 2*StdevIf(편차, <0)  
-        lower_band = center_line + deviation_data['avg_down'] - std_multiplier * deviation_data['std_down']
+        # AvgIf(가격-A, -1, 0.0): 음수 편차들의 평균  
+        avg_negative = PriceBox.avg_if(deviation, -1, 0.0, window=period)
+        # StdevIf(가격-A, -1, 0.0): 음수 편차들의 표준편차
+        stdev_negative = PriceBox.stdev_if(deviation, -1, 0.0, window=period)
+        
+        # 4단계: 박스 상/하한선 계산 (HTS 공식)
+        # 상한선 = A + AvgIf(가격-A, 1, 0.0) + 2*StdevIf(가격-A, 1, 0.0)
+        upper_band = center_line + avg_positive + std_multiplier * stdev_positive
+        
+        # 하한선 = A + AvgIf(가격-A, -1, 0.0) - 2*StdevIf(가격-A, -1, 0.0)  
+        lower_band = center_line + avg_negative - std_multiplier * stdev_negative
         
         return {
             'center_line': center_line,
             'upper_band': upper_band,
             'lower_band': lower_band,
-            'avg_up': deviation_data['avg_up'],
-            'std_up': deviation_data['std_up'],
-            'avg_down': deviation_data['avg_down'],
-            'std_down': deviation_data['std_down']
+            'avg_up': avg_positive,
+            'std_up': stdev_positive,
+            'avg_down': avg_negative,
+            'std_down': stdev_negative
         }
     
     @staticmethod

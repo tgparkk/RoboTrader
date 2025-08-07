@@ -30,9 +30,12 @@ class ChartRenderer:
     def create_strategy_chart(self, stock_code: str, stock_name: str, target_date: str,
                              strategy, data: pd.DataFrame, 
                              indicators_data: Dict[str, Any], selection_reason: str,
-                             chart_suffix: str = "") -> Optional[str]:
+                             chart_suffix: str = "", timeframe: str = "1min") -> Optional[str]:
         """전략별 차트 생성"""
         try:
+            # 시간프레임 저장 (다른 메서드에서 사용)
+            self.current_timeframe = timeframe
+            
             # 서브플롯 설정 (가격 + 거래량)
             fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 12), 
                                          gridspec_kw={'height_ratios': [3, 1]})
@@ -132,10 +135,26 @@ class ChartRenderer:
     def _draw_candlestick(self, ax, data: pd.DataFrame):
         """캔들스틱 차트 그리기 - 실제 데이터 인덱스 기준"""
         try:
+            # 🚨 디버깅: 캔들 그리기 입력 데이터 확인
+            timeframe = getattr(self, 'current_timeframe', '1min')
+            self.logger.error(f"🎨 캔들스틱 그리기 시작:")
+            self.logger.error(f"   - timeframe: {timeframe}")
+            self.logger.error(f"   - 입력 데이터 개수: {len(data)}")
+            if not data.empty:
+                self.logger.error(f"   - 데이터 시간 범위: {data.iloc[0].get('time', 'N/A')} ~ {data.iloc[-1].get('time', 'N/A')}")
+                # 처음 20개와 마지막 20개 시간 확인
+                first_20_times = data['time'].head(20).tolist() if 'time' in data.columns else []
+                last_20_times = data['time'].tail(20).tolist() if 'time' in data.columns else []
+                self.logger.error(f"   - 처음 20개 시간: {first_20_times}")
+                self.logger.error(f"   - 마지막 20개 시간: {last_20_times}")
+            
             # 시간 기반 x 위치 계산
             x_positions = self._calculate_x_positions(data)
+            self.logger.error(f"   - X 위치 개수: {len(x_positions)}")
+            self.logger.error(f"   - X 위치 범위: {min(x_positions) if x_positions else 'N/A'} ~ {max(x_positions) if x_positions else 'N/A'}")
             
             # 캔들스틱 그리기
+            drawn_candles = 0
             for idx, (_, row) in enumerate(data.iterrows()):
                 x = x_positions[idx]
                 open_price = row['open']
@@ -169,6 +188,12 @@ class ChartRenderer:
                     line_color = 'red' if close_price >= open_price else 'blue'
                     ax.plot([x - 0.4, x + 0.4], [close_price, close_price], 
                            color=line_color, linewidth=1.5)
+                
+                drawn_candles += 1
+            
+            self.logger.error(f"   - 실제 그려진 캔들 개수: {drawn_candles}")
+            if drawn_candles != len(data):
+                self.logger.error(f"   ⚠️ 데이터({len(data)})와 그려진 캔들({drawn_candles}) 개수 불일치!")
                            
         except Exception as e:
             self.logger.error(f"캔들스틱 그리기 오류: {e}")
@@ -421,6 +446,11 @@ class ChartRenderer:
     def _validate_and_clean_data(self, data: pd.DataFrame, target_date: str = None) -> pd.DataFrame:
         """데이터 검증 및 중복 제거"""
         try:
+            timeframe = getattr(self, 'current_timeframe', '1min')
+            self.logger.error(f"🔍 데이터 검증 시작 ({timeframe}):")
+            self.logger.error(f"   - 입력 데이터: {len(data)}개")
+            self.logger.error(f"   - target_date: {target_date}")
+            
             if data.empty:
                 return data
                 
@@ -430,14 +460,35 @@ class ChartRenderer:
                 if 'datetime' in data.columns:
                     # datetime 컬럼이 있는 경우
                     data['date_str'] = pd.to_datetime(data['datetime']).dt.strftime('%Y%m%d')
+                    self.logger.error(f"   - datetime 기반 날짜 필터링")
                     data = data[data['date_str'] == target_date].drop('date_str', axis=1)
                 elif 'time' in data.columns:
-                    # time 컬럼이 있는 경우 (YYYYMMDDHHMM 형식)
-                    data['date_str'] = data['time'].astype(str).str[:8]
-                    data = data[data['date_str'] == target_date].drop('date_str', axis=1)
+                    # time 컬럼이 있는 경우 - 형식 확인
+                    time_samples = data['time'].head(5).astype(str).tolist()
+                    self.logger.error(f"   - time 컬럼 샘플: {time_samples}")
+                    
+                    # time이 HHMMSS 형식인지 YYYYMMDDHHMM 형식인지 확인
+                    first_time = str(data['time'].iloc[0])
+                    if len(first_time) <= 6:
+                        # HHMMSS 형식 - datetime 컬럼을 기준으로 필터링
+                        self.logger.error(f"   - time이 HHMMSS 형식, datetime 컬럼으로 날짜 필터링")
+                        if 'datetime' in data.columns:
+                            data['date_str'] = pd.to_datetime(data['datetime']).dt.strftime('%Y%m%d')
+                            data = data[data['date_str'] == target_date].drop('date_str', axis=1)
+                        else:
+                            self.logger.error(f"   - datetime 컬럼 없음, 날짜 필터링 스킵")
+                    else:
+                        # YYYYMMDDHHMM 형식
+                        self.logger.error(f"   - time이 YYYYMMDDHHMM 형식")
+                        data['date_str'] = data['time'].astype(str).str[:8]
+                        data = data[data['date_str'] == target_date].drop('date_str', axis=1)
                 
                 if len(data) != original_count:
-                    self.logger.info(f"날짜 필터링 완료: {original_count} → {len(data)} (target_date: {target_date})")
+                    self.logger.error(f"   - 날짜 필터링 결과: {original_count} → {len(data)} (target_date: {target_date})")
+                    if len(data) < original_count // 2:
+                        self.logger.error(f"   ⚠️ 데이터가 절반 이상 사라짐! 날짜 필터링 문제 의심")
+                else:
+                    self.logger.error(f"   - 날짜 필터링: 변화 없음")
             
             if 'time' not in data.columns:
                 return data
@@ -461,15 +512,28 @@ class ChartRenderer:
             self.logger.error(f"데이터 검증 오류: {e}")
             return data
     
-    def _calculate_x_positions(self, data: pd.DataFrame) -> list:
-        """시간 기반 x 위치 계산 헬퍼 함수 - 09:00~15:30 연속 거래시간 기반"""
-        if 'time' in data.columns:
-            time_values = data['time'].astype(str).str.zfill(6)
-            start_minutes = 9 * 60  # 09:00 = 540분
+    def _calculate_x_positions(self, data: pd.DataFrame, timeframe: str = None) -> list:
+        """
+        시간프레임에 따른 x 위치 계산
+        - 1분봉: 09:00부터의 실제 분 단위 인덱스 (0, 1, 2, 3...)
+        - 5분봉: 연속 인덱스 (0, 1, 2, 3...) - 캔들들이 이어지도록
+        - 3분봉: 연속 인덱스 (0, 1, 2, 3...) - 캔들들이 이어지도록
+        """
+        # timeframe이 지정되지 않으면 클래스 변수 사용
+        if timeframe is None:
+            timeframe = getattr(self, 'current_timeframe', '1min')
             
-            x_positions = []
-            prev_x_pos = -1  # 중복 방지용
-            
+        if 'time' not in data.columns:
+            return list(range(len(data)))
+        
+        time_values = data['time'].astype(str).str.zfill(6)
+        start_minutes = 9 * 60  # 09:00 = 540분
+        
+        x_positions = []
+        prev_x_pos = -1
+        
+        if timeframe == "1min":
+            # 1분봉은 실제 시간 기반 인덱스 (기존 방식)
             for i, time_str in enumerate(time_values):
                 if len(time_str) == 6:
                     try:
@@ -482,15 +546,14 @@ class ChartRenderer:
                         
                         # 중복되거나 이상한 x 위치 방지
                         if x_pos == prev_x_pos:
-                            x_pos = prev_x_pos + 1  # 1분 후로 조정
+                            x_pos = prev_x_pos + 1
                         elif x_pos < prev_x_pos:
-                            x_pos = prev_x_pos + 1  # 시간이 거꾸로 가는 경우
+                            x_pos = prev_x_pos + 1
                         
                         x_positions.append(x_pos)
                         prev_x_pos = x_pos
                         
                     except ValueError:
-                        # 시간 파싱 오류 시 순차적 인덱스 사용
                         x_pos = prev_x_pos + 1 if prev_x_pos >= 0 else i
                         x_positions.append(x_pos)
                         prev_x_pos = x_pos
@@ -507,7 +570,10 @@ class ChartRenderer:
                 
             return x_positions
         else:
-            return list(range(len(data)))
+            # 5분봉, 3분봉: 연속 인덱스 사용 (캔들들이 이어지도록)
+            x_positions = list(range(len(data)))
+            self.logger.debug(f"{timeframe} 연속 인덱스 사용: 0 ~ {len(data)-1}")
+            return x_positions
     
     def _set_time_axis_labels(self, ax1, ax2, data: pd.DataFrame, timeframe: str):
         """X축 시간 레이블 설정 - 09:00~15:30 연속 거래시간 기반"""
@@ -561,8 +627,8 @@ class ChartRenderer:
                 total_candles = total_trading_minutes  # 390개 캔들
                 step = interval_minutes  # 30분 간격 (또는 5분)
             elif timeframe == "5min":
-                total_candles = total_trading_minutes // 5  # 78개 캔들 (390분 / 5분)
-                step = interval_minutes  # 5분 간격
+                total_candles = len(data) if len(data) > 0 else total_trading_minutes // 5  # 실제 5분봉 개수
+                step = max(1, len(data) // 10)  # 5분봉은 전체 개수의 1/10로 간격 설정
             else:  # 3min
                 total_candles = total_trading_minutes // 3  # 130개 캔들
                 step = interval_minutes // 3  # 10개 캔들 간격
@@ -580,9 +646,15 @@ class ChartRenderer:
                 if timeframe == "1min":
                     data_index = current_time_minutes - start_minutes  # 분 단위
                 elif timeframe == "5min":
-                    data_index = (current_time_minutes - start_minutes) // 5  # 5분 단위
+                    # 5분봉은 연속 인덱스 사용
+                    data_index = (current_time_minutes - start_minutes) // 5  # 실제 5분봉 인덱스
+                    # 실제 데이터 범위를 벗어나지 않도록 제한
+                    if data_index >= len(data):
+                        break
                 else:  # 3min
                     data_index = (current_time_minutes - start_minutes) // 3  # 3분 단위
+                    if data_index >= len(data):
+                        break
                 
                 time_label = f"{hour:02d}:{minute:02d}"
                 time_labels.append(time_label)
@@ -597,9 +669,15 @@ class ChartRenderer:
                 ax2.set_xticks(x_positions)
                 ax2.set_xticklabels(time_labels, rotation=45, fontsize=10)
                 
-                # X축 범위 설정 (전체 거래시간: 09:00~15:30)
-                ax1.set_xlim(-0.5, total_candles - 0.5)
-                ax2.set_xlim(-0.5, total_candles - 0.5)
+                # X축 범위 설정 
+                if timeframe == "5min" or timeframe == "3min":
+                    # 5분봉/3분봉은 실제 데이터 길이에 맞춤
+                    ax1.set_xlim(-0.5, len(data) - 0.5)
+                    ax2.set_xlim(-0.5, len(data) - 0.5)
+                else:
+                    # 1분봉은 전체 거래시간 기준
+                    ax1.set_xlim(-0.5, total_candles - 0.5)
+                    ax2.set_xlim(-0.5, total_candles - 0.5)
                 
                 self.logger.debug(f"시간축 설정 완료: {len(x_positions)}개 레이블")
             

@@ -472,7 +472,7 @@ class DayTradingBot:
             
             # 조건검색 seq 리스트 (필요에 따라 여러 조건 추가 가능)
             #condition_seqs = ["0", "1", "2"]  # 예: 0, 1, 2번 조건
-            condition_seqs = ["2"]
+            condition_seqs = ["0"]
             
             all_condition_results = []
             

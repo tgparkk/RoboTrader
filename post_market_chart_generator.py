@@ -325,7 +325,7 @@ class PostMarketChartGenerator:
                         multi_bb_path = self.chart_renderer.create_strategy_chart(
                             stock_code, stock_name, target_date, multi_bb_strategy_5min,
                             timeframe_data_5min, multi_bb_indicators, selection_reason,
-                            chart_suffix="multi_bollinger"
+                            chart_suffix="multi_bollinger", timeframe="5min"
                         )
                         
                         if multi_bb_path:

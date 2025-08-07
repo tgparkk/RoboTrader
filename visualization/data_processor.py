@@ -194,7 +194,12 @@ class DataProcessor:
                 base_data = asyncio.run(self.get_historical_chart_data(stock_code, target_date))
             
             if base_data is None or base_data.empty:
+                self.logger.error(f"❌ {timeframe} 변환 실패: 기본 1분봉 데이터가 없음")
                 return None
+            
+            self.logger.error(f"🔍 {timeframe} 변환 입력 확인:")
+            self.logger.error(f"   - 입력 1분봉 개수: {len(base_data)}")
+            self.logger.error(f"   - 시간 범위: {base_data.iloc[0].get('datetime', base_data.iloc[0].get('time', 'N/A'))} ~ {base_data.iloc[-1].get('datetime', base_data.iloc[-1].get('time', 'N/A'))}")
             
             if timeframe == "1min":
                 return base_data
@@ -203,7 +208,13 @@ class DataProcessor:
                 return self._resample_to_3min(base_data)
             elif timeframe == "5min":
                 # 1분봉을 5분봉으로 변환 (HTS와 동일한 방식)
-                return self._resample_to_5min(base_data)
+                self.logger.error(f"   ➡️ 5분봉 변환 시작...")
+                result = self._resample_to_5min(base_data)
+                if result is not None:
+                    self.logger.error(f"   ✅ 5분봉 변환 완료: {len(result)}개")
+                else:
+                    self.logger.error(f"   ❌ 5분봉 변환 결과 None")
+                return result
             else:
                 self.logger.warning(f"지원하지 않는 시간프레임: {timeframe}")
                 return base_data
@@ -242,58 +253,137 @@ class DataProcessor:
     def _resample_to_5min(self, data: pd.DataFrame) -> pd.DataFrame:
         """1분봉을 5분봉으로 변환 (정확한 5분 간격)"""
         try:
-            if data is None or len(data) < 5:
+            if data is None or len(data) < 1:
                 return data
             
-            # 시간 컬럼 확인 및 datetime 생성
             data = data.copy()
+            
+            # 시간 컬럼을 datetime으로 변환
             if 'datetime' in data.columns:
                 data['datetime'] = pd.to_datetime(data['datetime'])
-            elif 'date' in data.columns and 'time' in data.columns:
-                # date와 time을 datetime으로 결합
-                data['datetime'] = pd.to_datetime(data['date'].astype(str) + ' ' + data['time'].astype(str))
             elif 'time' in data.columns:
-                # time만 있는 경우 (HHMMSS 형식)
-                time_str = data['time'].astype(str).str.zfill(6)
-                data['datetime'] = pd.to_datetime('2023-01-01 ' + time_str.str[:2] + ':' + time_str.str[2:4] + ':' + time_str.str[4:6])
+                # time 컬럼 형식 확인 및 변환
+                time_str = data['time'].astype(str).str.zfill(6)  # HHMMSS 형식으로 맞춤
+                data['datetime'] = pd.to_datetime('2024-01-01 ' + 
+                                                time_str.str[:2] + ':' + 
+                                                time_str.str[2:4] + ':' + 
+                                                time_str.str[4:6])
             else:
-                # datetime 컬럼이 없으면 09:00부터 순차적으로 생성
-                data['datetime'] = pd.date_range(start='09:00', periods=len(data), freq='1min')
+                self.logger.error("datetime 또는 time 컬럼이 없습니다")
+                return data
             
-            # 시간순 정렬 (중요!)
+            # 시간순 정렬
             data = data.sort_values('datetime').reset_index(drop=True)
             
-            # pandas의 resample 기능을 사용하여 정확한 5분 간격으로 변환
-            data = data.set_index('datetime')
+            self.logger.error(f"🚨 5분봉 변환 상세 디버깅:")
+            self.logger.error(f"   📊 입력 데이터:")
+            self.logger.error(f"   - 총 데이터 개수: {len(data)}")
+            self.logger.error(f"   - 시간 범위: {data['datetime'].iloc[0]} ~ {data['datetime'].iloc[-1]}")
+            self.logger.error(f"   - 전체 시간 span: {(data['datetime'].iloc[-1] - data['datetime'].iloc[0]).total_seconds() / 60:.1f}분")
             
-            # 5분 간격으로 리샘플링 (09:00, 09:05, 09:10, ...)
-            resampled = data.resample('5T', origin='start').agg({
+            # 전체 시간 분포 확인
+            time_spread = []
+            for i in range(0, len(data), max(1, len(data)//20)):  # 20개 샘플
+                dt = data['datetime'].iloc[i]
+                time_spread.append(dt.strftime('%H:%M:%S'))
+            self.logger.error(f"   - 시간 샘플 (20개): {time_spread}")
+            
+            # 시간 간격 분석
+            if len(data) > 1:
+                time_diffs = data['datetime'].diff().dropna()
+                unique_intervals = time_diffs.value_counts().head(5)
+                self.logger.error(f"   - 시간 간격 분포: {unique_intervals.to_dict()}")
+            
+            # 5분 그룹핑 전 상세 분석
+            self.logger.error(f"   🔄 5분 그룹핑 과정:")
+            data['group_time'] = data['datetime'].dt.floor('5min')  # 5분 단위로 내림
+            
+            unique_groups = data['group_time'].unique()
+            sorted_groups = sorted(unique_groups)
+            self.logger.error(f"   - 유니크 5분봉 그룹: {len(unique_groups)}개")
+            self.logger.error(f"   - 첫 10개 그룹: {[g.strftime('%H:%M:%S') for g in sorted_groups[:10]]}")
+            self.logger.error(f"   - 마지막 10개 그룹: {[g.strftime('%H:%M:%S') for g in sorted_groups[-10:]]}")
+            
+            # 이론적으로 있어야 할 5분봉들 확인
+            expected_times = []
+            start_time = pd.Timestamp('2024-01-01 09:00:00')
+            for i in range(78):  # 09:00 ~ 15:30 = 78개
+                time_str = (start_time + pd.Timedelta(minutes=i*5)).strftime('%H:%M:%S')
+                expected_times.append(time_str)
+            
+            actual_times = [g.strftime('%H:%M:%S') for g in sorted_groups]
+            missing_times = set(expected_times) - set(actual_times)
+            extra_times = set(actual_times) - set(expected_times)
+            
+            if missing_times:
+                self.logger.error(f"   ❌ 누락된 5분봉: {sorted(list(missing_times))}")
+            if extra_times:
+                self.logger.error(f"   ➕ 추가된 5분봉: {sorted(list(extra_times))}")
+            if len(actual_times) == 77:
+                self.logger.error(f"   🔍 77개 vs 78개 문제: 이론적 78개, 실제 {len(actual_times)}개")
+            
+            # 각 그룹당 데이터 개수 확인
+            group_counts = data['group_time'].value_counts().sort_index()
+            self.logger.error(f"   - 각 5분봉 그룹당 1분봉 개수:")
+            for i, (group_time, count) in enumerate(group_counts.head(10).items()):
+                self.logger.error(f"     {group_time.strftime('%H:%M:%S')}: {count}개 1분봉")
+            
+            if len(group_counts) != len(unique_groups):
+                self.logger.error(f"   ⚠️ 그룹 개수 불일치: unique={len(unique_groups)}, counts={len(group_counts)}")
+            
+            # 그룹별로 OHLCV 계산
+            grouped = data.groupby('group_time').agg({
                 'open': 'first',
                 'high': 'max',
-                'low': 'min',
+                'low': 'min', 
                 'close': 'last',
                 'volume': 'sum'
-            }).dropna()
+            }).reset_index()
             
-            # 인덱스를 datetime 컬럼으로 복원
-            resampled = resampled.reset_index()
+            # datetime과 time 컬럼 추가
+            grouped['datetime'] = grouped['group_time']
+            grouped['time'] = grouped['datetime'].dt.strftime('%H%M%S')
+            grouped = grouped.drop('group_time', axis=1)
             
-            # time 컬럼 추가 (HHMMSS 형식)
-            resampled['time'] = resampled['datetime'].dt.strftime('%H%M%S')
+            self.logger.error(f"🎯 5분봉 변환 최종 결과:")
+            self.logger.error(f"   - 입력 1분봉: {len(data)}개")
+            self.logger.error(f"   - 출력 5분봉: {len(grouped)}개")
+            self.logger.error(f"   - 이론적 5분봉 개수: {(data['datetime'].iloc[-1] - data['datetime'].iloc[0]).total_seconds() / 60 / 5:.1f}개")
             
-            self.logger.debug(f"📊 5분봉 변환: {len(data)}개 → {len(resampled)}개 완료")
-            if not resampled.empty:
-                self.logger.debug(f"시간 범위: {resampled['datetime'].iloc[0]} ~ {resampled['datetime'].iloc[-1]}")
-                # 시간 간격 확인
-                if len(resampled) > 1:
-                    time_diffs = resampled['datetime'].diff().dropna()
-                    first_diff = time_diffs.iloc[0] if len(time_diffs) > 0 else 'N/A'
-                    self.logger.debug(f"5분봉 시간 간격: {first_diff}")
+            if not grouped.empty:
+                self.logger.error(f"   - 5분봉 시간 범위: {grouped['datetime'].iloc[0]} ~ {grouped['datetime'].iloc[-1]}")
+                self.logger.error(f"   - 전체 5분봉 시간들: {grouped['time'].tolist()}")
+                
+                # 연속성 확인
+                if len(grouped) > 1:
+                    time_diffs = grouped['datetime'].diff().dropna()
+                    intervals = [f'{td.total_seconds()/60:.0f}분' for td in time_diffs]
+                    self.logger.error(f"   - 5분봉 간격들: {intervals}")
+                    
+                    # 5분 간격이 아닌 것들 찾기
+                    non_5min_gaps = time_diffs[time_diffs != pd.Timedelta(minutes=5)]
+                    if not non_5min_gaps.empty:
+                        self.logger.error(f"   ⚠️ 비정상 간격 발견:")
+                        for i, gap in enumerate(non_5min_gaps):
+                            gap_minutes = gap.total_seconds() / 60
+                            self.logger.error(f"     {i+1}: {gap_minutes:.0f}분 간격")
+                else:
+                    self.logger.error("   ⚠️ 5분봉이 1개만 생성됨 - 이것이 문제!")
+                    
+                # 마지막으로 각 5분봉의 OHLCV 값 확인 (처음 5개)
+                self.logger.error(f"   - 처음 5개 5분봉 OHLCV:")
+                for i in range(min(5, len(grouped))):
+                    row = grouped.iloc[i]
+                    self.logger.error(f"     {row['time']}: O={row['open']:.0f}, H={row['high']:.0f}, L={row['low']:.0f}, C={row['close']:.0f}, V={row['volume']}")
+            else:
+                self.logger.error("   ❌ 5분봉 결과가 비어있음!")
             
-            return resampled
+            return grouped
             
         except Exception as e:
             self.logger.error(f"❌ 5분봉 변환 오류: {e}")
+            import traceback
+            traceback.print_exc()
             return data
     
     def calculate_indicators_with_daily_data(self, data: pd.DataFrame, strategy, 
@@ -335,15 +425,13 @@ class DataProcessor:
                             if combined_prices is not None and len(combined_prices) >= 30:
                                 price_box_result = PriceBox.calculate_price_box(combined_prices, period=30)
                                 if price_box_result and 'center_line' in price_box_result:
-                                    # HTS와 동일한 시간 기준으로 30분 앞으로 시프트
-                                    shift_periods = 30  # 30분 앞으로
-                                    
+                                    # HTS와 동일하게 시프트 없이 현재 시점 기준으로 계산
                                     indicators_data["price_box"] = {
-                                        'center': price_box_result['center_line'].shift(-shift_periods),
-                                        'resistance': price_box_result['upper_band'].shift(-shift_periods), 
-                                        'support': price_box_result['lower_band'].shift(-shift_periods)
+                                        'center': price_box_result['center_line'],
+                                        'resistance': price_box_result['upper_band'], 
+                                        'support': price_box_result['lower_band']
                                     }
-                                    self.logger.info(f"✅ 일봉+분봉 조합 가격박스 계산 성공 (곡선 형태, 30분 앞으로 시프트)")
+                                    self.logger.info(f"✅ 일봉+분봉 조합 가격박스 계산 성공 (곡선 형태, HTS 방식)")
                                 else:
                                     # 조합 실패 시 일봉 기준 수평선 사용
                                     data_len = len(data)

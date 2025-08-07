@@ -167,14 +167,15 @@ class DatabaseManager:
                 for candidate in candidates:
                     cursor.execute('''
                         INSERT INTO candidate_stocks 
-                        (stock_code, stock_name, selection_date, score, reasons, status)
-                        VALUES (?, ?, ?, ?, ?, 'active')
+                        (stock_code, stock_name, selection_date, score, reasons, status, created_at)
+                        VALUES (?, ?, ?, ?, ?, 'active', ?)
                     ''', (
                         candidate.code,
                         candidate.name,
                         selection_date.strftime('%Y-%m-%d %H:%M:%S'),
                         candidate.score,
-                        candidate.reason
+                        candidate.reason,
+                        now_kst().strftime('%Y-%m-%d %H:%M:%S')
                     ))
                 
                 conn.commit()
@@ -197,8 +198,8 @@ class DatabaseManager:
                 for record in price_data:
                     cursor.execute('''
                         INSERT OR REPLACE INTO stock_prices 
-                        (stock_code, date_time, open_price, high_price, low_price, close_price, volume)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        (stock_code, date_time, open_price, high_price, low_price, close_price, volume, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         stock_code,
                         record.date_time.strftime('%Y-%m-%d %H:%M:%S'),
@@ -206,7 +207,8 @@ class DatabaseManager:
                         record.high_price,
                         record.low_price,
                         record.close_price,
-                        record.volume
+                        record.volume,
+                        now_kst().strftime('%Y-%m-%d %H:%M:%S')
                     ))
                 
                 conn.commit()
@@ -393,9 +395,9 @@ class DatabaseManager:
                 
                 cursor.execute('''
                     INSERT INTO virtual_trading_records 
-                    (stock_code, stock_name, action, quantity, price, timestamp, strategy, reason, is_test)
-                    VALUES (?, ?, 'BUY', ?, ?, ?, ?, ?, 1)
-                ''', (stock_code, stock_name, quantity, price, timestamp.strftime('%Y-%m-%d %H:%M:%S'), strategy, reason))
+                    (stock_code, stock_name, action, quantity, price, timestamp, strategy, reason, is_test, created_at)
+                    VALUES (?, ?, 'BUY', ?, ?, ?, ?, ?, 1, ?)
+                ''', (stock_code, stock_name, quantity, price, timestamp.strftime('%Y-%m-%d %H:%M:%S'), strategy, reason, now_kst().strftime('%Y-%m-%d %H:%M:%S')))
                 
                 buy_record_id = cursor.lastrowid
                 conn.commit()
@@ -438,10 +440,10 @@ class DatabaseManager:
                 cursor.execute('''
                     INSERT INTO virtual_trading_records 
                     (stock_code, stock_name, action, quantity, price, timestamp, strategy, reason, 
-                     is_test, profit_loss, profit_rate, buy_record_id)
-                    VALUES (?, ?, 'SELL', ?, ?, ?, ?, ?, 1, ?, ?, ?)
+                     is_test, profit_loss, profit_rate, buy_record_id, created_at)
+                    VALUES (?, ?, 'SELL', ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
                 ''', (stock_code, stock_name, quantity, price, timestamp.strftime('%Y-%m-%d %H:%M:%S'), 
-                      strategy, reason, profit_loss, profit_rate, buy_record_id))
+                      strategy, reason, profit_loss, profit_rate, buy_record_id, now_kst().strftime('%Y-%m-%d %H:%M:%S')))
                 
                 conn.commit()
                 
