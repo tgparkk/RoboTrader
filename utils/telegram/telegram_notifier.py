@@ -41,7 +41,7 @@ class TelegramNotifier:
             'order_placed': "📝 *주문 실행*\n종목: {stock_name}({stock_code})\n구분: {order_type}\n수량: {quantity:,}주\n가격: {price:,}원\n주문ID: {order_id}",
             'order_filled': "✅ *주문 체결*\n종목: {stock_name}({stock_code})\n구분: {order_type}\n수량: {quantity:,}주\n가격: {price:,}원\n손익: {pnl:+,.0f}원",
             'order_cancelled': "❌ *주문 취소*\n종목: {stock_name}({stock_code})\n구분: {order_type}\n이유: {reason}",
-            'signal_detected': "🔥 *매매 신호*\n종목: {stock_name}({stock_code})\n신호: {signal_type}\n가격: {price:,}원\n근거: {reason}",
+            'signal_detected': "🔥 *매매 신호*\n\n📊 종목: {stock_name}({stock_code})\n🎯 신호: {signal_type}\n💰 가격: {price:,}원\n\n📝 근거:\n{reason}",
             'position_update': "📊 *포지션 현황*\n보유: {position_count}종목\n평가: {total_value:,}원\n손익: {total_pnl:+,.0f}원 ({pnl_rate:+.2f}%)",
             'system_status': "📡 *시스템 상태*\n시간: {time}\n시장: {market_status}\n미체결: {pending_orders}건\n완료: {completed_orders}건\n데이터: 정상 수집",
             'error_alert': "⚠️ *시스템 오류*\n시간: {time}\n모듈: {module}\n오류: {error}",
@@ -266,12 +266,15 @@ class TelegramNotifier:
     async def send_signal_detected(self, stock_code: str, stock_name: str,
                                  signal_type: str, price: float, reason: str):
         """매매 신호 알림"""
+        # reason 길이 제한 및 안전 처리
+        safe_reason = str(reason)[:200] if reason else "근거 정보 없음"  # 200자로 제한
+        
         message = self.templates['signal_detected'].format(
             stock_code=stock_code,
             stock_name=stock_name,
             signal_type=signal_type,
             price=price,
-            reason=reason
+            reason=safe_reason
         )
         await self.send_message(message)
     

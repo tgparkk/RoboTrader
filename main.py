@@ -495,7 +495,7 @@ class DayTradingBot:
             # 결과가 있으면 알림 발송
             self.logger.info(f"🔍 조건검색 전체 결과: {len(all_condition_results)}개 종목")
             if all_condition_results:
-                await self._notify_condition_search_results(all_condition_results)
+                #await self._notify_condition_search_results(all_condition_results)
                 
                 # 🆕 장중 선정 종목 관리자에 추가 (과거 분봉 데이터 포함)
                 self.logger.info(f"🎯 장중 선정 종목 관리자에 {len(all_condition_results)}개 종목 추가 시작")

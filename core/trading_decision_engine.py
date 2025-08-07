@@ -202,7 +202,7 @@ class TradingDecisionEngine:
                         await self.telegram.notify_signal_detected({
                             'stock_code': stock_code,
                             'stock_name': stock_name,
-                            'signal_type': '가상매수',
+                            'signal_type': '🔴 매수',
                             'price': current_price,
                             'reason': f"{strategy} - {buy_reason}"
                         })
@@ -285,7 +285,7 @@ class TradingDecisionEngine:
                         await self.telegram.notify_signal_detected({
                             'stock_code': stock_code,
                             'stock_name': stock_name,
-                            'signal_type': '가상매도',
+                            'signal_type': '🔵 매도',
                             'price': current_price,
                             'reason': f"{strategy} - {sell_reason} (손익: {profit_sign}{profit_loss:,.0f}원)"
                         })
