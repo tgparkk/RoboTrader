@@ -141,8 +141,8 @@ class PullbackCandlePattern:
             return 'stable'
     
     @staticmethod
-    def find_recent_low(data: pd.DataFrame, period: int = 20) -> Optional[float]:
-        """최근 저점 찾기"""
+    def find_recent_low(data: pd.DataFrame, period: int = 5) -> Optional[float]:
+        """최근 저점 찾기 (최근 5개 봉)"""
         if len(data) < period:
             return None
         
