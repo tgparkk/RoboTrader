@@ -161,6 +161,17 @@ class TelegramNotifier:
             except Exception as shutdown_error:
                 self.logger.error(f"봇 종료 중 오류: {shutdown_error}")
     
+    def _escape_markdown(self, text: str) -> str:
+        """마크다운 특수문자 이스케이프"""
+        # 마크다운 특수문자들
+        special_chars = ['*', '_', '`', '[', ']', '(', ')', '~', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+        
+        escaped_text = str(text)
+        for char in special_chars:
+            escaped_text = escaped_text.replace(char, f'\\{char}')
+        
+        return escaped_text
+    
     async def send_message(self, message: str, parse_mode: str = "Markdown") -> bool:
         """메시지 전송"""
         try:
@@ -173,20 +184,30 @@ class TelegramNotifier:
         except TelegramError as e:
             self.logger.error(f"텔레그램 메시지 전송 실패: {e}")
             
-            # 마크다운 파싱 오류 시 일반 텍스트로 재시도
+            # 마크다운 파싱 오류 시 이스케이프 처리 후 재시도
             if "parse entities" in str(e).lower() or "can't parse" in str(e).lower():
                 try:
-                    self.logger.info("마크다운 파싱 오류 - 일반 텍스트로 재전송 시도")
-                    # 마크다운 문법 제거
-                    plain_message = message.replace('*', '').replace('_', '').replace('`', '')
+                    self.logger.info("마크다운 파싱 오류 - 특수문자 이스케이프 후 재전송 시도")
+                    escaped_message = self._escape_markdown(message)
                     await self.bot.send_message(
                         chat_id=self.chat_id,
-                        text=plain_message,
-                        parse_mode=None
+                        text=escaped_message,
+                        parse_mode="Markdown"
                     )
                     return True
-                except TelegramError as retry_error:
-                    self.logger.error(f"일반 텍스트 재전송도 실패: {retry_error}")
+                except TelegramError as escape_error:
+                    self.logger.info("이스케이프 처리도 실패 - 일반 텍스트로 재전송 시도")
+                    try:
+                        # 마크다운 문법 완전 제거
+                        plain_message = message.replace('*', '').replace('_', '').replace('`', '').replace('[', '').replace(']', '').replace('(', '').replace(')', '')
+                        await self.bot.send_message(
+                            chat_id=self.chat_id,
+                            text=plain_message,
+                            parse_mode=None
+                        )
+                        return True
+                    except TelegramError as retry_error:
+                        self.logger.error(f"일반 텍스트 재전송도 실패: {retry_error}")
             
             return False
     

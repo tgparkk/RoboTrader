@@ -547,25 +547,25 @@ class DayTradingBot:
             
             alert_message = "\n".join(message_lines)
             
-            # 텔레그램 알림 (긴급 알림으로 발송)
-            await self.telegram.notify_urgent_signal(alert_message)
+            # 텔레그램 알림 제거 - 조건검색 결과는 로그로만 기록
+            # await self.telegram.notify_urgent_signal(alert_message)
             
-            # 개별 종목별 상세 정보도 발송 (상위 3개만)
-            for stock_data in stock_results[:3]:
-                code = stock_data.get('code', '')
-                name = stock_data.get('name', '')
-                price = stock_data.get('price', '')
-                change_rate = stock_data.get('chgrate', '')
-                volume = stock_data.get('acml_vol', '')
-                
-                await self.telegram.notify_signal_detected({
-                    'stock_code': code,
-                    'stock_name': name,
-                    'signal_type': '조건검색',
-                    'price': price,
-                    'change_rate': change_rate,
-                    'volume': volume
-                })
+            # 개별 종목별 상세 정보 텔레그램 알림 제거
+            # for stock_data in stock_results[:3]:
+            #     code = stock_data.get('code', '')
+            #     name = stock_data.get('name', '')
+            #     price = stock_data.get('price', '')
+            #     change_rate = stock_data.get('chgrate', '')
+            #     volume = stock_data.get('acml_vol', '')
+            #     
+            #     await self.telegram.notify_signal_detected({
+            #         'stock_code': code,
+            #         'stock_name': name,
+            #         'signal_type': '조건검색',
+            #         'price': price,
+            #         'change_rate': change_rate,
+            #         'volume': volume
+            #     })
             
             self.logger.info(f"📱 조건검색 결과 알림 완료: {len(stock_results)}개 종목")
             

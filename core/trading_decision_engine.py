@@ -83,6 +83,11 @@ class TradingDecisionEngine:
             if signal_result:
                 return True, f"다중볼린저밴드: {reason}"
             
+            # 전략 4: 눌림목 캔들패턴 매수 신호 (5분봉 사용)
+            signal_result, reason = self._check_pullback_candle_buy_signal(combined_data)
+            if signal_result:
+                return True, f"눌림목캔들패턴: {reason}"
+            
             return False, ""
             
         except Exception as e:
@@ -161,6 +166,8 @@ class TradingDecisionEngine:
                 strategy = "가격박스+이등분선"
             elif "다중볼린저밴드" in buy_reason:
                 strategy = "다중볼린저밴드"
+            elif "눌림목캔들패턴" in buy_reason:
+                strategy = "눌림목캔들패턴"
             else:
                 strategy = "볼린저밴드+이등분선"
             
@@ -234,6 +241,8 @@ class TradingDecisionEngine:
                 strategy = "가격박스+이등분선"
             elif "다중볼린저밴드" in sell_reason:
                 strategy = "다중볼린저밴드"
+            elif "눌림목캔들패턴" in sell_reason:
+                strategy = "눌림목캔들패턴"
             else:
                 strategy = "볼린저밴드+이등분선"
             
@@ -455,6 +464,8 @@ class TradingDecisionEngine:
                 return self._check_multi_bollinger_stop_loss(data, buy_price, current_price)
             elif "볼린저밴드" in trading_stock.selection_reason:
                 return self._check_bollinger_stop_loss(data, buy_price, current_price, trading_stock)
+            elif "눌림목캔들패턴" in trading_stock.selection_reason:
+                return self._check_pullback_candle_stop_loss(data, buy_price, current_price)
             
             return False, ""
             
@@ -755,3 +766,72 @@ class TradingDecisionEngine:
         except Exception as e:
             self.logger.error(f"❌ 5분봉 변환 오류: {e}")
             return None
+    
+    def _check_pullback_candle_buy_signal(self, data) -> Tuple[bool, str]:
+        """전략 4: 눌림목 캔들패턴 매수 신호 확인 (5분봉 기준)"""
+        try:
+            from core.indicators.pullback_candle_pattern import PullbackCandlePattern
+            
+            # 필요한 컬럼 확인
+            required_cols = ['open', 'high', 'low', 'close', 'volume']
+            if not all(col in data.columns for col in required_cols):
+                return False, "필요한 데이터 컬럼 부족"
+            
+            # 1분봉 데이터를 5분봉으로 변환
+            data_5min = self._convert_to_5min_data(data)
+            if data_5min is None or len(data_5min) < 30:
+                return False, "5분봉 데이터 부족"
+            
+            # 눌림목 캔들패턴 신호 계산 (5분봉 기준)
+            signals = PullbackCandlePattern.generate_trading_signals(data_5min)
+            
+            if signals.empty:
+                return False, "신호 계산 실패"
+            
+            # 매수 조건 1: 눌림목 캔들패턴 매수 신호
+            if signals['buy_pullback_pattern'].iloc[-1]:
+                return True, "눌림목 패턴 (거래량증가+캔들확대)"
+            
+            # 매수 조건 2: 이등분선 회복 패턴
+            if signals['buy_bisector_recovery'].iloc[-1]:
+                return True, "이등분선 회복 (거래량급증)"
+            
+            return False, ""
+            
+        except Exception as e:
+            self.logger.error(f"❌ 눌림목 캔들패턴 매수 신호 확인 오류: {e}")
+            return False, ""
+    
+    def _check_pullback_candle_stop_loss(self, data, buy_price, current_price) -> Tuple[bool, str]:
+        """눌림목 캔들패턴 전략 손절 조건 (5분봉 기준)"""
+        try:
+            from core.indicators.pullback_candle_pattern import PullbackCandlePattern
+            
+            # 1분봉 데이터를 5분봉으로 변환
+            data_5min = self._convert_to_5min_data(data)
+            if data_5min is None or len(data_5min) < 20:
+                return False, ""
+            
+            # 눌림목 캔들패턴 신호 계산 (5분봉 기준)
+            signals = PullbackCandlePattern.generate_trading_signals(data_5min)
+            
+            if signals.empty:
+                return False, ""
+            
+            # 손절 조건 1: 이등분선 이탈
+            if signals['sell_bisector_break'].iloc[-1]:
+                return True, "이등분선 이탈"
+            
+            # 손절 조건 2: 지지 저점 이탈
+            if signals['sell_support_break'].iloc[-1]:
+                return True, "지지 저점 이탈"
+            
+            # 손절 조건 3: 고거래량 하락 (기준거래량의 1/2 이상)
+            if signals['sell_high_volume'].iloc[-1]:
+                return True, "고거래량 하락 (매도세 급증)"
+            
+            return False, ""
+            
+        except Exception as e:
+            self.logger.error(f"❌ 눌림목 캔들패턴 손절 조건 확인 오류: {e}")
+            return False, ""
