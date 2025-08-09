@@ -395,7 +395,7 @@ class DayTradingBot:
                 # 🆕 장 마감 후 차트 생성 (16:00~24:00 시간대에 두 번만 실행)
                 current_hour = current_time.hour
                 is_chart_time = (16 <= current_hour <= 23) and current_time.weekday() < 5  # 평일 16~24시
-                
+                is_chart_time = True
                 if is_chart_time and chart_generation_count < 2:  # 16~24시 시간대에만, 최대 2번
                     if (current_time - last_chart_generation).total_seconds() >= 1 * 60:  # 1분 간격으로 체크
                         #self.logger.info(f"🔥 DEBUG: 차트 생성 실행 시작 ({chart_generation_count + 1}/2)")  # 디버깅용

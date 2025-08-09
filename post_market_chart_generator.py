@@ -7,7 +7,7 @@ import sys
 import pandas as pd
 from pathlib import Path
 from typing import Optional, Dict, List, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # 프로젝트 경로 추가
 sys.path.append(str(Path(__file__).parent))
@@ -400,18 +400,17 @@ class PostMarketChartGenerator:
         try:
             current_time = now_kst()
             
-            # 장 마감 시간 체크 (15:30 이후)
+            # 장 마감 시간 체크 (15:30 이후) - 임시 비활성화
             market_close_hour = 15
             market_close_minute = 30
-            
-            if current_time.hour < market_close_hour or (current_time.hour == market_close_hour and current_time.minute < market_close_minute):
-                #self.logger.debug("아직 장 마감 시간이 아님 - 차트 생성 건너뛰기")
-                return {'success': False, 'message': '아직 장 마감 시간이 아님'}
+            # if current_time.hour < market_close_hour or (current_time.hour == market_close_hour and current_time.minute < market_close_minute):
+            #     return {'success': False, 'message': '아직 장 마감 시간이 아님'}
             
             # 주말이나 공휴일 체크
             if current_time.weekday() >= 5:  # 토요일(5), 일요일(6)
                 #self.logger.debug("주말 - 차트 생성 건너뛰기")
-                return {'success': False, 'message': '주말'}
+                #return {'success': False, 'message': '주말'}
+                pass
             
             self.logger.info("🎨 장 마감 후 선정 종목 차트 생성 시작")
             
@@ -445,8 +444,12 @@ class PostMarketChartGenerator:
                 self.logger.info("ℹ️ 오늘 선정된 종목이 없어 차트 생성을 건너뜁니다")
                 return {'success': False, 'message': '선정된 종목이 없음'}
             
-            # 당일 날짜로 차트 생성
+            # 당일 날짜로 차트 생성 (주말이면 직전 영업일로 보정)
             target_date = current_time.strftime("%Y%m%d")
+            if current_time.weekday() == 5:  # 토요일
+                target_date = (current_time - timedelta(days=1)).strftime("%Y%m%d")
+            elif current_time.weekday() == 6:  # 일요일
+                target_date = (current_time - timedelta(days=2)).strftime("%Y%m%d")
             
             self.logger.info(f"📊 {len(selected_stocks)}개 선정 종목의 {target_date} 차트 생성 중...")
             
@@ -540,9 +543,9 @@ class PostMarketChartGenerator:
                 self.logger.warning(f"⚠️ {stock_code} TMA30용 일봉 데이터 조회 실패 또는 빈 데이터")
                 return None
             
-            # 최근 88일 데이터만 선택 (오늘 제외)
+            # 최근 88일 데이터만 선택 (오늘 제외) - 최신 88영업일 사용
             if len(daily_data) > 88:
-                daily_data = daily_data.head(88)
+                daily_data = daily_data.tail(88)
             
             # 데이터 정렬 (오래된 날짜부터)
             if 'stck_bsop_date' in daily_data.columns:

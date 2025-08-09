@@ -21,6 +21,67 @@ class DataProcessor:
         self.logger = setup_logger(__name__)
         self.logger.info("데이터 처리기 초기화 완료")
     
+    def _get_uniform_1min_close(self, data: pd.DataFrame) -> Optional[pd.Series]:
+        """
+        1분 간격이 누락되지 않은 균일한 close 시리즈 생성 (FFILL)
+        - 09:00 ~ 15:30 범위로 고정
+        - 일부 분 누락 시 이전 값으로 보간하여 롤링 창 길이 왜곡 최소화
+        """
+        try:
+            if data is None or data.empty:
+                return None
+            df = data.copy()
+            # datetime 확보
+            if 'datetime' in df.columns:
+                df['datetime'] = pd.to_datetime(df['datetime'])
+                base_date = df['datetime'].iloc[0].date()
+            elif 'time' in df.columns:
+                t = df['time'].astype(str).str.zfill(6)
+                # 임의 기준일 사용 (동일 일자 내에서 상대적 분산만 중요)
+                base_date = pd.Timestamp.now().date()
+                df['datetime'] = pd.to_datetime(
+                    pd.Series([f"{base_date} {h}:{m}:{s}" for h, m, s in zip(t.str[:2], t.str[2:4], t.str[4:6])])
+                )
+            else:
+                return None
+            # 09:00 ~ 15:30 그리드 생성
+            start_dt = pd.Timestamp.combine(pd.Timestamp(base_date), pd.Timestamp('09:00').time())
+            end_dt = pd.Timestamp.combine(pd.Timestamp(base_date), pd.Timestamp('15:30').time())
+            full_index = pd.date_range(start=start_dt, end=end_dt, freq='T')
+            # close 시리즈를 1분 그리드에 맵핑
+            close_series = pd.to_numeric(df.set_index('datetime')['close'], errors='coerce').sort_index()
+            # 동일 일자 범위로 슬라이스 후 리인덱스
+            close_series = close_series.reindex(full_index).ffill().bfill()
+            return close_series
+        except Exception as e:
+            self.logger.error(f"균일 1분 close 시리즈 생성 오류: {e}")
+            return None
+
+    def _reindex_price_box_to_data(self, box_result: Dict[str, pd.Series], data: pd.DataFrame) -> Dict[str, pd.Series]:
+        """
+        가격박스 결과(균일 1분 DateTimeIndex)를 실제 데이터 인덱스에 맞춰 재색인
+        - 데이터가 datetime을 포함하면 그 타임스탬프에 맞춰 reindex + ffill
+        - 그렇지 않으면 길이만 맞춤(기존 인덱스 유지)
+        """
+        try:
+            if not box_result or 'center_line' not in box_result:
+                return box_result
+            if 'datetime' in data.columns:
+                target_ts = pd.to_datetime(data['datetime']).sort_values()
+                aligned = {}
+                for key, series in box_result.items():
+                    try:
+                        s = series.reindex(target_ts, method='ffill').reset_index(drop=True)
+                    except Exception:
+                        s = series
+                    aligned[key] = s
+                return aligned
+            else:
+                return box_result
+        except Exception as e:
+            self.logger.error(f"가격박스 재색인 오류: {e}")
+            return box_result
+    
     async def get_historical_chart_data(self, stock_code: str, target_date: str) -> Optional[pd.DataFrame]:
         """
         특정 날짜의 전체 분봉 데이터 조회 (분할 조회로 전체 거래시간 커버)
@@ -410,56 +471,18 @@ class DataProcessor:
             
             for indicator_name in strategy.indicators:
                 if indicator_name == "price_box":
-                    # 가격박스 계산 (일봉 데이터 우선 사용)
+                    # 가격박스는 1분봉 기준: 균일 1분 그리드로 보정 후 period=30 적용, 그리고 실제 데이터 타임스탬프에 재색인
                     try:
-                        if daily_data is not None and not daily_data.empty and current_price is not None:
-                            # 일봉 + 분봉 조합으로 정확한 곡선 형태 가격박스 계산
-                            # 1. 일봉 29일 + 현재가로 기준점 계산
-                            reference_result = PriceBox.calculate_price_box_with_daily_data(daily_data, current_price)
-                            self.logger.info(f"📊 일봉 기준 가격박스: 중심선={reference_result['center_line']:.2f}, 상한선={reference_result['upper_band']:.2f}, 하한선={reference_result['lower_band']:.2f}")
-                            
-                            # 2. 일봉 데이터와 분봉 데이터 조합하여 30일 데이터 생성
-                            combined_prices = self._combine_daily_and_intraday_data(daily_data, data, current_price)
-                            
-                            # 3. 조합된 데이터로 실시간 가격박스 계산 (곡선 형태)
-                            if combined_prices is not None and len(combined_prices) >= 30:
-                                price_box_result = PriceBox.calculate_price_box(combined_prices, period=30)
-                                if price_box_result and 'center_line' in price_box_result:
-                                    # HTS와 동일하게 시프트 없이 현재 시점 기준으로 계산
-                                    indicators_data["price_box"] = {
-                                        'center': price_box_result['center_line'],
-                                        'resistance': price_box_result['upper_band'], 
-                                        'support': price_box_result['lower_band']
-                                    }
-                                    self.logger.info(f"✅ 일봉+분봉 조합 가격박스 계산 성공 (곡선 형태, HTS 방식)")
-                                else:
-                                    # 조합 실패 시 일봉 기준 수평선 사용
-                                    data_len = len(data)
-                                    indicators_data["price_box"] = {
-                                        'center': pd.Series([reference_result['center_line']] * data_len, index=data.index),
-                                        'resistance': pd.Series([reference_result['upper_band']] * data_len, index=data.index),
-                                        'support': pd.Series([reference_result['lower_band']] * data_len, index=data.index)
-                                    }
-                                    self.logger.warning("일봉+분봉 조합 실패, 일봉 기준 수평선 사용")
-                            else:
-                                # 데이터 부족 시 일봉 기준 수평선 사용
-                                data_len = len(data)
-                                indicators_data["price_box"] = {
-                                    'center': pd.Series([reference_result['center_line']] * data_len, index=data.index),
-                                    'resistance': pd.Series([reference_result['upper_band']] * data_len, index=data.index),
-                                    'support': pd.Series([reference_result['lower_band']] * data_len, index=data.index)
-                                }
-                                self.logger.warning("조합 데이터 부족, 일봉 기준 수평선 사용")
-                        else:
-                            # 폴백: 기존 방식 (분봉 데이터만 사용)
-                            price_box_result = PriceBox.calculate_price_box(data['close'])
-                            if price_box_result and 'center_line' in price_box_result:
-                                indicators_data["price_box"] = {
-                                    'center': price_box_result['center_line'],
-                                    'resistance': price_box_result['upper_band'],
-                                    'support': price_box_result['lower_band']
-                                }
-                            self.logger.warning("가격박스 계산: 일봉 데이터 없음, 분봉 방식 사용")
+                        uniform_close = self._get_uniform_1min_close(data)
+                        series_to_use = uniform_close if uniform_close is not None else pd.to_numeric(data['close'], errors='coerce')
+                        box = PriceBox.calculate_price_box(series_to_use, period=30)
+                        if box and 'center_line' in box:
+                            box_aligned = self._reindex_price_box_to_data(box, data)
+                            indicators_data["price_box"] = {
+                                'center': box_aligned['center_line'],
+                                'resistance': box_aligned['upper_band'],
+                                'support': box_aligned['lower_band']
+                            }
                     except Exception as e:
                         self.logger.error(f"가격박스 계산 오류: {e}")
                 

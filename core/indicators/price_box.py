@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from typing import Tuple, Optional, Dict, Any
 from datetime import datetime, timedelta
+import math
 
 
 class PriceBox:
@@ -39,13 +40,14 @@ class PriceBox:
         Returns:
         - 삼각 이동평균 (pandas Series)
         """
-        # HTS와 동일하게: 처음부터 계산 가능하도록 min_periods=1 사용
-        # 첫 번째 단순 이동평균 (30일 필요)
-        sma1 = prices.rolling(window=period, min_periods=1).mean()
-        
-        # 두 번째 단순 이동평균 (SMA1의 30일 평균)
-        tma = sma1.rolling(window=period, min_periods=1).mean()
-        
+        # 일반적인 TMA 정의: SMA(ceil(N/2))의 결과에 다시 SMA(floor(N/2)) 적용
+        # 예) N=30 → 15, 15
+        first_window = math.ceil(period / 2)
+        second_window = math.floor(period / 2)
+
+        sma_first = prices.rolling(window=first_window, min_periods=1).mean()
+        tma = sma_first.rolling(window=second_window, min_periods=1).mean()
+
         return tma
     
     @staticmethod
@@ -79,30 +81,28 @@ class PriceBox:
         - 각 시점의 조건부 평균값 Series
         """
         result = []
-        
+
         for i in range(len(data)):
-            # 현재 시점에서 과거 window 개만큼의 데이터 추출
             start_idx = max(0, i - window + 1)
             window_data = data.iloc[start_idx:i+1]
-            
-            # 조건에 따른 필터링
-            if condition == 1:  # 양수만 (중심선보다 높은 가격들)
-                filtered_data = window_data[window_data > 0]
-            elif condition == -1:  # 음수만 (중심선보다 낮은 가격들)
-                filtered_data = window_data[window_data < 0]
-            else:  # 전체
-                filtered_data = window_data
-            
-            # 평균 계산
-            if len(filtered_data) > 0:
-                result.append(filtered_data.mean())
+
+            # 조건에 맞지 않는 값은 default(보통 0.0)로 대체하여 고정 길이 평균을 만듦
+            if condition == 1:  # 중심선 이상만 유지, 이하값은 default로 대체
+                replaced = window_data.where(window_data >= 0, other=default)
+            elif condition == -1:  # 중심선 이하여만 유지, 이상값은 default로 대체
+                replaced = window_data.where(window_data <= 0, other=default)
+            else:
+                replaced = window_data
+
+            if len(replaced) > 0:
+                result.append(replaced.mean())
             else:
                 result.append(default)
-        
+
         return pd.Series(result, index=data.index)
     
     @staticmethod
-    def stdev_if(data: pd.Series, condition: int, default: float = 0.0, window: int = 30) -> pd.Series:
+    def stdev_if(data: pd.Series, condition: int, default: float = 0.0, window: int = 30, ddof: int = 0) -> pd.Series:
         """
         HTS의 StdevIf 함수 정확한 구현
         각 시점에서 과거 window 기간 동안 조건에 맞는 값들의 표준편차
@@ -117,26 +117,24 @@ class PriceBox:
         - 각 시점의 조건부 표준편차 Series
         """
         result = []
-        
+
         for i in range(len(data)):
-            # 현재 시점에서 과거 window 개만큼의 데이터 추출
             start_idx = max(0, i - window + 1)
             window_data = data.iloc[start_idx:i+1]
-            
-            # 조건에 따른 필터링
-            if condition == 1:  # 양수만 (중심선보다 높은 가격들)
-                filtered_data = window_data[window_data > 0]
-            elif condition == -1:  # 음수만 (중심선보다 낮은 가격들)
-                filtered_data = window_data[window_data < 0]
-            else:  # 전체
-                filtered_data = window_data
-            
-            # 표준편차 계산 (최소 2개 값 필요)
-            if len(filtered_data) > 1:
-                result.append(filtered_data.std())
+
+            # 조건에 맞지 않는 값은 default(보통 0.0)로 대체하여 고정 길이 분산을 만듦
+            if condition == 1:
+                replaced = window_data.where(window_data >= 0, other=default)
+            elif condition == -1:
+                replaced = window_data.where(window_data <= 0, other=default)
+            else:
+                replaced = window_data
+
+            if len(replaced) > 1:
+                result.append(replaced.std(ddof=ddof))
             else:
                 result.append(default)
-        
+
         return pd.Series(result, index=data.index)
     
     @staticmethod
@@ -159,11 +157,9 @@ class PriceBox:
         # 편차 계산 (가격 - 중심선)
         deviation = prices - center_line
         
-        # AvgIf(편차, 1, 0.0) - 양수 편차의 평균 (롤링 윈도우)
+        # AvgIf / StdevIf (고정 길이, 조건 불일치=0 대체)
         avg_positive = PriceBox.avg_if(deviation, 1, 0.0, window=period)
-        
-        # 2 * StdevIf(편차, 1, 0.0) - 양수 편차의 표준편차 * 2 (롤링 윈도우)
-        stdev_positive = PriceBox.stdev_if(deviation, 1, 0.0, window=period) * 2
+        stdev_positive = PriceBox.stdev_if(deviation, 1, 0.0, window=period, ddof=0) * 2
         
         # 상한선 = A + AvgIf + 2*StdevIf
         upper_band = center_line + avg_positive + stdev_positive
@@ -190,11 +186,8 @@ class PriceBox:
         # 편차 계산 (가격 - 중심선)
         deviation = prices - center_line
         
-        # AvgIf(편차, -1, 0.0) - 음수 편차의 평균 (롤링 윈도우)
         avg_negative = PriceBox.avg_if(deviation, -1, 0.0, window=period)
-        
-        # 2 * StdevIf(편차, -1, 0.0) - 음수 편차의 표준편차 * 2 (롤링 윈도우)
-        stdev_negative = PriceBox.stdev_if(deviation, -1, 0.0, window=period) * 2
+        stdev_negative = PriceBox.stdev_if(deviation, -1, 0.0, window=period, ddof=0) * 2
         
         # 하한선 = A + AvgIf - 2*StdevIf
         lower_band = center_line + avg_negative - stdev_negative
@@ -505,15 +498,11 @@ class PriceBox:
         deviation = prices - center_line
         
         # 3단계: HTS 공식 정확한 구현
-        # AvgIf(가격-A, 1, 0.0): 양수 편차들의 평균
+        # AvgIf / StdevIf (고정 길이, 조건 불일치=0 대체)
         avg_positive = PriceBox.avg_if(deviation, 1, 0.0, window=period)
-        # StdevIf(가격-A, 1, 0.0): 양수 편차들의 표준편차
-        stdev_positive = PriceBox.stdev_if(deviation, 1, 0.0, window=period)
-        
-        # AvgIf(가격-A, -1, 0.0): 음수 편차들의 평균  
+        stdev_positive = PriceBox.stdev_if(deviation, 1, 0.0, window=period, ddof=0)
         avg_negative = PriceBox.avg_if(deviation, -1, 0.0, window=period)
-        # StdevIf(가격-A, -1, 0.0): 음수 편차들의 표준편차
-        stdev_negative = PriceBox.stdev_if(deviation, -1, 0.0, window=period)
+        stdev_negative = PriceBox.stdev_if(deviation, -1, 0.0, window=period, ddof=0)
         
         # 4단계: 박스 상/하한선 계산 (HTS 공식)
         # 상한선 = A + AvgIf(가격-A, 1, 0.0) + 2*StdevIf(가격-A, 1, 0.0)
