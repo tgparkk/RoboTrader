@@ -1,11 +1,14 @@
 """
-눌림목 캔들패턴 지표
-주가 상승 + 거래량 하락 → 조정 → 거래량 증가 + 캔들 확대 패턴 감지
+눌림목 캔들패턴 지표 (3분봉 권장)
+주가 상승 후 저거래 조정(기준 거래량의 1/4) → 회복 양봉에서 거래량 회복 → 이등분선 지지/회복 확인
+손절: 진입 양봉 저가 0.2% 이탈, 또는 이등분선/지지 저점 이탈
+익절: 매수가 대비 +3%
 """
 import pandas as pd
 import numpy as np
 from typing import Dict, Optional, Tuple
 from dataclasses import dataclass
+from core.indicators.bisector_line import BisectorLine
 
 
 @dataclass
@@ -151,74 +154,125 @@ class PullbackCandlePattern:
     
     @staticmethod
     def generate_trading_signals(data: pd.DataFrame) -> pd.DataFrame:
-        """눌림목 캔들패턴 매매 신호 생성"""
+        """눌림목 캔들패턴 매매 신호 생성 (3분봉 권장)
+
+        반환 컬럼:
+        - buy_pullback_pattern: 저거래 조정 후 회복 양봉 매수
+        - buy_bisector_recovery: 이등분선 회복/상향 돌파 매수
+        - sell_bisector_break: 이등분선 지지 이탈
+        - sell_support_break: 최근 저점 이탈
+        - stop_entry_low_break: 진입 양봉 저가 0.2% 이탈
+        - take_profit_3pct: 매수가 대비 +3% 도달
+        - bisector_line: 이등분선 값(보조)
+        """
         try:
-            if len(data) < 20:
+            if data is None or data.empty or len(data) < 10:
                 return pd.DataFrame()
-            
-            # 기본 신호 DataFrame 생성
-            signals = pd.DataFrame(index=data.index)
+
+            df = data.copy()
+            required_cols = ['open', 'high', 'low', 'close', 'volume']
+            if not all(col in df.columns for col in required_cols):
+                return pd.DataFrame()
+
+            # 이등분선(누적 고/저가 기반)
+            bisector_line = BisectorLine.calculate_bisector_line(df['high'], df['low'])
+
+            signals = pd.DataFrame(index=df.index)
             signals['buy_pullback_pattern'] = False
             signals['buy_bisector_recovery'] = False
             signals['sell_bisector_break'] = False
             signals['sell_support_break'] = False
-            signals['sell_high_volume'] = False
-            
-            # 각 시점별로 신호 계산
-            for i in range(19, len(data)):  # 최소 20개 데이터 필요
-                current_data = data.iloc[:i+1]
-                
-                # 거래량 및 캔들 분석
-                volume_analysis = PullbackCandlePattern.analyze_volume(current_data)
-                candle_analysis = PullbackCandlePattern.analyze_candle(current_data)
-                
-                # 주가 추세 및 이등분선 위치
-                price_trend = PullbackCandlePattern.check_price_trend(current_data)
-                above_bisector = PullbackCandlePattern.check_price_above_bisector(current_data)
-                recent_low = PullbackCandlePattern.find_recent_low(current_data)
-                
-                current_price = current_data['close'].iloc[-1]
-                current_low = current_data['low'].iloc[-1]
-                
-                # === 매수 신호 1: 눌림목 캔들패턴 ===
-                # 조건 1: 주가가 이등분선 위에 있음
-                # 조건 2: 최근 거래량이 증가 추세
-                # 조건 3: 캔들이 확대 추세
-                # 조건 4: 현재 거래량이 저거래량에서 벗어남
-                if (above_bisector and 
-                    volume_analysis.volume_trend == 'increasing' and
-                    candle_analysis.candle_trend == 'expanding' and
-                    not volume_analysis.is_low_volume and
-                    volume_analysis.current_volume > volume_analysis.avg_recent_volume):
-                    signals.loc[current_data.index[-1], 'buy_pullback_pattern'] = True
-                
-                # === 매수 신호 2: 이등분선 회복 패턴 ===
-                # 이등분선 이탈 후 다시 돌파하면서 거래량 증가
-                if (above_bisector and 
-                    volume_analysis.volume_trend == 'increasing' and
-                    volume_analysis.is_volume_surge):
-                    # 최근에 이등분선 아래에 있었는지 확인
-                    if i >= 23:  # 3개 전 데이터 확인 가능
-                        prev_data = data.iloc[:i-2]
-                        prev_above_bisector = PullbackCandlePattern.check_price_above_bisector(prev_data)
-                        if not prev_above_bisector:
-                            signals.loc[current_data.index[-1], 'buy_bisector_recovery'] = True
-                
-                # === 매도 신호 1: 이등분선 이탈 ===
-                if not above_bisector:
-                    signals.loc[current_data.index[-1], 'sell_bisector_break'] = True
-                
-                # === 매도 신호 2: 지지 저점 이탈 ===
-                if recent_low and current_low < recent_low * 0.99:  # 1% 아래로 이탈
-                    signals.loc[current_data.index[-1], 'sell_support_break'] = True
-                
-                # === 매도 신호 3: 고거래량 하락 ===
-                if (volume_analysis.is_high_volume and 
-                    price_trend == 'downtrend'):
-                    signals.loc[current_data.index[-1], 'sell_high_volume'] = True
-            
+            signals['stop_entry_low_break'] = False
+            signals['take_profit_3pct'] = False
+            signals['bisector_line'] = bisector_line
+
+            # 파라미터
+            retrace_lookback = 3      # 저거래 조정 연속 봉
+            low_vol_ratio = 0.25      # 기준 거래량의 1/4
+            stop_leeway = 0.002       # 0.2%
+            take_profit = 0.03        # +3%
+
+            # 기준 거래량(최근 50봉 최대)을 시계열로 계산
+            rolling_baseline = df['volume'].rolling(window=min(50, len(df)), min_periods=1).max()
+
+            # 포지션 추적(차트 표시용 시뮬레이션)
+            in_position = False
+            entry_price = None
+            entry_low = None
+
+            for i in range(len(df)):
+                if i < retrace_lookback + 2:
+                    continue
+
+                current = df.iloc[i]
+                bl = bisector_line.iloc[i] if not pd.isna(bisector_line.iloc[i]) else None
+                above_bisector = (bl is not None) and (current['close'] >= bl)
+                crosses_bisector_up = (bl is not None) and (current['open'] <= bl <= current['close'])
+
+                # 최근 저점(최근 5봉 저가 최저)
+                recent_low = float(df['low'].iloc[max(0, i-5):i+1].min())
+
+                # 최근 N봉 저거래 하락 조정
+                window = df.iloc[i - retrace_lookback:i]
+                baseline_now = rolling_baseline.iloc[i]
+                low_volume_all = (window['volume'] < baseline_now * low_vol_ratio).all()
+                downtrend_all = (window['close'].diff().fillna(0) < 0).iloc[1:].all()
+                is_low_volume_retrace = low_volume_all and downtrend_all
+
+                # 회복 양봉 + 거래량 회복
+                is_bullish = current['close'] > current['open']
+                max_low_vol = float(window['volume'].max())
+                avg_recent_vol = float(df['volume'].iloc[max(0, i-10):i].mean()) if i > 0 else 0.0
+                volume_recovers = (current['volume'] > max_low_vol) or (current['volume'] > avg_recent_vol)
+
+                if not in_position:
+                    # 매수 신호 1: 저거래 조정 후 회복 양봉(+이등분선 지지/회복)
+                    if is_low_volume_retrace and is_bullish and volume_recovers and (above_bisector or crosses_bisector_up):
+                        signals.iloc[i, signals.columns.get_loc('buy_pullback_pattern')] = True
+                        in_position = True
+                        entry_price = float(current['close'])
+                        entry_low = float(current['low'])
+                        continue
+
+                    # 매수 신호 2: 이등분선 회복 양봉(걸치거나 돌파) + 거래량 회복
+                    if is_bullish and crosses_bisector_up and volume_recovers:
+                        signals.iloc[i, signals.columns.get_loc('buy_bisector_recovery')] = True
+                        in_position = True
+                        entry_price = float(current['close'])
+                        entry_low = float(current['low'])
+                        continue
+                else:
+                    # 손절/익절 신호
+                    if bl is not None and current['close'] < bl:
+                        signals.iloc[i, signals.columns.get_loc('sell_bisector_break')] = True
+                        in_position = False
+                        entry_price = None
+                        entry_low = None
+                        continue
+
+                    if current['close'] < recent_low:
+                        signals.iloc[i, signals.columns.get_loc('sell_support_break')] = True
+                        in_position = False
+                        entry_price = None
+                        entry_low = None
+                        continue
+
+                    if entry_low is not None and current['close'] <= entry_low * (1.0 - stop_leeway):
+                        signals.iloc[i, signals.columns.get_loc('stop_entry_low_break')] = True
+                        in_position = False
+                        entry_price = None
+                        entry_low = None
+                        continue
+
+                    if entry_price is not None and current['close'] >= entry_price * (1.0 + take_profit):
+                        signals.iloc[i, signals.columns.get_loc('take_profit_3pct')] = True
+                        in_position = False
+                        entry_price = None
+                        entry_low = None
+                        continue
+
             return signals
-            
+
         except Exception as e:
             print(f"눌림목 캔들패턴 신호 생성 오류: {e}")
             return pd.DataFrame()

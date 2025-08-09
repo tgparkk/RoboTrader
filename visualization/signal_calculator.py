@@ -8,6 +8,7 @@ from core.indicators.price_box import PriceBox
 from core.indicators.bisector_line import BisectorLine
 from core.indicators.bollinger_bands import BollingerBands
 from core.indicators.multi_bollinger_bands import MultiBollingerBands
+from core.indicators.pullback_candle_pattern import PullbackCandlePattern
 
 
 class SignalCalculator:
@@ -92,6 +93,17 @@ class SignalCalculator:
                             self.logger.info(f"다중볼밴 매수신호: {original_count}개 → {filtered_count}개 (이등분선 필터 적용)")
                         
                         buy_signals |= multi_bb_buy_signals
+                
+                elif indicator_name == "pullback_candle_pattern":
+                    # 눌림목 캔들패턴 매수 신호 (3분봉 기준)
+                    if all(col in data.columns for col in ['open','high','low','close','volume']):
+                        pb_signals = PullbackCandlePattern.generate_trading_signals(data)
+                        if not pb_signals.empty:
+                            pullback_buy = pb_signals['buy_pullback_pattern'] | pb_signals['buy_bisector_recovery']
+                            # 이등분선 필터(있다면) 추가로 적용
+                            if bisector_filter is not None:
+                                pullback_buy = pullback_buy & bisector_filter
+                            buy_signals |= pullback_buy
             
             return buy_signals
             

@@ -516,6 +516,13 @@ class DataProcessor:
                             indicators_data["multi_bollinger_bands"] = multi_bb
                     except Exception as e:
                         self.logger.error(f"다중 볼린저밴드 계산 오류: {e}")
+                
+                elif indicator_name == "pullback_candle_pattern":
+                    # 눌림목 캔들패턴은 개별 선 없이 신호 기반 표시(차트 렌더러에서 처리)
+                    try:
+                        pass
+                    except Exception as e:
+                        self.logger.error(f"눌림목 캔들패턴 계산 오류: {e}")
             
             return indicators_data
             

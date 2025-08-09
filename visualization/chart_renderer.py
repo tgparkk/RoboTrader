@@ -56,6 +56,9 @@ class ChartRenderer:
             # 매수 신호 표시 (빨간색 화살표)
             self._draw_buy_signals(ax1, cleaned_data, strategy)
             
+            # 매도/손절/익절 신호 표시
+            self._draw_sell_signals(ax1, cleaned_data, strategy)
+            
             # 거래량 차트
             self._draw_volume_chart(ax2, cleaned_data)
             
@@ -252,6 +255,39 @@ class ChartRenderer:
         except Exception as e:
             self.logger.error(f"매수 신호 표시 오류: {e}")
     
+    def _draw_sell_signals(self, ax, data: pd.DataFrame, strategy):
+        """매도/손절/익절 신호 표시 (파란/검정 화살표)"""
+        try:
+            # 눌림목 캔들패턴 전략인 경우만 상세 매도 신호 표시
+            if "pullback_candle_pattern" in strategy.indicators and all(col in data.columns for col in ['open','high','low','close','volume']):
+                from core.indicators.pullback_candle_pattern import PullbackCandlePattern
+                signals = PullbackCandlePattern.generate_trading_signals(data)
+                if signals is None or signals.empty:
+                    return
+
+                x_positions = self._calculate_x_positions(data)
+                def scatter_mask(mask, color, label, marker='v'):
+                    if mask.any():
+                        idxs = mask[mask].index
+                        xs, ys = [], []
+                        for idx in idxs:
+                            pos = data.index.get_loc(idx)
+                            if pos < len(x_positions):
+                                xs.append(x_positions[pos])
+                                ys.append(data.loc[idx, 'close'])
+                        if xs:
+                            ax.scatter(xs, ys, color=color, s=130, marker=marker, label=label, zorder=10)
+
+                if 'stop_entry_low_break' in signals.columns:
+                    scatter_mask(signals['stop_entry_low_break'], 'black', '손절(0.2%)')
+                scatter_mask(signals['sell_bisector_break'], 'blue', '이등분선 이탈')
+                scatter_mask(signals['sell_support_break'], 'purple', '지지 저점 이탈')
+                if 'take_profit_3pct' in signals.columns:
+                    scatter_mask(signals['take_profit_3pct'], 'green', '익절(+3%)', marker='^')
+
+        except Exception as e:
+            self.logger.error(f"매도 신호 표시 오류: {e}")
+
     def _draw_price_box(self, ax, box_data, data: pd.DataFrame):
         """가격박스 그리기 - 정확한 x 위치 기준"""
         try:

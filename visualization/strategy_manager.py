@@ -55,6 +55,14 @@ class StrategyManager:
             description="여러 기간의 볼린저밴드를 활용한 매매 (5분봉)",
             priority=3
         )
+        ,
+        "strategy4": TradingStrategy(
+            name="눌림목 캔들패턴(3분봉)",
+            timeframe="3min",
+            indicators=["pullback_candle_pattern", "bisector_line"],
+            description="저거래 하락 조정 후 회복 양봉 및 이등분선 회복 기반 (3분봉)",
+            priority=2
+        )
     }
     
     def __init__(self):
@@ -68,7 +76,11 @@ class StrategyManager:
         # 별칭 매핑
         strategy_aliases = {
             'price_box': 'strategy1',
-            'multi_bollinger': 'strategy2'
+            'multi_bollinger': 'strategy2',
+            'pullback': 'strategy4',
+            'pullback_candle': 'strategy4',
+            'pullback_candle_pattern': 'strategy4',
+            'pullback_3min': 'strategy4'
         }
         
         # 별칭 변환
@@ -171,7 +183,7 @@ class StrategyManager:
                 return False
             
             # 지표 검증
-            valid_indicators = ["price_box", "bisector_line", "bollinger_bands", "multi_bollinger_bands"]
+            valid_indicators = ["price_box", "bisector_line", "bollinger_bands", "multi_bollinger_bands", "pullback_candle_pattern"]
             if not strategy.indicators or not all(ind in valid_indicators for ind in strategy.indicators):
                 return False
             

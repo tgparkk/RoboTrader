@@ -69,9 +69,9 @@ class TradingDecisionEngine:
                 return False, f"이미 보유 중인 종목 (매수 제외)"
             
             # 전략 1: 가격박스 + 이등분선 매수 신호 (1분봉 사용)
-            signal_result, reason = self._check_price_box_bisector_buy_signal(combined_data)
-            if signal_result:
-                return True, f"가격박스+이등분선: {reason}"
+            #signal_result, reason = self._check_price_box_bisector_buy_signal(combined_data)
+            #if signal_result:
+            #    return True, f"가격박스+이등분선: {reason}"
             
             ## 전략 2: 볼린저밴드 + 이등분선 매수 신호 (1분봉 사용)
             #signal_result, reason = self._check_bollinger_bisector_buy_signal(combined_data)
@@ -79,9 +79,9 @@ class TradingDecisionEngine:
             #    return True, f"볼린저밴드+이등분선: {reason}"
             
             # 전략 3: 다중 볼린저밴드 매수 신호 (5분봉 사용)
-            signal_result, reason = self._check_multi_bollinger_buy_signal(combined_data)
-            if signal_result:
-                return True, f"다중볼린저밴드: {reason}"
+            #signal_result, reason = self._check_multi_bollinger_buy_signal(combined_data)
+            #if signal_result:
+            #    return True, f"다중볼린저밴드: {reason}"
             
             # 전략 4: 눌림목 캔들패턴 매수 신호 (5분봉 사용)
             signal_result, reason = self._check_pullback_candle_buy_signal(combined_data)
@@ -576,9 +576,9 @@ class TradingDecisionEngine:
             buy_price = trading_stock.position.avg_price
             profit_rate = (current_price - buy_price) / buy_price
             
-            # 매수가 대비 +2.5% 수익실현 (두 전략 모두)
-            if profit_rate >= 0.025:
-                return True, "매수가 대비 +2.5% 수익실현"
+            # 매수가 대비 +3% 수익실현 (요청사항 반영)
+            if profit_rate >= 0.03:
+                return True, "매수가 대비 +3% 수익실현"
             
             return False, ""
             
@@ -767,8 +767,37 @@ class TradingDecisionEngine:
             self.logger.error(f"❌ 5분봉 변환 오류: {e}")
             return None
     
+    def _convert_to_3min_data(self, data: pd.DataFrame) -> Optional[pd.DataFrame]:
+        """1분봉 데이터를 3분봉으로 변환"""
+        try:
+            if data is None or len(data) < 3:
+                return None
+            if 'datetime' in data.columns:
+                df = data.copy()
+                df['datetime'] = pd.to_datetime(df['datetime'])
+                df = df.set_index('datetime')
+            elif 'date' in data.columns and 'time' in data.columns:
+                df = data.copy()
+                df['datetime'] = pd.to_datetime(df['date'].astype(str) + ' ' + df['time'].astype(str))
+                df = df.set_index('datetime')
+            else:
+                df = data.copy()
+                df.index = pd.date_range(start='09:00', periods=len(df), freq='1min')
+
+            grouped = df.resample('3T').agg({
+                'open': 'first',
+                'high': 'max',
+                'low': 'min',
+                'close': 'last',
+                'volume': 'sum'
+            }).dropna().reset_index()
+            return grouped
+        except Exception as e:
+            self.logger.error(f"❌ 3분봉 변환 오류: {e}")
+            return None
+
     def _check_pullback_candle_buy_signal(self, data) -> Tuple[bool, str]:
-        """전략 4: 눌림목 캔들패턴 매수 신호 확인 (5분봉 기준)"""
+        """전략 4: 눌림목 캔들패턴 매수 신호 확인 (3분봉 기준)"""
         try:
             from core.indicators.pullback_candle_pattern import PullbackCandlePattern
             
@@ -777,13 +806,13 @@ class TradingDecisionEngine:
             if not all(col in data.columns for col in required_cols):
                 return False, "필요한 데이터 컬럼 부족"
             
-            # 1분봉 데이터를 5분봉으로 변환
-            data_5min = self._convert_to_5min_data(data)
-            if data_5min is None or len(data_5min) < 30:
-                return False, "5분봉 데이터 부족"
+            # 1분봉 데이터를 3분봉으로 변환
+            data_3min = self._convert_to_3min_data(data)
+            if data_3min is None or len(data_3min) < 20:
+                return False, "3분봉 데이터 부족"
             
-            # 눌림목 캔들패턴 신호 계산 (5분봉 기준)
-            signals = PullbackCandlePattern.generate_trading_signals(data_5min)
+            # 눌림목 캔들패턴 신호 계산 (3분봉 기준)
+            signals = PullbackCandlePattern.generate_trading_signals(data_3min)
             
             if signals.empty:
                 return False, "신호 계산 실패"
@@ -794,7 +823,7 @@ class TradingDecisionEngine:
             
             # 매수 조건 2: 이등분선 회복 패턴
             if signals['buy_bisector_recovery'].iloc[-1]:
-                return True, "이등분선 회복 (거래량급증)"
+                return True, "이등분선 회복"
             
             return False, ""
             
@@ -803,17 +832,17 @@ class TradingDecisionEngine:
             return False, ""
     
     def _check_pullback_candle_stop_loss(self, data, buy_price, current_price) -> Tuple[bool, str]:
-        """눌림목 캔들패턴 전략 손절 조건 (5분봉 기준)"""
+        """눌림목 캔들패턴 전략 손절 조건 (3분봉 기준)"""
         try:
             from core.indicators.pullback_candle_pattern import PullbackCandlePattern
             
-            # 1분봉 데이터를 5분봉으로 변환
-            data_5min = self._convert_to_5min_data(data)
-            if data_5min is None or len(data_5min) < 20:
+            # 1분봉 데이터를 3분봉으로 변환
+            data_3min = self._convert_to_3min_data(data)
+            if data_3min is None or len(data_3min) < 15:
                 return False, ""
             
-            # 눌림목 캔들패턴 신호 계산 (5분봉 기준)
-            signals = PullbackCandlePattern.generate_trading_signals(data_5min)
+            # 눌림목 캔들패턴 신호 계산 (3분봉 기준)
+            signals = PullbackCandlePattern.generate_trading_signals(data_3min)
             
             if signals.empty:
                 return False, ""
@@ -826,9 +855,9 @@ class TradingDecisionEngine:
             if signals['sell_support_break'].iloc[-1]:
                 return True, "지지 저점 이탈"
             
-            # 손절 조건 3: 고거래량 하락 (기준거래량의 1/2 이상)
-            if signals['sell_high_volume'].iloc[-1]:
-                return True, "고거래량 하락 (매도세 급증)"
+            # 손절 조건 3: 진입 양봉 저가 0.2% 이탈
+            if 'stop_entry_low_break' in signals.columns and signals['stop_entry_low_break'].iloc[-1]:
+                return True, "진입 양봉 저가 0.2% 이탈"
             
             return False, ""
             

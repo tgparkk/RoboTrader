@@ -12,6 +12,7 @@ from . import kis_auth as kis
 from utils.korean_time import now_kst
 
 logger = setup_logger(__name__)
+FALLBACK_MAX_DAYS = 3  # 주말/휴일 등 데이터 없을 때 최대 폴백 일수
 
 
 def get_inquire_time_dailychartprice(div_code: str = "J", stock_code: str = "", 
@@ -153,25 +154,37 @@ def get_historical_minute_data(stock_code: str, target_date: str,
         pd.DataFrame: 해당 날짜의 분봉 데이터
     """
     try:
-        result = get_inquire_time_dailychartprice(
-            stock_code=stock_code,
-            input_date=target_date,
-            input_hour=end_hour,
-            past_data_yn=past_data_yn
-        )
-        
-        if result is None:
-            return None
-            
-        summary_df, chart_df = result
-        
-        if chart_df.empty:
-            logger.warning(f"⚠️ {stock_code} {target_date} 분봉 데이터 없음")
-            return pd.DataFrame()
-        
-        logger.debug(f"✅ {stock_code} {target_date} 분봉 데이터 조회 완료: {len(chart_df)}건")
-        return chart_df
-        
+        # 기본 시도 + 최대 FALLBACK_MAX_DAYS일까지 이전 일로 폴백
+        from datetime import datetime as _dt, timedelta as _td
+        attempt_dates = []
+        try:
+            base_dt = _dt.strptime(target_date, "%Y%m%d")
+        except Exception:
+            base_dt = _dt.strptime(now_kst().strftime("%Y%m%d"), "%Y%m%d")
+        for back in range(0, FALLBACK_MAX_DAYS + 1):
+            d = (base_dt - _td(days=back)).strftime("%Y%m%d")
+            attempt_dates.append(d)
+
+        for idx, attempt_date in enumerate(attempt_dates):
+            result = get_inquire_time_dailychartprice(
+                stock_code=stock_code,
+                input_date=attempt_date,
+                input_hour=end_hour,
+                past_data_yn=past_data_yn
+            )
+            if result is None:
+                continue
+            summary_df, chart_df = result
+            if chart_df is not None and not chart_df.empty:
+                if idx > 0:
+                    logger.info(f"↩️ {stock_code} {target_date} 데이터 없음 → {attempt_date}로 폴백 성공: {len(chart_df)}건")
+                else:
+                    logger.debug(f"✅ {stock_code} {attempt_date} 분봉 데이터 조회 완료: {len(chart_df)}건")
+                return chart_df
+            else:
+                logger.debug(f"ℹ️ {stock_code} {attempt_date} 분봉 데이터 없음 (폴백 시도 {idx}/{FALLBACK_MAX_DAYS})")
+        logger.warning(f"⚠️ {stock_code} {target_date} 및 최근 {FALLBACK_MAX_DAYS}일 폴백 모두 분봉 데이터 없음")
+        return pd.DataFrame()
     except Exception as e:
         logger.error(f"❌ {stock_code} {target_date} 분봉 데이터 조회 오류: {e}")
         return None
@@ -525,107 +538,77 @@ def get_full_trading_day_data(stock_code: str, target_date: str = "",
             target_date = now_kst().strftime("%Y%m%d")
         if not selected_time:
             selected_time = now_kst().strftime("%H%M%S")
-        
-        logger.info(f"📊 {stock_code} 전체 거래시간 분봉 데이터 수집 시작 ({target_date} {selected_time}까지)")
-        
-        # 시간대별 구간 설정 (120분씩 나누어 조회)
-        time_segments = [
-            ("090000", "110000"),  # 09:00-11:00 (120분)
-            ("110000", "130000"),  # 11:00-13:00 (120분)
-            ("130000", "150000"),  # 13:00-15:00 (120분)
-            ("150000", "153000")   # 15:00-15:30 (실제로는 15:20까지만 거래, ~21분)
-        ]
-        
-        all_data_frames = []
-        total_collected = 0
-        
-        for start_time, end_time in time_segments:
-            # 선정 시간을 넘어서면 해당 구간까지만 수집
-            if start_time >= selected_time:
-                break
-                
-            # 해당 구간의 끝 시간이 선정 시간을 넘으면 선정 시간으로 조정
-            segment_end_time = min(end_time, selected_time)
-            
-            try:
-                logger.debug(f"  구간 수집: {start_time}~{segment_end_time}")
-                
-                # 해당 구간 데이터 조회
-                result = get_inquire_time_dailychartprice(
-                    stock_code=stock_code,
-                    input_date=target_date,
-                    input_hour=segment_end_time,
-                    past_data_yn="Y"
-                )
-                
-                if result is None:
-                    logger.warning(f"  ⚠️ {start_time}~{segment_end_time} 구간 데이터 조회 실패")
+
+        from datetime import datetime as _dt, timedelta as _td
+        base_dt = _dt.strptime(target_date, "%Y%m%d")
+        # 최대 FALLBACK_MAX_DAYS일까지 이전 날짜로 폴백 시도
+        for back in range(0, FALLBACK_MAX_DAYS + 1):
+            attempt_date = (base_dt - _td(days=back)).strftime("%Y%m%d")
+            logger.info(f"📊 {stock_code} 전체 거래시간 분봉 데이터 수집 시작 ({attempt_date} {selected_time}까지)")
+
+            time_segments = [
+                ("090000", "110000"),
+                ("110000", "130000"),
+                ("130000", "150000"),
+                ("150000", "153000")
+            ]
+
+            all_data_frames = []
+            total_collected = 0
+
+            for start_time, end_time in time_segments:
+                if start_time >= selected_time:
+                    break
+                segment_end_time = min(end_time, selected_time)
+                try:
+                    logger.debug(f"  구간 수집: {start_time}~{segment_end_time}")
+                    result = get_inquire_time_dailychartprice(
+                        stock_code=stock_code,
+                        input_date=attempt_date,
+                        input_hour=segment_end_time,
+                        past_data_yn="Y"
+                    )
+                    if result is None:
+                        logger.debug(f"  ℹ️ {start_time}~{segment_end_time} 구간 조회 실패")
+                        continue
+                    summary_df, chart_df = result
+                    if chart_df.empty:
+                        logger.debug(f"  ℹ️ {start_time}~{segment_end_time} 구간 데이터 없음")
+                        continue
+                    if 'time' in chart_df.columns:
+                        chart_df['time_str'] = chart_df['time'].astype(str).str.zfill(6)
+                        segment_data = chart_df[(chart_df['time_str'] >= start_time) & (chart_df['time_str'] <= segment_end_time)].copy()
+                        if not segment_data.empty:
+                            segment_data = segment_data.drop('time_str', axis=1)
+                            all_data_frames.append(segment_data)
+                            total_collected += len(segment_data)
+                            first_time = segment_data['time'].iloc[0] if len(segment_data) > 0 else 'N/A'
+                            last_time = segment_data['time'].iloc[-1] if len(segment_data) > 0 else 'N/A'
+                            logger.debug(f"  ✅ 수집 완료: {len(segment_data)}건 ({first_time}~{last_time})")
+                except Exception as e:
+                    logger.error(f"  ❌ {start_time}~{segment_end_time} 구간 수집 오류: {e}")
                     continue
-                
-                summary_df, chart_df = result
-                
-                if chart_df.empty:
-                    logger.debug(f"  ℹ️ {start_time}~{segment_end_time} 구간 데이터 없음")
-                    continue
-                
-                # 해당 구간에 해당하는 데이터만 필터링
-                if 'time' in chart_df.columns:
-                    # 시간 컬럼을 6자리 문자열로 정규화
-                    chart_df['time_str'] = chart_df['time'].astype(str).str.zfill(6)
-                    
-                    # 해당 시간 구간 필터링
-                    segment_data = chart_df[
-                        (chart_df['time_str'] >= start_time) & 
-                        (chart_df['time_str'] <= segment_end_time)
-                    ].copy()
-                    
-                    if not segment_data.empty:
-                        # time_str 컬럼 제거 (임시 컬럼)
-                        segment_data = segment_data.drop('time_str', axis=1)
-                        all_data_frames.append(segment_data)
-                        total_collected += len(segment_data)
-                        
-                        first_time = segment_data['time'].iloc[0] if len(segment_data) > 0 else 'N/A'
-                        last_time = segment_data['time'].iloc[-1] if len(segment_data) > 0 else 'N/A'
-                        logger.debug(f"  ✅ 수집 완료: {len(segment_data)}건 ({first_time}~{last_time})")
+
+            if all_data_frames:
+                combined_df = pd.concat(all_data_frames, ignore_index=True)
+                if 'datetime' in combined_df.columns:
+                    combined_df = combined_df.sort_values('datetime').drop_duplicates(subset=['datetime']).reset_index(drop=True)
+                elif 'time' in combined_df.columns:
+                    combined_df = combined_df.sort_values('time').drop_duplicates(subset=['time']).reset_index(drop=True)
+                if 'time' in combined_df.columns and len(combined_df) > 0:
+                    first_time = combined_df['time'].iloc[0]
+                    last_time = combined_df['time'].iloc[-1]
+                    if back > 0:
+                        logger.info(f"↩️ {stock_code} {target_date} 데이터 없음 → {attempt_date} 폴백 수집 완료: {len(combined_df)}건")
                     else:
-                        logger.debug(f"  ℹ️ 해당 구간에 데이터 없음")
-                
-                # API 호출 간격 (과도한 요청 방지)
-                import time
-                time.sleep(0.1)
-                
-            except Exception as e:
-                logger.error(f"  ❌ {start_time}~{segment_end_time} 구간 수집 오류: {e}")
-                continue
-        
-        # 모든 데이터 결합
-        if all_data_frames:
-            combined_df = pd.concat(all_data_frames, ignore_index=True)
-            
-            # 시간순 정렬 및 중복 제거
-            if 'datetime' in combined_df.columns:
-                combined_df = combined_df.sort_values('datetime').drop_duplicates(subset=['datetime']).reset_index(drop=True)
-            elif 'time' in combined_df.columns:
-                combined_df = combined_df.sort_values('time').drop_duplicates(subset=['time']).reset_index(drop=True)
-            
-            # 최종 시간 범위 확인
-            if 'time' in combined_df.columns and len(combined_df) > 0:
-                first_time = combined_df['time'].iloc[0]
-                last_time = combined_df['time'].iloc[-1]
-                
-                logger.info(f"✅ {stock_code} 전체 거래시간 데이터 수집 완료")
-                logger.info(f"   수집 범위: {first_time} ~ {last_time}")
-                logger.info(f"   총 분봉 수: {len(combined_df)}건")
-                
-                return combined_df
+                        logger.info(f"✅ {stock_code} 전체 거래시간 데이터 수집 완료: {len(combined_df)}건")
+                    logger.info(f"   수집 범위: {first_time} ~ {last_time}")
+                    return combined_df
             else:
-                logger.warning(f"⚠️ {stock_code} 유효한 시간 데이터 없음")
-                return pd.DataFrame()
-        else:
-            logger.warning(f"⚠️ {stock_code} 수집된 데이터 없음")
-            return pd.DataFrame()
-            
+                logger.debug(f"ℹ️ {stock_code} {attempt_date} 수집된 데이터 없음 (폴백 시도 {back}/{FALLBACK_MAX_DAYS})")
+
+        logger.warning(f"⚠️ {stock_code} {target_date} 및 최근 {FALLBACK_MAX_DAYS}일 폴백 모두 수집 실패")
+        return pd.DataFrame()
     except Exception as e:
         logger.error(f"❌ {stock_code} 전체 거래시간 데이터 수집 오류: {e}")
         return None
@@ -645,100 +628,83 @@ async def get_full_trading_day_data_async(stock_code: str, target_date: str = ""
         pd.DataFrame: 09:00부터 선정시점까지의 전체 분봉 데이터
     """
     try:
-        # 기본값 설정
         if not target_date:
             target_date = now_kst().strftime("%Y%m%d")
         if not selected_time:
             selected_time = now_kst().strftime("%H%M%S")
-        
-        logger.info(f"📊 {stock_code} 전체 거래시간 분봉 데이터 수집 시작 (비동기)")
-        
-        # 시간대별 구간 설정
+
+        from datetime import datetime as _dt, timedelta as _td
+        base_dt = _dt.strptime(target_date, "%Y%m%d")
+
         time_segments = [
-            ("090000", "110000"),  # 09:00-11:00 (120분)
-            ("110000", "130000"),  # 11:00-13:00 (120분)
-            ("130000", "150000"),  # 13:00-15:00 (120분)
-            ("150000", "153000")   # 15:00-15:30 (실제로는 15:20까지만 거래, ~21분)
+            ("090000", "110000"),
+            ("110000", "130000"),
+            ("130000", "150000"),
+            ("150000", "153000")
         ]
-        
-        # 선정 시간에 따른 필요한 구간만 선택
-        needed_segments = []
-        for start_time, end_time in time_segments:
-            if start_time >= selected_time:
-                break
-            segment_end_time = min(end_time, selected_time)
-            needed_segments.append((start_time, segment_end_time))
-        
-        logger.debug(f"  필요한 구간: {len(needed_segments)}개")
-        
-        # 비동기 태스크 생성
-        async def fetch_segment_data(start_time: str, end_time: str):
-            try:
-                await asyncio.sleep(0.1)  # API 호출 간격
-                
-                result = get_inquire_time_dailychartprice(
-                    stock_code=stock_code,
-                    input_date=target_date,
-                    input_hour=end_time,
-                    past_data_yn="Y"
-                )
-                
-                if result is None:
+
+        for back in range(0, FALLBACK_MAX_DAYS + 1):
+            attempt_date = (base_dt - _td(days=back)).strftime("%Y%m%d")
+            logger.info(f"📊 {stock_code} 전체 거래시간 분봉 데이터 수집 시작 (비동기, {attempt_date} {selected_time}까지)")
+
+            needed_segments = []
+            for start_time, end_time in time_segments:
+                if start_time >= selected_time:
+                    break
+                segment_end_time = min(end_time, selected_time)
+                needed_segments.append((start_time, segment_end_time))
+
+            async def fetch_segment_data(start_time: str, end_time: str):
+                try:
+                    await asyncio.sleep(0.1)
+                    result = get_inquire_time_dailychartprice(
+                        stock_code=stock_code,
+                        input_date=attempt_date,
+                        input_hour=end_time,
+                        past_data_yn="Y"
+                    )
+                    if result is None:
+                        return None
+                    summary_df, chart_df = result
+                    if chart_df.empty:
+                        return None
+                    if 'time' in chart_df.columns:
+                        chart_df['time_str'] = chart_df['time'].astype(str).str.zfill(6)
+                        segment_data = chart_df[(chart_df['time_str'] >= start_time) & (chart_df['time_str'] <= end_time)].copy()
+                        if not segment_data.empty:
+                            segment_data = segment_data.drop('time_str', axis=1)
+                            return segment_data
                     return None
-                    
-                summary_df, chart_df = result
-                
-                if chart_df.empty:
+                except Exception as e:
+                    logger.error(f"  구간 {start_time}~{end_time} 수집 오류: {e}")
                     return None
-                
-                # 시간 구간 필터링
-                if 'time' in chart_df.columns:
-                    chart_df['time_str'] = chart_df['time'].astype(str).str.zfill(6)
-                    segment_data = chart_df[
-                        (chart_df['time_str'] >= start_time) & 
-                        (chart_df['time_str'] <= end_time)
-                    ].copy()
-                    
-                    if not segment_data.empty:
-                        segment_data = segment_data.drop('time_str', axis=1)
-                        return segment_data
-                
-                return None
-                
-            except Exception as e:
-                logger.error(f"  구간 {start_time}~{end_time} 수집 오류: {e}")
-                return None
-        
-        # 모든 구간을 비동기로 동시 수집
-        tasks = [fetch_segment_data(start, end) for start, end in needed_segments]
-        segment_results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        # 결과 결합
-        valid_data_frames = []
-        for i, result in enumerate(segment_results):
-            if isinstance(result, pd.DataFrame) and not result.empty:
-                valid_data_frames.append(result)
-                start_time, end_time = needed_segments[i]
-                logger.debug(f"  ✅ 구간 {start_time}~{end_time}: {len(result)}건")
-            elif isinstance(result, Exception):
-                start_time, end_time = needed_segments[i]
-                logger.error(f"  ❌ 구간 {start_time}~{end_time} 오류: {result}")
-        
-        if valid_data_frames:
-            combined_df = pd.concat(valid_data_frames, ignore_index=True)
-            
-            # 정렬 및 중복 제거
-            if 'datetime' in combined_df.columns:
-                combined_df = combined_df.sort_values('datetime').drop_duplicates(subset=['datetime']).reset_index(drop=True)
-            elif 'time' in combined_df.columns:
-                combined_df = combined_df.sort_values('time').drop_duplicates(subset=['time']).reset_index(drop=True)
-            
-            logger.info(f"✅ {stock_code} 비동기 수집 완료: {len(combined_df)}건")
-            return combined_df
-        else:
-            logger.warning(f"⚠️ {stock_code} 비동기 수집 결과 없음")
-            return pd.DataFrame()
-            
+
+            tasks = [fetch_segment_data(start, end) for start, end in needed_segments]
+            segment_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            valid_data_frames = []
+            for i, result in enumerate(segment_results):
+                if isinstance(result, pd.DataFrame) and not result.empty:
+                    valid_data_frames.append(result)
+                    s, e = needed_segments[i]
+                    logger.debug(f"  ✅ 구간 {s}~{e}: {len(result)}건")
+
+            if valid_data_frames:
+                combined_df = pd.concat(valid_data_frames, ignore_index=True)
+                if 'datetime' in combined_df.columns:
+                    combined_df = combined_df.sort_values('datetime').drop_duplicates(subset=['datetime']).reset_index(drop=True)
+                elif 'time' in combined_df.columns:
+                    combined_df = combined_df.sort_values('time').drop_duplicates(subset=['time']).reset_index(drop=True)
+                if back > 0:
+                    logger.info(f"↩️ {stock_code} {target_date} 데이터 없음 → {attempt_date} 폴백 수집 완료: {len(combined_df)}건")
+                else:
+                    logger.info(f"✅ {stock_code} 비동기 수집 완료: {len(combined_df)}건")
+                return combined_df
+            else:
+                logger.debug(f"ℹ️ {stock_code} {attempt_date} 비동기 수집 결과 없음 (폴백 시도 {back}/{FALLBACK_MAX_DAYS})")
+
+        logger.warning(f"⚠️ {stock_code} {target_date} 및 최근 {FALLBACK_MAX_DAYS}일 폴백 모두 비동기 수집 실패")
+        return pd.DataFrame()
     except Exception as e:
         logger.error(f"❌ {stock_code} 비동기 전체 데이터 수집 오류: {e}")
         return None

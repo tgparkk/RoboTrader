@@ -248,7 +248,10 @@ class PostMarketChartGenerator:
                                          chart_df=None, target_date: str = None,
                                          selection_reason: str = "") -> Dict[str, Optional[str]]:
         """
-        두 개의 전략 차트 생성 (가격박스+이등분선, 다중볼린저밴드+이등분선)
+        두 개(이상)의 전략 차트 생성
+        - 가격박스+이등분선(1분봉)
+        - 다중볼린저밴드+이등분선(5분봉)
+        - 눌림목 캔들패턴(3분봉)
         
         Args:
             stock_code: 종목코드
@@ -268,7 +271,8 @@ class PostMarketChartGenerator:
             
             results = {
                 'price_box': None,
-                'multi_bollinger': None
+                'multi_bollinger': None,
+                'pullback_candle_3min': None
             }
             
             # 1분봉 데이터 준비
@@ -280,7 +284,8 @@ class PostMarketChartGenerator:
             if timeframe_data is None or timeframe_data.empty:
                 self.logger.warning("1분봉 데이터 없음")
                 return results
-            
+
+            ''' 
             # 전략 1: 가격박스 + 이등분선
             try:
                 price_box_strategy = self.strategy_manager.get_strategy('price_box')
@@ -334,6 +339,28 @@ class PostMarketChartGenerator:
                         
             except Exception as e:
                 self.logger.error(f"다중볼린저밴드 차트 생성 오류: {e}")
+            '''
+
+            # 전략 3: 눌림목 캔들패턴(3분봉)
+            try:
+                pullback_strategy = self.strategy_manager.get_strategy('pullback_candle_pattern')
+                if pullback_strategy:
+                    timeframe_data_3min = await self._get_cached_data(stock_code, target_date, "3min")
+                    if timeframe_data_3min is None or timeframe_data_3min.empty:
+                        self.logger.warning("3분봉 데이터 없음")
+                    else:
+                        indicator_cache_key = f"{stock_code}_{target_date}_3min_pullback"
+                        pullback_indicators = await self._get_cached_indicators(indicator_cache_key, timeframe_data_3min, pullback_strategy, stock_code)
+                        pullback_path = self.chart_renderer.create_strategy_chart(
+                            stock_code, stock_name, target_date, pullback_strategy,
+                            timeframe_data_3min, pullback_indicators, selection_reason,
+                            chart_suffix="pullback_candle", timeframe="3min"
+                        )
+                        if pullback_path:
+                            results['pullback_candle_3min'] = pullback_path
+                            self.logger.info(f"✅ 눌림목(3분봉) 차트 생성: {pullback_path}")
+            except Exception as e:
+                self.logger.error(f"눌림목(3분봉) 차트 생성 오류: {e}")
             
             return results
             
