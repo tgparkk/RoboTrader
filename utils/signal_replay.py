@@ -33,6 +33,10 @@ from utils.logger import setup_logger
 from visualization.data_processor import DataProcessor
 from core.indicators.pullback_candle_pattern import PullbackCandlePattern
 from core.indicators.bisector_line import BisectorLine
+from core.indicators.consolidation_breakout import (
+    generate_consolidation_breakout_signals,
+    ConsolidationParams,
+)
 from api.kis_api_manager import KISAPIManager
 
 
@@ -260,14 +264,19 @@ def list_all_buy_signals(df_3min: pd.DataFrame) -> List[Dict[str, object]]:
     if df_3min is None or df_3min.empty or 'datetime' not in df_3min.columns:
         return out
     sig = PullbackCandlePattern.generate_trading_signals(df_3min)
+    cns = generate_consolidation_breakout_signals(df_3min)
     if sig is None or sig.empty:
-        return out
+        sig = pd.DataFrame(index=df_3min.index)
+    if cns is None or cns.empty:
+        cns = pd.DataFrame(index=df_3min.index)
     has_pb = sig.get('buy_pullback_pattern', pd.Series([False]*len(df_3min)))
     has_rc = sig.get('buy_bisector_recovery', pd.Series([False]*len(df_3min)))
+    has_cnb = cns.get('buy_consolidation_breakout', pd.Series([False]*len(df_3min)))
     for i in range(len(df_3min)):
         pb = bool(has_pb.iloc[i])
         rc = bool(has_rc.iloc[i])
-        if not (pb or rc):
+        cb = bool(has_cnb.iloc[i])
+        if not (pb or rc or cb):
             continue
         ts = df_3min['datetime'].iloc[i]
         hhmm = pd.Timestamp(ts).strftime('%H:%M')
@@ -276,6 +285,8 @@ def list_all_buy_signals(df_3min: pd.DataFrame) -> List[Dict[str, object]]:
             types.append('pullback')
         if rc:
             types.append('bisector_recovery')
+        if cb:
+            types.append('consolidation_breakout')
         out.append({'time': hhmm, 'types': '+'.join(types)})
     return out
 
@@ -290,8 +301,11 @@ def simulate_trades(df_3min: pd.DataFrame) -> List[Dict[str, object]]:
     if df_3min is None or df_3min.empty or 'datetime' not in df_3min.columns:
         return trades
     sig = PullbackCandlePattern.generate_trading_signals(df_3min)
+    cns = generate_consolidation_breakout_signals(df_3min)
     if sig is None or sig.empty:
-        return trades
+        sig = pd.DataFrame(index=df_3min.index)
+    if cns is None or cns.empty:
+        cns = pd.DataFrame(index=df_3min.index)
 
     closes = pd.to_numeric(df_3min['close'], errors='coerce')
     in_pos = False
@@ -302,6 +316,7 @@ def simulate_trades(df_3min: pd.DataFrame) -> List[Dict[str, object]]:
     # 안전: 불리언 시리즈 확보
     buy_pb = sig.get('buy_pullback_pattern', pd.Series([False]*len(df_3min)))
     buy_rc = sig.get('buy_bisector_recovery', pd.Series([False]*len(df_3min)))
+    buy_cb = cns.get('buy_consolidation_breakout', pd.Series([False]*len(df_3min)))
     sell_bis = sig.get('sell_bisector_break', pd.Series([False]*len(df_3min)))
     sell_sup = sig.get('sell_support_break', pd.Series([False]*len(df_3min)))
     stop_low = sig.get('stop_entry_low_break', pd.Series([False]*len(df_3min)))
@@ -315,11 +330,16 @@ def simulate_trades(df_3min: pd.DataFrame) -> List[Dict[str, object]]:
             continue
 
         if not in_pos:
-            if bool(buy_pb.iloc[i]) or bool(buy_rc.iloc[i]):
+            if bool(buy_pb.iloc[i]) or bool(buy_rc.iloc[i]) or bool(buy_cb.iloc[i]):
                 in_pos = True
                 entry_price = c
                 entry_time = hhmm
-                entry_type = 'pullback' if bool(buy_pb.iloc[i]) else 'bisector_recovery'
+                if bool(buy_pb.iloc[i]):
+                    entry_type = 'pullback'
+                elif bool(buy_rc.iloc[i]):
+                    entry_type = 'bisector_recovery'
+                else:
+                    entry_type = 'consolidation_breakout'
         else:
             exit_reason = None
             if bool(sell_bis.iloc[i]):
@@ -444,7 +464,7 @@ def main():
     # 기본값 (요청하신 2025-08-08, 4개 종목/시각)
     DEFAULT_DATE = "20250808"
     DEFAULT_CODES = "034230,073010,107600,214450,208640,078520,240810"
-    DEFAULT_TIMES = "034230=14:39;078520=11:33,11:36;107600=11:24,11:27,14:51;214450=12:00,14:39;073010=10:30,10:33,10:36,10:39"
+    DEFAULT_TIMES = "034230=14:39;078520=11:33,11:36,11:39;107600=11:24,11:27,14:51;214450=12:00,14:39;073010=10:30,10:33,10:36,10:39"
 
     date_str: str = (args.date or DEFAULT_DATE).strip()
     codes_input = args.codes or DEFAULT_CODES

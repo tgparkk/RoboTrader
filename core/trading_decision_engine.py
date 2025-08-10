@@ -485,10 +485,10 @@ class TradingDecisionEngine:
             current_price = data['close'].iloc[-1]
             buy_price = trading_stock.position.avg_price
             
-            # 공통 손절: 매수가 대비 -3% 손실
+            # 공통 손절: 매수가 대비 -2% 손실 (최대 손실 한도)
             loss_rate = (current_price - buy_price) / buy_price
-            if loss_rate <= -0.03:
-                return True, "매수가 대비 -3% 손실"
+            if loss_rate <= -0.02:
+                return True, "매수가 대비 -2% 손실"
             
             # 매수 사유에 따른 개별 손절 조건
             if "가격박스" in trading_stock.selection_reason:
