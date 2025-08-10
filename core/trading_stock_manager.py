@@ -60,6 +60,12 @@ class TradingStockManager:
         self.monitor_interval = 10  # 10초마다 상태 체크
         
         self.logger.info("🎯 종목 거래 상태 통합 관리자 초기화 완료")
+        # 주문 관리자에 역참조 등록 (정정 시 주문ID 동기화용)
+        try:
+            if hasattr(self.order_manager, 'set_trading_manager'):
+                self.order_manager.set_trading_manager(self)
+        except Exception:
+            pass
     
     def add_selected_stock(self, stock_code: str, stock_name: str, 
                           selection_reason: str = "") -> bool:
@@ -80,10 +86,35 @@ class TradingStockManager:
                 
                 # 이미 존재하는 종목인지 확인
                 if stock_code in self.trading_stocks:
-                    #self.logger.debug(f"📊 {stock_code}({stock_name}): 이미 관리 중인 종목")
+                    trading_stock = self.trading_stocks[stock_code]
+                    # 재진입 허용: COMPLETED/FAILED → SELECTED로 재등록
+                    if trading_stock.state in (StockState.COMPLETED, StockState.FAILED):
+                        # 상태 변경 및 메타 업데이트
+                        trading_stock.selected_time = current_time
+                        trading_stock.selection_reason = selection_reason
+                        # 포지션/주문 정보는 정리
+                        trading_stock.clear_position()
+                        trading_stock.clear_current_order()
+                        self._change_stock_state(stock_code, StockState.SELECTED, f"재선정: {selection_reason}")
+                        
+                        # IntradayStockManager에 다시 추가 (데이터 수집 재시작)
+                        success = self.intraday_manager.add_selected_stock(
+                            stock_code, stock_name, selection_reason
+                        )
+                        if success:
+                            self.logger.info(
+                                f"✅ {stock_code}({stock_name}) 재선정 완료 - 시간: {current_time.strftime('%H:%M:%S')}"
+                            )
+                            return True
+                        else:
+                            self.logger.warning(f"⚠️ {stock_code} 재선정 실패 - Intraday 등록 실패")
+                            return False
+                    
+                    # 그 외 상태에서는 기존 관리 유지
+                    #self.logger.debug(f"📊 {stock_code}({stock_name}): 이미 관리 중 (상태: {trading_stock.state.value})")
                     return True
                 
-                # TradingStock 객체 생성
+                # 신규 등록
                 trading_stock = TradingStock(
                     stock_code=stock_code,
                     stock_name=stock_name,
@@ -482,6 +513,18 @@ class TradingStockManager:
     def get_trading_stock(self, stock_code: str) -> Optional[TradingStock]:
         """종목 정보 조회"""
         return self.trading_stocks.get(stock_code)
+
+    def update_current_order(self, stock_code: str, new_order_id: str) -> None:
+        """정정 등으로 새 주문이 생성되었을 때 현재 주문ID를 최신값으로 동기화"""
+        try:
+            with self._lock:
+                if stock_code in self.trading_stocks:
+                    trading_stock = self.trading_stocks[stock_code]
+                    trading_stock.current_order_id = new_order_id
+                    trading_stock.order_history.append(new_order_id)
+                    self.logger.debug(f"🔄 {stock_code} 현재 주문ID 업데이트: {new_order_id}")
+        except Exception as e:
+            self.logger.warning(f"⚠️ 현재 주문ID 업데이트 실패({stock_code}): {e}")
     
     def get_portfolio_summary(self) -> Dict[str, Any]:
         """포트폴리오 전체 현황"""

@@ -63,6 +63,113 @@ class DayTradingBot:
         # 신호 핸들러 등록
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
+
+    def _round_to_tick(self, price: float) -> float:
+        """KRX 호가단위에 맞게 반올림 (최근가에 가장 가까운 합법 틱)"""
+        try:
+            if price <= 0:
+                return 0.0
+            # 간단 테이블: 가격구간별 틱 (원)
+            # 실제 KRX 호가단위와 약간 다를 수 있으나 보수적으로 적용
+            brackets = [
+                (0, 1000, 1),
+                (1000, 5000, 5),
+                (5000, 10000, 10),
+                (10000, 50000, 50),
+                (50000, 100000, 100),
+                (100000, 500000, 500),
+                (500000, float('inf'), 1000),
+            ]
+            tick = 1
+            for low, high, t in brackets:
+                if low <= price < high:
+                    tick = t
+                    break
+            # 최근가에 가장 가까운 합법 틱
+            return round(price / tick) * tick
+        except Exception:
+            return float(int(price))
+
+    def _determine_entry_price_like_virtual(self, combined_data, buy_reason: str) -> float:
+        """가상 매수와 동일한 half-price 우선 규칙 적용, 실패 시 최신 종가"""
+        try:
+            import pandas as pd
+            from core.indicators.pullback_candle_pattern import PullbackCandlePattern
+
+            # 1분→3분 변환
+            df = combined_data
+            if df is None or len(df) < 3:
+                return float(combined_data['close'].iloc[-1])
+
+            # datetime 인덱스 보정
+            if 'datetime' in df.columns:
+                base = df.copy()
+                base['datetime'] = pd.to_datetime(base['datetime'])
+                base = base.set_index('datetime')
+            elif 'date' in df.columns and 'time' in df.columns:
+                base = df.copy()
+                base['datetime'] = pd.to_datetime(base['date'].astype(str) + ' ' + base['time'].astype(str))
+                base = base.set_index('datetime')
+            else:
+                base = df.copy()
+                base.index = pd.date_range(start='09:00', periods=len(base), freq='1min')
+
+            data_3min = base.resample('3T').agg({'open':'first','high':'max','low':'min','close':'last','volume':'sum'}).dropna().reset_index()
+            if data_3min is None or data_3min.empty:
+                return float(combined_data['close'].iloc[-1])
+
+            signals = PullbackCandlePattern.generate_trading_signals(data_3min)
+            if signals is None or signals.empty:
+                return float(combined_data['close'].iloc[-1])
+
+            # 최근 신호 인덱스 탐색
+            buy_cols = []
+            if 'buy_bisector_recovery' in signals.columns:
+                buy_cols.append('buy_bisector_recovery')
+            if 'buy_pullback_pattern' in signals.columns:
+                buy_cols.append('buy_pullback_pattern')
+
+            last_idx = None
+            for col in buy_cols:
+                idxs = signals.index[signals[col] == True].tolist()
+                if idxs:
+                    candidate = idxs[-1]
+                    last_idx = candidate if last_idx is None else max(last_idx, candidate)
+
+            if last_idx is None or last_idx < 0 or last_idx >= len(data_3min):
+                return float(combined_data['close'].iloc[-1])
+
+            sig_high = float(data_3min['high'].iloc[last_idx])
+            sig_low = float(data_3min['low'].iloc[last_idx])
+            if not (sig_high > 0 and sig_low > 0 and sig_high >= sig_low):
+                return float(combined_data['close'].iloc[-1])
+
+            half_price = sig_low + (sig_high - sig_low) * 0.5
+            if half_price <= 0 or half_price < sig_low or half_price > sig_high:
+                return float(combined_data['close'].iloc[-1])
+
+            return float(half_price)
+        except Exception:
+            return float(combined_data['close'].iloc[-1])
+
+    async def _calc_buy_quantity(self, stock_code: str, price: float) -> int:
+        """가용 현금 20% 예산 + KIS 매수가능수량 한도로 실주문 수량 계산"""
+        try:
+            acct = self.api_manager.get_account_balance_quick()
+            if not acct or acct.available_amount <= 0:
+                return 0
+            target_budget = max(0, acct.available_amount * 0.20)
+            if price <= 0:
+                return 0
+            qty_by_budget = int(target_budget // price)
+            if qty_by_budget < 1:
+                return 0
+            max_qty = self.api_manager.get_tradable_amount(stock_code, price)
+            if max_qty is None or max_qty <= 0:
+                return 0
+            return max(1, min(qty_by_budget, int(max_qty)))
+        except Exception:
+            return 0
     
     def _check_duplicate_process(self):
         """프로세스 중복 실행 방지"""
@@ -222,9 +329,9 @@ class DayTradingBot:
             for trading_stock in positioned_stocks:
                 await self._analyze_sell_decision(trading_stock)
             
-            # 추가: DB에서 미체결 가상 포지션 직접 확인하여 매도 판단
-            if hasattr(self, 'db_manager') and self.db_manager:
-                await self._analyze_virtual_positions_for_sell()
+            # 실거래 전환: 가상 포지션 매도 판단 비활성화
+            # if hasattr(self, 'db_manager') and self.db_manager:
+            #     await self._analyze_virtual_positions_for_sell()
                 
         except Exception as e:
             self.logger.error(f"❌ 매매 판단 시스템 오류: {e}")
@@ -253,10 +360,21 @@ class DayTradingBot:
                 # 매수 후보로 변경
                 success = self.trading_manager.move_to_buy_candidate(stock_code, buy_reason)
                 if success:
-                    # 가상 매수 실행 (테스트용)
-                    await self.decision_engine.execute_virtual_buy(trading_stock, combined_data, buy_reason)
-                    
-                    self.logger.info(f"🔥 매수 후보 등록: {stock_code}({stock_name}) - {buy_reason}")
+                    # 실주문: 가격/수량 산출 후 매수 주문 실행
+                    try:
+                        entry_price = self._determine_entry_price_like_virtual(combined_data, buy_reason)
+                        entry_price = self._round_to_tick(entry_price)
+                        if entry_price <= 0:
+                            self.logger.warning(f"⚠️ 유효하지 않은 매수가 계산: {entry_price}")
+                            return
+                        quantity = await self._calc_buy_quantity(stock_code, entry_price)
+                        if quantity is None or quantity < 1:
+                            self.logger.warning(f"⚠️ 매수 수량 산출 실패 또는 0주: {stock_code}")
+                            return
+                        await self.trading_manager.execute_buy_order(stock_code, quantity, entry_price, buy_reason)
+                        self.logger.info(f"🔥 매수 후보 등록 및 주문 실행: {stock_code}({stock_name}) - {buy_reason} / {quantity}주 @{entry_price:,.0f}원")
+                    except Exception as e:
+                        self.logger.error(f"❌ 실매수 주문 실행 오류: {e}")
                         
         except Exception as e:
             self.logger.error(f"❌ {trading_stock.stock_code} 매수 판단 오류: {e}")
@@ -279,10 +397,18 @@ class DayTradingBot:
                 # 매도 후보로 변경
                 success = self.trading_manager.move_to_sell_candidate(stock_code, sell_reason)
                 if success:
-                    # 가상 매도 실행 (테스트용)
-                    await self.decision_engine.execute_virtual_sell(trading_stock, combined_data, sell_reason)
-                    
-                    self.logger.info(f"📉 매도 후보 등록: {stock_code}({stock_name}) - {sell_reason}")
+                    # 실주문: 보유 수량 확인 후 매도 주문 실행
+                    try:
+                        if not trading_stock.position or trading_stock.position.quantity <= 0:
+                            self.logger.warning(f"⚠️ 포지션 정보 없음 또는 수량 0: {stock_code}")
+                            return
+                        sell_price = float(combined_data['close'].iloc[-1])
+                        sell_price = self._round_to_tick(sell_price)
+                        quantity = int(trading_stock.position.quantity)
+                        await self.trading_manager.execute_sell_order(stock_code, quantity, sell_price, sell_reason)
+                        self.logger.info(f"📉 매도 후보 등록 및 주문 실행: {stock_code}({stock_name}) - {sell_reason} / {quantity}주 @{sell_price:,.0f}원")
+                    except Exception as e:
+                        self.logger.error(f"❌ 실매도 주문 실행 오류: {e}")
                         
         except Exception as e:
             self.logger.error(f"❌ {trading_stock.stock_code} 매도 판단 오류: {e}")

@@ -20,6 +20,7 @@ class OrderManager:
         self.api_manager = api_manager
         self.telegram = telegram_integration
         self.logger = setup_logger(__name__)
+        self.trading_manager = None  # TradingStockManager (선택 연결)
         
         self.pending_orders: Dict[str, Order] = {}  # order_id: Order
         self.order_timeouts: Dict[str, datetime] = {}  # order_id: timeout_time
@@ -27,6 +28,10 @@ class OrderManager:
         
         self.is_monitoring = False
         self.executor = ThreadPoolExecutor(max_workers=2)
+    
+    def set_trading_manager(self, trading_manager):
+        """TradingStockManager 참조를 등록 (가격 정정 시 주문ID 동기화용)"""
+        self.trading_manager = trading_manager
     
     async def place_buy_order(self, stock_code: str, quantity: int, price: float, 
                              timeout_seconds: int = None) -> Optional[str]:
@@ -363,6 +368,12 @@ class OrderManager:
                     new_order = self.pending_orders[new_order_id]
                     new_order.adjustment_count = order.adjustment_count + 1
                     self.logger.info(f"✅ 가격 정정 완료: {new_order_id}")
+                    # 🔄 TradingStockManager의 현재 주문ID를 신규 주문ID로 동기화
+                    try:
+                        if self.trading_manager is not None:
+                            self.trading_manager.update_current_order(order.stock_code, new_order_id)
+                    except Exception as sync_err:
+                        self.logger.warning(f"⚠️ 주문ID 동기화 실패({order.stock_code}): {sync_err}")
                 
         except Exception as e:
             self.logger.error(f"가격 정정 실패 {order_id}: {e}")
