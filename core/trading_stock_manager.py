@@ -396,6 +396,21 @@ class TradingStockManager:
                                 StockState.POSITIONED, 
                                 f"매수 완료: {order.quantity}주 @{order.price:,.0f}원"
                             )
+                        # 실거래 매수 기록 저장
+                        try:
+                            from db.database_manager import DatabaseManager
+                            # DatabaseManager는 main에서 생성되어 전달되었을 수도 있으나, 안전하게 새 인스턴스 사용
+                            db = DatabaseManager()
+                            db.save_real_buy(
+                                stock_code=trading_stock.stock_code,
+                                stock_name=trading_stock.stock_name,
+                                price=float(order.price),
+                                quantity=int(order.quantity),
+                                strategy=trading_stock.selection_reason,
+                                reason="체결"
+                            )
+                        except Exception as db_err:
+                            self.logger.warning(f"⚠️ 실거래 매수 기록 저장 실패: {db_err}")
                         
                         self.logger.info(f"✅ {trading_stock.stock_code} 매수 완료")
                         
@@ -436,6 +451,22 @@ class TradingStockManager:
                                 StockState.COMPLETED, 
                                 f"매도 완료: {order.quantity}주 @{order.price:,.0f}원"
                             )
+                        # 실거래 매도 기록 저장 (매칭된 매수와 손익 계산)
+                        try:
+                            from db.database_manager import DatabaseManager
+                            db = DatabaseManager()
+                            buy_id = db.get_last_open_real_buy(trading_stock.stock_code)
+                            db.save_real_sell(
+                                stock_code=trading_stock.stock_code,
+                                stock_name=trading_stock.stock_name,
+                                price=float(order.price),
+                                quantity=int(order.quantity),
+                                strategy=trading_stock.selection_reason,
+                                reason="체결",
+                                buy_record_id=buy_id
+                            )
+                        except Exception as db_err:
+                            self.logger.warning(f"⚠️ 실거래 매도 기록 저장 실패: {db_err}")
                         
                         self.logger.info(f"✅ {trading_stock.stock_code} 매도 완료")
                         

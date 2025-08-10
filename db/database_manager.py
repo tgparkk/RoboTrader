@@ -113,6 +113,26 @@ class DatabaseManager:
                     )
                 ''')
                 
+                # 실거래 매매 기록 테이블
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS real_trading_records (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        stock_code VARCHAR(10) NOT NULL,
+                        stock_name VARCHAR(100),
+                        action VARCHAR(10) NOT NULL,  -- 'BUY' or 'SELL'
+                        quantity INTEGER NOT NULL,
+                        price REAL NOT NULL,
+                        timestamp DATETIME NOT NULL,
+                        strategy VARCHAR(50),  -- 전략명 또는 선정 사유
+                        reason TEXT,  -- 매매 사유
+                        profit_loss REAL DEFAULT 0,  -- 손익 (매도시에만)
+                        profit_rate REAL DEFAULT 0,  -- 수익률 (매도시에만)
+                        buy_record_id INTEGER,  -- 대응되는 매수 기록 ID (매도시에만)
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (buy_record_id) REFERENCES real_trading_records (id)
+                    )
+                ''')
+                
                 # 매매 기록 테이블 (기존)
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS trading_records (
@@ -135,6 +155,8 @@ class DatabaseManager:
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_virtual_trading_code_date ON virtual_trading_records(stock_code, timestamp)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_virtual_trading_action ON virtual_trading_records(action)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_virtual_trading_test ON virtual_trading_records(is_test)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_real_trading_code_date ON real_trading_records(stock_code, timestamp)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_real_trading_action ON real_trading_records(action)')
                 
                 conn.commit()
                 self.logger.info("데이터베이스 테이블 생성 완료")
@@ -372,7 +394,7 @@ class DatabaseManager:
                 stats = {}
                 
                 # 테이블별 레코드 수
-                for table in ['candidate_stocks', 'stock_prices', 'trading_records', 'virtual_trading_records']:
+                for table in ['candidate_stocks', 'stock_prices', 'trading_records', 'virtual_trading_records', 'real_trading_records']:
                     cursor.execute(f'SELECT COUNT(*) FROM {table}')
                     stats[table] = cursor.fetchone()[0]
                 
@@ -381,6 +403,102 @@ class DatabaseManager:
         except Exception as e:
             self.logger.error(f"통계 조회 실패: {e}")
             return {}
+
+    # ============================
+    # 실거래 저장/조회 API
+    # ============================
+    def save_real_buy(self, stock_code: str, stock_name: str, price: float,
+                      quantity: int, strategy: str = '', reason: str = '',
+                      timestamp: datetime = None) -> Optional[int]:
+        """실거래 매수 기록 저장"""
+        try:
+            if timestamp is None:
+                timestamp = now_kst()
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO real_trading_records 
+                    (stock_code, stock_name, action, quantity, price, timestamp, strategy, reason, created_at)
+                    VALUES (?, ?, 'BUY', ?, ?, ?, ?, ?, ?)
+                ''', (
+                    stock_code, stock_name, quantity, price,
+                    timestamp.strftime('%Y-%m-%d %H:%M:%S'), strategy, reason,
+                    now_kst().strftime('%Y-%m-%d %H:%M:%S')
+                ))
+                rec_id = cursor.lastrowid
+                conn.commit()
+                self.logger.info(f"✅ 실거래 매수 기록 저장: {stock_code} {quantity}주 @{price:,.0f}")
+                return rec_id
+        except Exception as e:
+            self.logger.error(f"실거래 매수 기록 저장 실패: {e}")
+            return None
+
+    def save_real_sell(self, stock_code: str, stock_name: str, price: float,
+                       quantity: int, strategy: str = '', reason: str = '',
+                       buy_record_id: Optional[int] = None, timestamp: datetime = None) -> bool:
+        """실거래 매도 기록 저장 (손익 계산 포함)"""
+        try:
+            if timestamp is None:
+                timestamp = now_kst()
+            buy_price = None
+            if buy_record_id:
+                with sqlite3.connect(self.db_path) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        SELECT price FROM real_trading_records 
+                        WHERE id = ? AND action = 'BUY'
+                    ''', (buy_record_id,))
+                    row = cursor.fetchone()
+                    if row:
+                        buy_price = float(row[0])
+            profit_loss = 0.0
+            profit_rate = 0.0
+            if buy_price and buy_price > 0:
+                profit_loss = (price - buy_price) * quantity
+                profit_rate = (price - buy_price) / buy_price * 100.0
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO real_trading_records 
+                    (stock_code, stock_name, action, quantity, price, timestamp, strategy, reason, 
+                     profit_loss, profit_rate, buy_record_id, created_at)
+                    VALUES (?, ?, 'SELL', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    stock_code, stock_name, quantity, price,
+                    timestamp.strftime('%Y-%m-%d %H:%M:%S'), strategy, reason,
+                    profit_loss, profit_rate, buy_record_id,
+                    now_kst().strftime('%Y-%m-%d %H:%M:%S')
+                ))
+                conn.commit()
+                self.logger.info(
+                    f"✅ 실거래 매도 기록 저장: {stock_code} {quantity}주 @{price:,.0f} 손익 {profit_loss:+,.0f}원 ({profit_rate:+.2f}%)"
+                )
+                return True
+        except Exception as e:
+            self.logger.error(f"실거래 매도 기록 저장 실패: {e}")
+            return False
+
+    def get_last_open_real_buy(self, stock_code: str) -> Optional[int]:
+        """해당 종목의 미매칭 매수(가장 최근) ID 조회"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT b.id 
+                    FROM real_trading_records b
+                    WHERE b.stock_code = ? AND b.action = 'BUY'
+                      AND NOT EXISTS (
+                        SELECT 1 FROM real_trading_records s 
+                        WHERE s.buy_record_id = b.id AND s.action = 'SELL'
+                      )
+                    ORDER BY b.timestamp DESC
+                    LIMIT 1
+                ''', (stock_code,))
+                row = cursor.fetchone()
+                return int(row[0]) if row else None
+        except Exception as e:
+            self.logger.error(f"실거래 미매칭 매수 조회 실패: {e}")
+            return None
     
     def save_virtual_buy(self, stock_code: str, stock_name: str, price: float, 
                         quantity: int, strategy: str, reason: str, 
