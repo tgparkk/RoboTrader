@@ -275,7 +275,7 @@ class TradingStockManager:
             return False
     
     async def execute_sell_order(self, stock_code: str, quantity: int, 
-                                price: float, reason: str = "") -> bool:
+                                price: float, reason: str = "", market: bool = False) -> bool:
         """
         매도 주문 실행
         
@@ -305,7 +305,7 @@ class TradingStockManager:
                 self._change_stock_state(stock_code, StockState.SELL_PENDING, f"매도 주문: {reason}")
             
             # 매도 주문 실행
-            order_id = await self.order_manager.place_sell_order(stock_code, quantity, price)
+            order_id = await self.order_manager.place_sell_order(stock_code, quantity, price, market=market)
             
             if order_id:
                 with self._lock:

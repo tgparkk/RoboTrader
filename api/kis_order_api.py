@@ -13,8 +13,17 @@ logger = setup_logger(__name__)
 
 
 def get_order_cash(ord_dv: str = "", itm_no: str = "", qty: int = 0, unpr: int = 0,
-                   tr_cont: str = "") -> Optional[pd.DataFrame]:
-    """주식주문(현금) - 매수/매도"""
+                   tr_cont: str = "", ord_dvsn: str = "00") -> Optional[pd.DataFrame]:
+    """주식주문(현금) - 매수/매도
+    
+    Args:
+        ord_dv: "buy" 또는 "sell"
+        itm_no: 종목코드(6자리)
+        qty: 주문수량
+        unpr: 주문단가 (시장가일 때는 0 가능)
+        tr_cont: 페이징 제어 값(일반 주문 시 대부분 빈 문자열)
+        ord_dvsn: 주문구분 ("00": 지정가, "01": 시장가)
+    """
     '''
         EXCG_ID_DVSN_CD	거래소ID구분코드	String	N	3	한국거래소 : KRX
         대체거래소 (넥스트레이드) : NXT
@@ -43,11 +52,15 @@ def get_order_cash(ord_dv: str = "", itm_no: str = "", qty: int = 0, unpr: int =
         logger.error("주문단가 확인 필요")
         return None
 
+    # 주문구분 검증 (기본값: 지정가)
+    if ord_dvsn not in ("00", "01"):
+        ord_dvsn = "00"
+
     params = {
         "CANO": kis.getTREnv().my_acct,         # 계좌번호 8자리
         "ACNT_PRDT_CD": kis.getTREnv().my_prod, # 계좌상품코드 2자리
         "PDNO": itm_no,                         # 종목코드(6자리)
-        "ORD_DVSN": "00",                       # 주문구분 00:지정가, 01:시장가
+        "ORD_DVSN": ord_dvsn,                   # 주문구분 00:지정가, 01:시장가
         "ORD_QTY": str(int(qty)),               # 주문주식수
         "ORD_UNPR": str(int(unpr)),             # 주문단가
         "EXCG_ID_DVSN_CD": "SOR"                       

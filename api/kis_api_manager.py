@@ -377,12 +377,12 @@ class KISAPIManager:
     # 주문 관련 API
     # ===========================================
     
-    def place_buy_order(self, stock_code: str, quantity: int, price: int) -> OrderResult:
+    def place_buy_order(self, stock_code: str, quantity: int, price: int, order_type: str = "00") -> OrderResult:
         """매수 주문"""
         try:
             result = self._call_api_with_retry(
                 kis_order_api.get_order_cash,
-                "buy", stock_code, quantity, price
+                "buy", stock_code, quantity, price, "", order_type
             )
             
             if result is None or result.empty:
@@ -415,12 +415,12 @@ class KISAPIManager:
                 message=f"매수 주문 오류: {e}"
             )
     
-    def place_sell_order(self, stock_code: str, quantity: int, price: int) -> OrderResult:
+    def place_sell_order(self, stock_code: str, quantity: int, price: int, order_type: str = "00") -> OrderResult:
         """매도 주문"""
         try:
             result = self._call_api_with_retry(
                 kis_order_api.get_order_cash,
-                "sell", stock_code, quantity, price
+                "sell", stock_code, quantity, price, "", order_type
             )
             
             if result is None or result.empty:

@@ -88,7 +88,7 @@ class OrderManager:
             return None
     
     async def place_sell_order(self, stock_code: str, quantity: int, price: float,
-                              timeout_seconds: int = None) -> Optional[str]:
+                              timeout_seconds: int = None, market: bool = False) -> Optional[str]:
         """매도 주문 실행"""
         try:
             timeout_seconds = timeout_seconds or self.config.order_management.sell_timeout_seconds
@@ -100,7 +100,7 @@ class OrderManager:
             result: OrderResult = await loop.run_in_executor(
                 self.executor,
                 self.api_manager.place_sell_order,
-                stock_code, quantity, int(price)
+                stock_code, quantity, int(price), ("01" if market else "00")
             )
             
             if result.success:
@@ -126,7 +126,7 @@ class OrderManager:
                     await self.telegram.notify_order_placed({
                         'stock_code': stock_code,
                         'stock_name': f'Stock_{stock_code}',  # TODO: 실제 종목명 조회
-                        'order_type': 'sell',
+                        'order_type': 'sell_market' if market else 'sell',
                         'quantity': quantity,
                         'price': price,
                         'order_id': result.order_id
