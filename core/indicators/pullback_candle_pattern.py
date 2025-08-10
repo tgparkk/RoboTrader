@@ -186,9 +186,9 @@ class PullbackCandlePattern:
             signals['take_profit_3pct'] = False
             signals['bisector_line'] = bisector_line
 
-            # 파라미터
-            retrace_lookback = 3      # 저거래 조정 연속 봉
-            low_vol_ratio = 0.25      # 기준 거래량의 1/4
+            # 파라미터 (완화 적용)
+            retrace_lookback = 2      # 저거래 조정 연속 봉 (기존 3 → 2)
+            low_vol_ratio = 0.25      # 기준 거래량의 25% 
             stop_leeway = 0.002       # 0.2%
             take_profit = 0.03        # +3%
 
@@ -206,8 +206,10 @@ class PullbackCandlePattern:
 
                 current = df.iloc[i]
                 bl = bisector_line.iloc[i] if not pd.isna(bisector_line.iloc[i]) else None
+                # 위/아래 판단 (pullback 용도): 종가가 이등분선 이상이면 위로 간주
                 above_bisector = (bl is not None) and (current['close'] >= bl)
-                crosses_bisector_up = (bl is not None) and (current['open'] <= bl <= current['close'])
+                # 이등분선 회복(매수) 엄격 조건: 종가가 이등분선을 '넘어야' 함(>)
+                crosses_bisector_up = (bl is not None) and (current['open'] <= bl and current['close'] > bl)
 
                 # 최근 저점(최근 5봉 저가 최저)
                 recent_low = float(df['low'].iloc[max(0, i-5):i+1].min())
@@ -225,16 +227,56 @@ class PullbackCandlePattern:
                 avg_recent_vol = float(df['volume'].iloc[max(0, i-10):i].mean()) if i > 0 else 0.0
                 volume_recovers = (current['volume'] > max_low_vol) or (current['volume'] > avg_recent_vol)
 
+                # 대안 진입 조건: "직전 강한 양봉의 1/2 구간 되돌림" 확인
+                # 최근 6개의 봉에서 강한 양봉(몸통이 최근 평균 대비 크고, 거래량이 평균 이상)을 찾음
+                recent_start = max(0, i-12)
+                recent_range = df.iloc[recent_start:i]
+                half_retrace_ok = False
+                if len(recent_range) > 0:
+                    recent_candle_size = (recent_range['high'] - recent_range['low']).mean()
+                    recent_vol_mean = recent_range['volume'].mean()
+                    impulse_idx = None
+                    for j in range(i-1, recent_start-1, -1):
+                        if j < 0:
+                            break
+                        open_j = float(df['open'].iloc[j])
+                        close_j = float(df['close'].iloc[j])
+                        high_j = float(df['high'].iloc[j])
+                        low_j = float(df['low'].iloc[j])
+                        vol_j = float(df['volume'].iloc[j])
+                        body = abs(close_j - open_j)
+                        size = high_j - low_j
+                        # 완화: 최근 평균 대비 0.8배 이상 몸통, 거래량 0.8배 이상
+                        if close_j > open_j and size > 0 and body >= recent_candle_size * 0.8 and vol_j >= recent_vol_mean * 0.8:
+                            impulse_idx = j
+                            break
+                    if impulse_idx is not None:
+                        ih = float(df['high'].iloc[impulse_idx])
+                        il = float(df['low'].iloc[impulse_idx])
+                        half_point = il + (ih - il) * 0.5
+                        # 현재 캔들이 절반값 근처이거나, 저가가 하회 후 회복해 종가가 절반 이상
+                        eps = max(half_point * 0.01, 1.0)  # 1.0% 또는 1원 허용 (완화)
+                        cur_low = float(current['low'])
+                        cur_close = float(current['close'])
+                        if (abs(cur_close - half_point) <= eps) or (cur_low <= half_point <= cur_close):
+                            half_retrace_ok = True
+
                 if not in_position:
                     # 매수 신호 1: 저거래 조정 후 회복 양봉(+이등분선 지지/회복)
-                    if is_low_volume_retrace and is_bullish and volume_recovers and (above_bisector or crosses_bisector_up):
+                    # 또는 강한 양봉의 1/2 되돌림 + 회복 양봉(+이등분선 지지/회복)
+                    # 완화: 1/2 되돌림 케이스에서는 거래량 회복(volume_recovers)을 필수에서 제외
+                    if (
+                        (is_low_volume_retrace and is_bullish and volume_recovers and (above_bisector or crosses_bisector_up))
+                        or
+                        (half_retrace_ok and is_bullish and (above_bisector or crosses_bisector_up))
+                    ):
                         signals.iloc[i, signals.columns.get_loc('buy_pullback_pattern')] = True
                         in_position = True
                         entry_price = float(current['close'])
                         entry_low = float(current['low'])
                         continue
 
-                    # 매수 신호 2: 이등분선 회복 양봉(걸치거나 돌파) + 거래량 회복
+                    # 매수 신호 2: 이등분선 회복 양봉(종가가 이등분선을 넘어야 함) + 거래량 회복
                     if is_bullish and crosses_bisector_up and volume_recovers:
                         signals.iloc[i, signals.columns.get_loc('buy_bisector_recovery')] = True
                         in_position = True

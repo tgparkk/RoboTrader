@@ -152,6 +152,39 @@ class TradingDecisionEngine:
             stock_code = trading_stock.stock_code
             stock_name = trading_stock.stock_name
             current_price = combined_data['close'].iloc[-1]
+
+            # 매수가격 규칙 적용: "신호가 발생한 양봉 캔들의 1/2 구간 가격"으로 매수
+            # 눌림목(3분) 신호를 기준으로 최근 신호 캔들의 고저를 찾아 1/2 지점을 계산
+            try:
+                from core.indicators.pullback_candle_pattern import PullbackCandlePattern
+                data_3min = self._convert_to_3min_data(combined_data)
+                if data_3min is not None and not data_3min.empty:
+                    signals_3m = PullbackCandlePattern.generate_trading_signals(data_3min)
+                    if signals_3m is not None and not signals_3m.empty:
+                        buy_cols = []
+                        # 이등분선 회복 신호
+                        if 'buy_bisector_recovery' in signals_3m.columns:
+                            buy_cols.append('buy_bisector_recovery')
+                        # 눌림목 패턴 신호
+                        if 'buy_pullback_pattern' in signals_3m.columns:
+                            buy_cols.append('buy_pullback_pattern')
+
+                        last_idx = None
+                        for col in buy_cols:
+                            true_indices = signals_3m.index[signals_3m[col] == True].tolist()
+                            if true_indices:
+                                candidate = true_indices[-1]
+                                last_idx = candidate if last_idx is None else max(last_idx, candidate)
+                        if last_idx is not None and 0 <= last_idx < len(data_3min):
+                            sig_high = float(data_3min['high'].iloc[last_idx])
+                            sig_low = float(data_3min['low'].iloc[last_idx])
+                            # 1/2 구간 가격
+                            half_price = sig_low + (sig_high - sig_low) * 0.5
+                            if half_price > 0:
+                                current_price = half_price
+            except Exception as _:
+                # 계산 실패 시 기존 가격 유지
+                pass
             
             # 가상 매수 수량 설정 (가상 잔고 확인)
             if self.virtual_balance < self.virtual_investment_amount:
