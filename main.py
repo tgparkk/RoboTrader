@@ -300,7 +300,7 @@ class DayTradingBot:
                 current_time = now_kst()
 
                 # 🆕 장중 조건검색 체크
-                if (current_time - last_condition_check).total_seconds() >= 1 * 60:  # 1분
+                if (current_time - last_condition_check).total_seconds() >= 1/2 * 60:  # 30초
                     await self._check_condition_search()
                     last_condition_check = current_time
                 
@@ -505,8 +505,8 @@ class DayTradingBot:
                     await self._refresh_api()
                     last_api_refresh = current_time
 
-                # 🆕 장중 종목 실시간 데이터 업데이트 (1분마다)
-                if (current_time - last_intraday_update).total_seconds() >= 60:  # 1분
+                # 🆕 장중 종목 실시간 데이터 업데이트
+                if (current_time - last_intraday_update).total_seconds() >= 30:  # 30초
                     if is_market_open():
                         await self._update_intraday_data()
                     last_intraday_update = current_time
