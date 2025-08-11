@@ -12,7 +12,7 @@
     "buy_budget_ratio": 0.20
   },
   "risk_management": {
-    "max_position_count": 3,
+    "max_position_count": 20,
     "max_position_ratio": 0.3,
     "stop_loss_ratio": 0.03,
     "take_profit_ratio": 0.05,
