@@ -39,7 +39,7 @@ class OrderManager:
         try:
             timeout_seconds = timeout_seconds or self.config.order_management.buy_timeout_seconds
             
-            self.logger.info(f"매수 주문 시도: {stock_code} {quantity}주 @{price:,.0f}원")
+            self.logger.info(f"📈 매수 주문 시도: {stock_code} {quantity}주 @{price:,.0f}원 (타임아웃: {timeout_seconds}초)")
             
             # API 호출을 별도 스레드에서 실행
             loop = asyncio.get_event_loop()
@@ -65,7 +65,7 @@ class OrderManager:
                 self.pending_orders[result.order_id] = order
                 self.order_timeouts[result.order_id] = now_kst() + timedelta(seconds=timeout_seconds)
                 
-                self.logger.info(f"✅ 매수 주문 성공: {result.order_id}")
+                self.logger.info(f"✅ 매수 주문 성공: {result.order_id} - {stock_code} {quantity}주 @{price:,.0f}원")
                 
                 # 텔레그램 알림
                 if self.telegram:
@@ -93,7 +93,7 @@ class OrderManager:
         try:
             timeout_seconds = timeout_seconds or self.config.order_management.sell_timeout_seconds
             
-            self.logger.info(f"매도 주문 시도: {stock_code} {quantity}주 @{price:,.0f}원")
+            self.logger.info(f"📉 매도 주문 시도: {stock_code} {quantity}주 @{price:,.0f}원 (타임아웃: {timeout_seconds}초, 시장가: {market})")
             
             # API 호출을 별도 스레드에서 실행
             loop = asyncio.get_event_loop()
@@ -119,7 +119,7 @@ class OrderManager:
                 self.pending_orders[result.order_id] = order
                 self.order_timeouts[result.order_id] = now_kst() + timedelta(seconds=timeout_seconds)
                 
-                self.logger.info(f"✅ 매도 주문 성공: {result.order_id}")
+                self.logger.info(f"✅ 매도 주문 성공: {result.order_id} - {stock_code} {quantity}주 @{price:,.0f}원 ({'시장가' if market else '지정가'})")
                 
                 # 텔레그램 알림
                 if self.telegram:

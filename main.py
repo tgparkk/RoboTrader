@@ -400,6 +400,11 @@ class DayTradingBot:
                     self.logger.debug(f"신호 일관성 검증 오류: {e}")
             
             if buy_signal:
+                # 🆕 매수 전 종목 상태 확인
+                current_stock = self.trading_manager.get_trading_stock(stock_code)
+                if current_stock:
+                    self.logger.debug(f"🔍 매수 전 상태 확인: {stock_code} 현재상태={current_stock.state.value}")
+                
                 # 매수 후보로 변경
                 success = self.trading_manager.move_to_buy_candidate(stock_code, buy_reason)
                 if success:
@@ -437,6 +442,11 @@ class DayTradingBot:
             sell_signal, sell_reason = await self.decision_engine.analyze_sell_decision(trading_stock, combined_data)
             
             if sell_signal:
+                # 🆕 매도 전 종목 상태 확인
+                self.logger.debug(f"🔍 매도 전 상태 확인: {stock_code} 현재상태={trading_stock.state.value}")
+                if trading_stock.position:
+                    self.logger.debug(f"🔍 포지션 정보: {trading_stock.position.quantity}주 @{trading_stock.position.avg_price:,.0f}원")
+                
                 # 매도 후보로 변경
                 success = self.trading_manager.move_to_sell_candidate(stock_code, sell_reason)
                 if success:

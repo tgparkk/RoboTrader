@@ -534,7 +534,62 @@ class TradingStockManager:
         trading_stock.change_state(new_state, reason)
         self.stocks_by_state[new_state][stock_code] = trading_stock
         
-        self.logger.debug(f"🔄 {stock_code} 상태 변경: {old_state.value} → {new_state.value}")
+        # 🆕 상세 상태 변화 로깅
+        self._log_detailed_state_change(trading_stock, old_state, new_state, reason)
+    
+    def _log_detailed_state_change(self, trading_stock: TradingStock, old_state: StockState, new_state: StockState, reason: str):
+        """상세 상태 변화 로깅"""
+        try:
+            from utils.korean_time import now_kst
+            current_time = now_kst().strftime('%H:%M:%S')
+            
+            # 기본 정보
+            log_parts = [
+                f"🔄 [{current_time}] {trading_stock.stock_code}({trading_stock.stock_name})",
+                f"상태변경: {old_state.value} → {new_state.value}",
+                f"사유: {reason}"
+            ]
+            
+            # 포지션 정보
+            if trading_stock.position:
+                log_parts.append(f"포지션: {trading_stock.position.quantity}주 @{trading_stock.position.avg_price:,.0f}원")
+                if trading_stock.position.current_price > 0:
+                    profit_rate = ((trading_stock.position.current_price - trading_stock.position.avg_price) / trading_stock.position.avg_price) * 100
+                    log_parts.append(f"현재가: {trading_stock.position.current_price:,.0f}원 ({profit_rate:+.2f}%)")
+            else:
+                log_parts.append("포지션: 없음")
+            
+            # 주문 정보
+            if trading_stock.current_order_id:
+                log_parts.append(f"현재주문: {trading_stock.current_order_id}")
+            else:
+                log_parts.append("현재주문: 없음")
+            
+            # 선정 사유 및 시간
+            log_parts.append(f"선정사유: {trading_stock.selection_reason}")
+            log_parts.append(f"선정시간: {trading_stock.selected_time.strftime('%H:%M:%S')}")
+            
+            # 상태별 특별 정보
+            if new_state == StockState.BUY_CANDIDATE:
+                log_parts.append("🎯 매수 신호 발생 - 주문 대기 중")
+            elif new_state == StockState.BUY_PENDING:
+                log_parts.append("⏳ 매수 주문 실행됨 - 체결 대기 중")
+            elif new_state == StockState.POSITIONED:
+                log_parts.append("✅ 매수 체결 완료 - 포지션 보유 중")
+            elif new_state == StockState.SELL_CANDIDATE:
+                log_parts.append("📉 매도 신호 발생 - 주문 대기 중")
+            elif new_state == StockState.SELL_PENDING:
+                log_parts.append("⏳ 매도 주문 실행됨 - 체결 대기 중")
+            elif new_state == StockState.COMPLETED:
+                log_parts.append("🎉 거래 완료")
+            
+            # 로그 출력
+            self.logger.info("\n".join(f"  {part}" for part in log_parts))
+            
+        except Exception as e:
+            self.logger.debug(f"❌ 상세 상태 변화 로깅 오류: {e}")
+            # 기본 로그는 여전히 출력
+            self.logger.info(f"🔄 {trading_stock.stock_code} 상태 변경: {old_state.value} → {new_state.value}")
     
     def get_stocks_by_state(self, state: StockState) -> List[TradingStock]:
         """특정 상태의 종목들 조회"""
