@@ -375,6 +375,30 @@ class DayTradingBot:
             # 매매 판단 엔진으로 매수 신호 확인
             buy_signal, buy_reason = await self.decision_engine.analyze_buy_decision(trading_stock, combined_data)
             
+            # 🆕 signal_replay와 일관성 검증 (디버깅용)
+            if hasattr(self.decision_engine, 'verify_signal_consistency'):
+                try:
+                    # 3분봉 데이터로 변환
+                    data_3min = self.decision_engine._convert_to_3min_data(combined_data)
+                    if data_3min is not None and not data_3min.empty:
+                        verification_result = self.decision_engine.verify_signal_consistency(stock_code, data_3min)
+                        
+                        # 실제 매수 신호와 검증 결과 비교
+                        verified_signal = verification_result.get('has_signal', False)
+                        if buy_signal != verified_signal:
+                            self.logger.warning(
+                                f"⚠️ 신호 불일치 감지: {stock_code}({stock_name})\n"
+                                f"  - 실제 매수 신호: {buy_signal} ({buy_reason})\n"
+                                f"  - 검증 신호: {verified_signal} ({verification_result.get('signal_types', [])})\n"
+                                f"  - 미충족 조건: {verification_result.get('unmet_conditions', [])}"
+                            )
+                        else:
+                            self.logger.debug(
+                                f"✅ 신호 일치 확인: {stock_code} signal={buy_signal}"
+                            )
+                except Exception as e:
+                    self.logger.debug(f"신호 일관성 검증 오류: {e}")
+            
             if buy_signal:
                 # 매수 후보로 변경
                 success = self.trading_manager.move_to_buy_candidate(stock_code, buy_reason)

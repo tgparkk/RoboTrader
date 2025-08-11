@@ -801,30 +801,48 @@ class TradingDecisionEngine:
             return None
     
     def _convert_to_3min_data(self, data: pd.DataFrame) -> Optional[pd.DataFrame]:
-        """1분봉 데이터를 3분봉으로 변환"""
+        """1분봉 데이터를 3분봉으로 변환 (DataProcessor와 동일한 방식)"""
         try:
             if data is None or len(data) < 3:
                 return None
-            if 'datetime' in data.columns:
-                df = data.copy()
-                df['datetime'] = pd.to_datetime(df['datetime'])
-                df = df.set_index('datetime')
-            elif 'date' in data.columns and 'time' in data.columns:
-                df = data.copy()
-                df['datetime'] = pd.to_datetime(df['date'].astype(str) + ' ' + df['time'].astype(str))
-                df = df.set_index('datetime')
-            else:
-                df = data.copy()
-                df.index = pd.date_range(start='09:00', periods=len(df), freq='1min')
-
-            grouped = df.resample('3T').agg({
+            
+            df = data.copy()
+            
+            # datetime 컬럼 확인 및 변환 (DataProcessor 방식과 동일)
+            if 'datetime' not in df.columns:
+                if 'date' in df.columns and 'time' in df.columns:
+                    df['datetime'] = pd.to_datetime(df['date'].astype(str) + ' ' + df['time'].astype(str))
+                elif 'time' in df.columns:
+                    # time 컬럼만 있는 경우 임시 날짜 추가
+                    time_str = df['time'].astype(str).str.zfill(6)
+                    df['datetime'] = pd.to_datetime('2024-01-01 ' + 
+                                                  time_str.str[:2] + ':' + 
+                                                  time_str.str[2:4] + ':' + 
+                                                  time_str.str[4:6])
+                else:
+                    # datetime 컬럼이 없으면 순차적으로 생성 (09:00부터)
+                    df['datetime'] = pd.date_range(start='09:00', periods=len(df), freq='1min')
+            
+            # datetime을 인덱스로 설정
+            df['datetime'] = pd.to_datetime(df['datetime'])
+            df = df.set_index('datetime')
+            
+            # 3분봉으로 리샘플링 (DataProcessor와 완전히 동일)
+            resampled = df.resample('3T').agg({
                 'open': 'first',
                 'high': 'max',
                 'low': 'min',
                 'close': 'last',
                 'volume': 'sum'
-            }).dropna().reset_index()
-            return grouped
+            })
+            
+            # NaN 제거 후 인덱스 리셋 (DataProcessor와 동일)
+            resampled = resampled.dropna().reset_index()
+            
+            self.logger.debug(f"📊 3분봉 변환: {len(data)}개 → {len(resampled)}개 (DataProcessor 방식)")
+            
+            return resampled
+            
         except Exception as e:
             self.logger.error(f"❌ 3분봉 변환 오류: {e}")
             return None
@@ -850,6 +868,9 @@ class TradingDecisionEngine:
             if signals.empty:
                 return False, "신호 계산 실패"
             
+            # 🆕 신호 상태 디버깅 (signal_replay와 비교용)
+            self._log_signal_debug_info(data_3min, signals)
+            
             # 매수 조건 1: 눌림목 캔들패턴 매수 신호
             if signals['buy_pullback_pattern'].iloc[-1]:
                 return True, "눌림목 패턴 (거래량증가+캔들확대)"
@@ -863,6 +884,173 @@ class TradingDecisionEngine:
         except Exception as e:
             self.logger.error(f"❌ 눌림목 캔들패턴 매수 신호 확인 오류: {e}")
             return False, ""
+    
+    def _log_signal_debug_info(self, data_3min: pd.DataFrame, signals: pd.DataFrame):
+        """신호 상태 디버깅 정보 로깅 (signal_replay와 비교용)"""
+        try:
+            if data_3min.empty or signals.empty:
+                return
+            
+            # 최근 캔들 정보
+            last_candle = data_3min.iloc[-1]
+            current_time = now_kst().strftime('%H:%M:%S')
+            
+            # 신호 상태
+            buy_pullback = bool(signals['buy_pullback_pattern'].iloc[-1])
+            buy_bisector = bool(signals['buy_bisector_recovery'].iloc[-1])
+            
+            # 이등분선 값
+            bisector_val = float(signals['bisector_line'].iloc[-1]) if 'bisector_line' in signals.columns else None
+            
+            # 디버깅 정보 로깅
+            self.logger.debug(
+                f"🔍 신호디버그 [{current_time}]:\n"
+                f"  - 3분봉 데이터: {len(data_3min)}개\n"
+                f"  - 최근캔들: O={last_candle['open']:.0f} H={last_candle['high']:.0f} "
+                f"L={last_candle['low']:.0f} C={last_candle['close']:.0f} V={last_candle['volume']:,.0f}\n"
+                f"  - 이등분선: {bisector_val:.0f if bisector_val else 'N/A'}\n"
+                f"  - 매수신호: pullback={buy_pullback}, bisector_recovery={buy_bisector}"
+            )
+            
+        except Exception as e:
+            self.logger.debug(f"❌ 신호 디버깅 정보 로깅 오류: {e}")
+    
+    def verify_signal_consistency(self, stock_code: str, data_3min: pd.DataFrame, target_time: str = None) -> Dict[str, Any]:
+        """signal_replay.py와 동일한 방식으로 신호 확인하여 일관성 검증
+        
+        Args:
+            stock_code: 종목 코드
+            data_3min: 3분봉 데이터
+            target_time: 확인할 시간 (HH:MM 형식, None이면 최신)
+            
+        Returns:
+            Dict: 신호 확인 결과
+        """
+        try:
+            from core.indicators.pullback_candle_pattern import PullbackCandlePattern
+            
+            if data_3min is None or data_3min.empty:
+                return {'error': '데이터 없음'}
+            
+            # signal_replay와 동일한 방식으로 신호 계산
+            signals = PullbackCandlePattern.generate_trading_signals(data_3min)
+            
+            if signals.empty:
+                return {'error': '신호 계산 실패'}
+            
+            # 시간 지정이 없으면 최신 데이터 사용
+            if target_time is None:
+                idx = len(data_3min) - 1
+            else:
+                # target_time에 해당하는 인덱스 찾기 (signal_replay.py의 locate_row_for_time과 유사)
+                if 'datetime' in data_3min.columns:
+                    target_datetime = pd.Timestamp(f"2023-01-01 {target_time}:00")  # 임시 날짜
+                    time_diffs = (data_3min['datetime'] - target_datetime).abs()
+                    idx = int(time_diffs.idxmin())
+                else:
+                    idx = len(data_3min) - 1
+            
+            if idx < 0 or idx >= len(data_3min):
+                return {'error': '인덱스 범위 오류'}
+            
+            # signal_replay와 동일한 방식으로 신호 확인
+            buy_pullback = bool(signals['buy_pullback_pattern'].iloc[idx])
+            buy_bisector = bool(signals['buy_bisector_recovery'].iloc[idx])
+            has_signal = buy_pullback or buy_bisector
+            
+            signal_types = []
+            if buy_pullback:
+                signal_types.append("buy_pullback_pattern")
+            if buy_bisector:
+                signal_types.append("buy_bisector_recovery")
+            
+            # 미충족 조건 분석 (signal_replay의 analyze_unmet_conditions_at과 유사)
+            unmet_conditions = []
+            if not has_signal:
+                unmet_conditions = self._analyze_unmet_conditions(data_3min, idx)
+            
+            return {
+                'stock_code': stock_code,
+                'index': idx,
+                'time': target_time or 'latest',
+                'has_signal': has_signal,
+                'signal_types': signal_types,
+                'unmet_conditions': unmet_conditions,
+                'data_length': len(data_3min),
+                'candle_info': {
+                    'open': float(data_3min['open'].iloc[idx]),
+                    'high': float(data_3min['high'].iloc[idx]),
+                    'low': float(data_3min['low'].iloc[idx]),
+                    'close': float(data_3min['close'].iloc[idx]),
+                    'volume': float(data_3min['volume'].iloc[idx])
+                }
+            }
+            
+        except Exception as e:
+            return {'error': f'검증 오류: {e}'}
+    
+    def _analyze_unmet_conditions(self, data_3min: pd.DataFrame, idx: int) -> list:
+        """미충족 조건 분석 (signal_replay의 analyze_unmet_conditions_at과 유사)"""
+        try:
+            from core.indicators.bisector_line import BisectorLine
+            
+            unmet = []
+            
+            if idx < 0 or idx >= len(data_3min):
+                return ["인덱스 범위 오류"]
+            
+            # 이등분선 계산
+            bisector_line = BisectorLine.calculate_bisector_line(data_3min['high'], data_3min['low'])
+            
+            # 현재 캔들 정보
+            row = data_3min.iloc[idx]
+            current_open = float(row['open'])
+            current_close = float(row['close'])
+            current_volume = float(row['volume'])
+            
+            # 이등분선 관련
+            bl = float(bisector_line.iloc[idx]) if not pd.isna(bisector_line.iloc[idx]) else None
+            above_bisector = (bl is not None) and (current_close >= bl)
+            crosses_bisector_up = (bl is not None) and (current_open <= bl <= current_close)
+            
+            is_bullish = current_close > current_open
+            
+            # 저거래 조정 확인 (최근 2봉)
+            retrace_lookback = 2
+            low_vol_ratio = 0.25
+            
+            if idx >= retrace_lookback:
+                window = data_3min.iloc[idx - retrace_lookback:idx]
+                baseline_now = float(data_3min['volume'].iloc[max(0, idx - 50):idx + 1].max())
+                low_volume_all = bool((window['volume'] < baseline_now * low_vol_ratio).all()) if baseline_now > 0 else False
+                close_diff = window['close'].diff().fillna(0)
+                downtrend_all = bool((close_diff.iloc[1:] < 0).all()) if len(close_diff) >= 2 else False
+                is_low_volume_retrace = low_volume_all and downtrend_all
+            else:
+                is_low_volume_retrace = False
+            
+            # 거래량 회복 확인
+            if idx > 0:
+                max_low_vol = float(data_3min['volume'].iloc[max(0, idx - retrace_lookback):idx].max())
+                avg_recent_vol = float(data_3min['volume'].iloc[max(0, idx - 10):idx].mean())
+                volume_recovers = (current_volume > max_low_vol) or (current_volume > avg_recent_vol)
+            else:
+                volume_recovers = False
+            
+            # 미충족 항목 기록
+            if not is_low_volume_retrace:
+                unmet.append("저거래 하락 조정 미충족")
+            if not is_bullish:
+                unmet.append("회복 양봉 아님")
+            if not volume_recovers:
+                unmet.append("거래량 회복 미충족")
+            if not (above_bisector or crosses_bisector_up):
+                unmet.append("이등분선 지지/회복 미충족")
+            
+            return unmet
+            
+        except Exception as e:
+            return [f"분석 오류: {e}"]
     
     def _check_pullback_candle_stop_loss(self, data, buy_price, current_price) -> Tuple[bool, str]:
         """눌림목 캔들패턴 전략 손절 조건 (3분봉 기준)"""
