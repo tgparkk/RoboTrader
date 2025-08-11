@@ -15,7 +15,7 @@ from core.models import TradingConfig, StockState
 from core.data_collector import RealTimeDataCollector
 from core.order_manager import OrderManager
 from core.telegram_integration import TelegramIntegration
-from core.candidate_selector import CandidateSelector
+from core.candidate_selector import CandidateSelector, CandidateStock
 from core.intraday_stock_manager import IntradayStockManager
 from core.trading_stock_manager import TradingStockManager
 from core.trading_decision_engine import TradingDecisionEngine
@@ -34,6 +34,7 @@ class DayTradingBot:
         self.logger = setup_logger(__name__)
         self.is_running = False
         self.pid_file = Path("bot.pid")
+        self._last_eod_liquidation_date = None  # 장마감 일괄청산 실행 일자
         
         # 프로세스 중복 실행 방지
         self._check_duplicate_process()
@@ -153,21 +154,34 @@ class DayTradingBot:
             return float(combined_data['close'].iloc[-1])
 
     async def _calc_buy_quantity(self, stock_code: str, price: float) -> int:
-        """가용 현금 20% 예산 + KIS 매수가능수량 한도로 실주문 수량 계산"""
+        """가용 현금 설정 비율 예산만으로 실주문 수량 계산 (KIS 매수가능수량 조회 미사용)"""
         try:
             acct = self.api_manager.get_account_balance_quick()
             if not acct or acct.available_amount <= 0:
+                self.logger.info(f"ℹ️ 수량산출불가: 가용현금 없음 stock={stock_code} avail=0")
                 return 0
-            target_budget = max(0, acct.available_amount * 0.20)
+            ratio = 0.20
+            try:
+                ratio = float(getattr(self.config.order_management, 'buy_budget_ratio', 0.20))
+            except Exception:
+                ratio = 0.20
+            target_budget = max(0, acct.available_amount * ratio)
             if price <= 0:
+                self.logger.info(f"ℹ️ 수량산출불가: 유효하지 않은 매수가 stock={stock_code} price={price}")
                 return 0
             qty_by_budget = int(target_budget // price)
             if qty_by_budget < 1:
+                self.logger.info(
+                    f"ℹ️ 수량산출불가: 예산으로 1주 불가 stock={stock_code} avail={acct.available_amount:,.0f} ratio={ratio:.2f} "
+                    f"budget={target_budget:,.0f} price={price:,.0f}"
+                )
                 return 0
-            max_qty = self.api_manager.get_tradable_amount(stock_code, price)
-            if max_qty is None or max_qty <= 0:
-                return 0
-            return max(1, min(qty_by_budget, int(max_qty)))
+            final_qty = qty_by_budget
+            self.logger.info(
+                f"✅ 수량산출: stock={stock_code} avail={acct.available_amount:,.0f} ratio={ratio:.2f} "
+                f"budget={target_budget:,.0f} price={price:,.0f} qty_budget={qty_by_budget} final={final_qty}"
+            )
+            return final_qty
         except Exception:
             return 0
     
@@ -253,6 +267,7 @@ class DayTradingBot:
             tasks = [
                 self._data_collection_task(),
                 self._order_monitoring_task(),
+                self.trading_manager.start_monitoring(),
                 self._trading_decision_task(),
                 self._system_monitoring_task(),
                 self._telegram_task()
@@ -320,6 +335,10 @@ class DayTradingBot:
             selected_stocks = self.trading_manager.get_stocks_by_state(StockState.SELECTED)
             buy_candidates = self.trading_manager.get_stocks_by_state(StockState.BUY_CANDIDATE)
             positioned_stocks = self.trading_manager.get_stocks_by_state(StockState.POSITIONED)
+            # 포지션 상태 진단 로그 (1회성 아님)
+            self.logger.debug(
+                f"📦 상태요약: SELECTED={len(selected_stocks)} BUY_CANDIDATE={len(buy_candidates)} POSITIONED={len(positioned_stocks)}"
+            )
             
             # 매수 판단: 선정된 종목들
             for trading_stock in selected_stocks:
@@ -511,6 +530,18 @@ class DayTradingBot:
                         await self._update_intraday_data()
                     last_intraday_update = current_time
                 
+                # 🆕 장 마감 직전 일괄 청산 (15:29:30 이후 1회 실행)
+                try:
+                    current_date = current_time.date()
+                    if (
+                        current_time.hour == 15 and current_time.minute == 29 and current_time.second >= 30
+                        and self._last_eod_liquidation_date != current_date
+                    ):
+                        await self._liquidate_all_positions_end_of_day()
+                        self._last_eod_liquidation_date = current_date
+                except Exception as e:
+                    self.logger.error(f"❌ 장마감 일괄청산 처리 오류: {e}")
+                
                 # 🆕 차트 생성 카운터 매일 리셋
                 current_date = current_time.date()
                 if current_date != last_chart_reset_date:
@@ -521,7 +552,6 @@ class DayTradingBot:
                 # 🆕 장 마감 후 차트 생성 (16:00~24:00 시간대에 두 번만 실행)
                 current_hour = current_time.hour
                 is_chart_time = (16 <= current_hour <= 23) and current_time.weekday() < 5  # 평일 16~24시
-                is_chart_time = True
                 if is_chart_time and chart_generation_count < 2:  # 16~24시 시간대에만, 최대 2번
                     if (current_time - last_chart_generation).total_seconds() >= 1 * 60:  # 1분 간격으로 체크
                         #self.logger.info(f"🔥 DEBUG: 차트 생성 실행 시작 ({chart_generation_count + 1}/2)")  # 디버깅용
@@ -545,6 +575,46 @@ class DayTradingBot:
             self.logger.error(f"❌ 시스템 모니터링 태스크 오류: {e}")
             # 텔레그램 오류 알림
             await self.telegram.notify_error("SystemMonitoring", e)
+
+    async def _liquidate_all_positions_end_of_day(self):
+        """장 마감 직전 보유 포지션 전량 시장가 일괄 청산"""
+        try:
+            from core.models import StockState
+            positioned_stocks = self.trading_manager.get_stocks_by_state(StockState.POSITIONED)
+            if not positioned_stocks:
+                self.logger.info("📦 장마감 일괄청산: 보유 포지션 없음")
+                return
+            self.logger.info(f"🛎️ 장마감 일괄청산 시작: 대상 {len(positioned_stocks)}종목")
+            for trading_stock in positioned_stocks:
+                try:
+                    if not trading_stock.position or trading_stock.position.quantity <= 0:
+                        continue
+                    stock_code = trading_stock.stock_code
+                    quantity = int(trading_stock.position.quantity)
+                    # 가격 산정: 가능한 경우 최신 분봉 종가, 없으면 현재가 조회
+                    sell_price = 0.0
+                    combined_data = self.intraday_manager.get_combined_chart_data(stock_code)
+                    if combined_data is not None and len(combined_data) > 0:
+                        sell_price = float(combined_data['close'].iloc[-1])
+                    else:
+                        price_obj = self.api_manager.get_current_price(stock_code)
+                        if price_obj:
+                            sell_price = float(price_obj.current_price)
+                    sell_price = self._round_to_tick(sell_price)
+                    # 상태 전환 후 시장가 매도 주문 실행
+                    moved = self.trading_manager.move_to_sell_candidate(stock_code, "장마감 일괄청산")
+                    if moved:
+                        await self.trading_manager.execute_sell_order(
+                            stock_code, quantity, sell_price, "장마감 일괄청산", market=True
+                        )
+                        self.logger.info(
+                            f"🧹 장마감 청산 주문: {stock_code} {quantity}주 시장가 @{sell_price:,.0f}원"
+                        )
+                except Exception as se:
+                    self.logger.error(f"❌ 장마감 청산 개별 처리 오류({trading_stock.stock_code}): {se}")
+            self.logger.info("✅ 장마감 일괄청산 요청 완료")
+        except Exception as e:
+            self.logger.error(f"❌ 장마감 일괄청산 오류: {e}")
     
     async def _log_system_status(self):
         """시스템 상태 로깅"""
@@ -625,6 +695,7 @@ class DayTradingBot:
                 
                 # 🆕 장중 선정 종목 관리자에 추가 (과거 분봉 데이터 포함)
                 self.logger.info(f"🎯 장중 선정 종목 관리자에 {len(all_condition_results)}개 종목 추가 시작")
+                candidates_to_save = []
                 for stock_data in all_condition_results:
                     stock_code = stock_data.get('code', '')
                     stock_name = stock_data.get('name', '')
@@ -641,6 +712,32 @@ class DayTradingBot:
                         
                         if success:
                             self.logger.info(f"🎯 거래 종목 추가: {stock_code}({stock_name}) - {selection_reason}")
+                            # 🆕 후보 종목 DB 저장용 리스트 구성
+                            try:
+                                score_val = 0.0
+                                if isinstance(change_rate, (int, float)):
+                                    score_val = float(change_rate)
+                                else:
+                                    # 문자열인 경우 숫자만 추출 시도 (예: '3.2')
+                                    score_val = float(str(change_rate).replace('%', '').strip()) if str(change_rate).strip() else 0.0
+                            except Exception:
+                                score_val = 0.0
+                            candidates_to_save.append(
+                                CandidateStock(
+                                    code=stock_code,
+                                    name=stock_name,
+                                    market=stock_data.get('market', 'KOSPI'),
+                                    score=score_val,
+                                    reason=selection_reason
+                                )
+                            )
+                # 🆕 후보 종목 DB 저장
+                try:
+                    if candidates_to_save:
+                        self.db_manager.save_candidate_stocks(candidates_to_save)
+                        self.logger.info(f"🗄️ 후보 종목 DB 저장 완료: {len(candidates_to_save)}건")
+                except Exception as db_err:
+                    self.logger.error(f"❌ 후보 종목 DB 저장 오류: {db_err}")
             else:
                 self.logger.debug("ℹ️ 장중 조건검색: 발견된 종목 없음")
             

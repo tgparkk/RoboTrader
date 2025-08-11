@@ -62,8 +62,8 @@ def get_order_cash(ord_dv: str = "", itm_no: str = "", qty: int = 0, unpr: int =
         "PDNO": itm_no,                         # 종목코드(6자리)
         "ORD_DVSN": ord_dvsn,                   # 주문구분 00:지정가, 01:시장가
         "ORD_QTY": str(int(qty)),               # 주문주식수
-        "ORD_UNPR": str(int(unpr)),             # 주문단가
-        "EXCG_ID_DVSN_CD": "SOR"                       
+        "ORD_UNPR": str(int(unpr))             # 주문단가
+        #"EXCG_ID_DVSN_CD": ""                       
     }
 
     res = kis._url_fetch(url, tr_id, tr_cont, params, postFlag=True)
