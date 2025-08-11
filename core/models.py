@@ -208,7 +208,7 @@ class OrderManagementConfig:
 @dataclass
 class RiskManagementConfig:
     """리스크 관리 설정"""
-    max_position_count: int = 3
+    max_position_count: int = 20
     max_position_ratio: float = 0.3
     stop_loss_ratio: float = 0.03
     take_profit_ratio: float = 0.05
@@ -255,7 +255,7 @@ class TradingConfig:
                 buy_budget_ratio=json_data.get('order_management', {}).get('buy_budget_ratio', 0.20)
             ),
             risk_management=RiskManagementConfig(
-                max_position_count=json_data.get('risk_management', {}).get('max_position_count', 3),
+                max_position_count=json_data.get('risk_management', {}).get('max_position_count', 20),
                 max_position_ratio=json_data.get('risk_management', {}).get('max_position_ratio', 0.3),
                 stop_loss_ratio=json_data.get('risk_management', {}).get('stop_loss_ratio', 0.03),
                 take_profit_ratio=json_data.get('risk_management', {}).get('take_profit_ratio', 0.05),
