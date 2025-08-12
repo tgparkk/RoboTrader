@@ -266,8 +266,8 @@ class OrderManager:
                         await self._handle_3candle_timeout(order_id)
                         continue  # 취소된 주문은 더 이상 처리하지 않음
                 
-                # 3. 가격 변동 시 정정 검토
-                await self._check_price_adjustment(order_id)
+                # 3. 가격 변동 시 정정 검토 (비활성화)
+                # await self._check_price_adjustment(order_id)
                 
             except Exception as e:
                 self.logger.error(f"주문 모니터링 중 오류 {order_id}: {e}")

@@ -609,9 +609,8 @@ class TradingDecisionEngine:
             buy_price = trading_stock.position.avg_price
             profit_rate = (current_price - buy_price) / buy_price
             
-            # 매수가 대비 +3% 수익실현 (요청사항 반영)
-            if profit_rate >= 0.03:
-                return True, "매수가 대비 +3% 수익실현"
+            if profit_rate >= 0.028:
+                return True, "매수가 대비 +2.8% 수익실현"
             
             return False, ""
             
