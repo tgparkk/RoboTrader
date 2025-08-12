@@ -61,6 +61,7 @@ class DayTradingBot:
         )  # 🆕 매매 판단 엔진
         self.chart_generator = None  # 🆕 장 마감 후 차트 생성기 (지연 초기화)
         
+        
         # 신호 핸들러 등록
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
@@ -868,7 +869,7 @@ class DayTradingBot:
             self.logger.error(f"❌ 조건검색 결과 알림 오류: {e}")
 
     async def _update_intraday_data(self):
-        """장중 종목 실시간 데이터 업데이트 (1분마다)"""
+        """장중 종목 실시간 데이터 업데이트 (30초마다)"""
         try:
             # 모든 선정 종목의 실시간 데이터 업데이트
             await self.intraday_manager.batch_update_realtime_data()

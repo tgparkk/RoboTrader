@@ -1058,10 +1058,29 @@ class TradingDecisionEngine:
             return [f"분석 오류: {e}"]
     
     def _check_pullback_candle_stop_loss(self, trading_stock, data, buy_price, current_price) -> Tuple[bool, str]:
-        """눌림목 캔들패턴 전략 손절 조건 (3분봉 기준)"""
+        """눌림목 캔들패턴 전략 손절 조건 (실시간 가격 + 3분봉 기준)"""
         try:
             from core.indicators.pullback_candle_pattern import PullbackCandlePattern
             
+            # 1단계: 실시간 가격 기반 긴급 손절/익절 체크 (30초마다 체크용)
+            if buy_price and buy_price > 0:
+                profit_rate = (current_price - buy_price) / buy_price
+                
+                # 긴급 손절: -2%
+                if profit_rate <= -0.02:
+                    return True, f"⚡긴급손절 {profit_rate*100:.1f}%"
+                
+                # 기본 익절: +1.5% (기존 +3%에서 조정)  
+                if profit_rate >= 0.015:
+                    return True, f"⚡기본익절 {profit_rate*100:.1f}%"
+                
+                # 진입저가 실시간 체크
+                entry_low_value = getattr(trading_stock, '_entry_low', None)
+                if entry_low_value and entry_low_value > 0:
+                    if current_price < entry_low_value * 0.998:  # -0.2%
+                        return True, f"⚡실시간진입저가이탈 ({current_price:.0f}<{entry_low_value*0.998:.0f})"
+            
+            # 2단계: 3분봉 기반 정밀 분석 (기존 로직 유지)
             # 1분봉 데이터를 3분봉으로 변환
             data_3min = self._convert_to_3min_data(data)
             if data_3min is None or len(data_3min) < 15:
@@ -1083,15 +1102,15 @@ class TradingDecisionEngine:
             
             # 손절 조건 1: 이등분선 이탈 (0.2% 기준)
             if 'sell_bisector_break' in sell_signals.columns and bool(sell_signals['sell_bisector_break'].iloc[-1]):
-                return True, "이등분선 이탈 (0.2%)"
+                return True, "📈이등분선이탈(0.2%)"
             
             # 손절 조건 2: 지지 저점 이탈
             if 'sell_support_break' in sell_signals.columns and bool(sell_signals['sell_support_break'].iloc[-1]):
-                return True, "지지 저점 이탈"
+                return True, "📈지지저점이탈"
             
             # 손절 조건 3: 진입 양봉 저가 0.2% 이탈 (entry_low 전달 시에만 유효)
             if 'stop_entry_low_break' in sell_signals.columns and bool(sell_signals['stop_entry_low_break'].iloc[-1]):
-                return True, "진입 양봉 저가 0.2% 이탈"
+                return True, "📈진입양봉저가이탈(0.2%)"
             
             return False, ""
             

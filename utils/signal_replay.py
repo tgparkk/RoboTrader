@@ -187,17 +187,24 @@ def analyze_unmet_conditions_at(
         return [f"분석 오류: {e}"]
 
 
-async def fetch_and_prepare_3min(stock_code: str, target_date: str) -> Optional[pd.DataFrame]:
-    """실데이터 1분봉을 조회 후 3분봉으로 변환하여 반환."""
+async def fetch_and_prepare_data(stock_code: str, target_date: str) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+    """실데이터 1분봉을 조회 후 1분봉과 3분봉을 모두 반환."""
     dp = DataProcessor()
     base_1min = await dp.get_historical_chart_data(stock_code, target_date)
     if base_1min is None or base_1min.empty:
         logger.error(f"{stock_code} {target_date} 1분봉 데이터 조회 실패")
-        return None
+        return None, None
+    
     df_3min = dp.get_timeframe_data(stock_code, target_date, "3min", base_data=base_1min)
     if df_3min is None or df_3min.empty:
         logger.error(f"{stock_code} {target_date} 3분봉 변환 실패")
-        return None
+        return base_1min, None
+    
+    return base_1min, df_3min
+
+async def fetch_and_prepare_3min(stock_code: str, target_date: str) -> Optional[pd.DataFrame]:
+    """실데이터 1분봉을 조회 후 3분봉으로 변환하여 반환. (호환성 유지)"""
+    _, df_3min = await fetch_and_prepare_data(stock_code, target_date)
     return df_3min
 
 
@@ -284,105 +291,200 @@ def list_all_buy_signals(df_3min: pd.DataFrame) -> List[Dict[str, object]]:
     return out
 
 
-def simulate_trades(df_3min: pd.DataFrame) -> List[Dict[str, object]]:
+def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = None) -> List[Dict[str, object]]:
     """실전(_execute_trading_decision) 기준에 맞춘 눌림목(3분) 체결 시뮬레이션.
 
     규칙(실전 근사):
-    - 매수: buy_pullback_pattern 또는 buy_bisector_recovery가 True일 때 진입
+    - 매수: buy_pullback_pattern 또는 buy_bisector_recovery가 True일 때 진입 (3분봉 기준)
       • 체결가: 신호 캔들의 절반가(half: low + (high-low)*0.5), 실패 시 해당 캔들 종가
-    - 매도 우선순위: (1) 공통 최대손실 -1.0% → (2) 손절(이등분선 -0.2%, 지지저점 이탈, 진입저가 -0.2%) → (3) 익절 +1.5%
+    - 매도 우선순위: (1) 실시간 가격 기준 손절/익절 (1분마다 체크) → (2) 3분봉 기술적 분석 → (3) EOD 청산
     - 종가 체결 가정, 복수 매매 허용, 끝까지 보유 시 EOD 청산
     """
     trades: List[Dict[str, object]] = []
     if df_3min is None or df_3min.empty or 'datetime' not in df_3min.columns:
         return trades
+    
+    # 3분봉 매수 신호 계산
     sig = PullbackCandlePattern.generate_trading_signals(df_3min)
     if sig is None or sig.empty:
         sig = pd.DataFrame(index=df_3min.index)
 
-    closes = pd.to_numeric(df_3min['close'], errors='coerce')
+    # 안전: 불리언 시리즈 확보
+    buy_pb = sig.get('buy_pullback_pattern', pd.Series([False]*len(df_3min)))
+    buy_rc = sig.get('buy_bisector_recovery', pd.Series([False]*len(df_3min)))
+
     in_pos = False
     entry_price = None
     entry_time = None
     entry_type = None
     entry_low = None
+    entry_datetime = None
 
-    # 안전: 불리언 시리즈 확보
-    buy_pb = sig.get('buy_pullback_pattern', pd.Series([False]*len(df_3min)))
-    buy_rc = sig.get('buy_bisector_recovery', pd.Series([False]*len(df_3min)))
-    # 매도는 실전과 동일하게 직접계산 API 사용
+    # 1분봉이 있으면 1분 단위로 매도 체크, 없으면 3분봉 단위로 체크
+    if df_1min is not None and not df_1min.empty and 'datetime' in df_1min.columns:
+        # 1분봉 기반 매도 체크
+        closes_1min = pd.to_numeric(df_1min['close'], errors='coerce')
+        
+        for i in range(len(df_1min)):
+            current_time = df_1min['datetime'].iloc[i]
+            current_price = float(closes_1min.iloc[i]) if pd.notna(closes_1min.iloc[i]) else None
+            hhmm = pd.Timestamp(current_time).strftime('%H:%M')
+            
+            if current_price is None:
+                continue
 
-    for i in range(len(df_3min)):
-        ts = df_3min['datetime'].iloc[i]
-        hhmm = pd.Timestamp(ts).strftime('%H:%M')
-        c = float(closes.iloc[i]) if pd.notna(closes.iloc[i]) else None
-        if c is None:
-            continue
-
-        if not in_pos:
-            if bool(buy_pb.iloc[i]) or bool(buy_rc.iloc[i]):
-                in_pos = True
-                # 실전 근사: 절반가 체결 시도 → 실패 시 종가
-                try:
-                    hi = float(df_3min['high'].iloc[i])
-                    lo = float(df_3min['low'].iloc[i])
-                    half = lo + (hi - lo) * 0.5
-                    entry_price = half if (half > 0 and lo <= half <= hi) else c
-                except Exception:
-                    entry_price = c
-                entry_time = hhmm
-                try:
-                    entry_low = float(df_3min['low'].iloc[i])
-                except Exception:
-                    entry_low = None
-                if bool(buy_pb.iloc[i]):
-                    entry_type = 'pullback'
-                elif bool(buy_rc.iloc[i]):
-                    entry_type = 'bisector_recovery'
-        else:
-            exit_reason = None
-            # (1) 공통 최대손실 -1.0%
-            if entry_price is not None and c <= entry_price * (1.0 - 0.010):
-                exit_reason = 'max_loss_1_0pct'
+            # 매수 신호 체크 (3분봉과 시간 매핑)
+            if not in_pos:
+                # 현재 1분봉 시간에 해당하는 3분봉 찾기
+                for j in range(len(df_3min)):
+                    ts_3min = df_3min['datetime'].iloc[j]
+                    # 3분봉 시간 범위 계산 (예: 10:30~10:33)
+                    start_time = pd.Timestamp(ts_3min) - pd.Timedelta(minutes=2)
+                    end_time = pd.Timestamp(ts_3min)
+                    
+                    if start_time <= pd.Timestamp(current_time) <= end_time:
+                        if bool(buy_pb.iloc[j]) or bool(buy_rc.iloc[j]):
+                            in_pos = True
+                            # 실전 근사: 절반가 체결 시도 → 실패 시 종가
+                            try:
+                                hi = float(df_3min['high'].iloc[j])
+                                lo = float(df_3min['low'].iloc[j])
+                                half = lo + (hi - lo) * 0.5
+                                entry_price = half if (half > 0 and lo <= half <= hi) else current_price
+                            except Exception:
+                                entry_price = current_price
+                            entry_time = hhmm
+                            entry_datetime = current_time
+                            try:
+                                entry_low = float(df_3min['low'].iloc[j])
+                            except Exception:
+                                entry_low = None
+                            if bool(buy_pb.iloc[j]):
+                                entry_type = 'pullback'
+                            elif bool(buy_rc.iloc[j]):
+                                entry_type = 'bisector_recovery'
+                            break
             else:
-                # (2) 손절 조건: 이등분선 0.2% 이탈 / 지지저점 이탈 / 진입저가 0.2% 이탈
-                try:
-                    sell_sig = PullbackCandlePattern.generate_sell_signals(df_3min.iloc[:i+1], entry_low=entry_low)
-                except Exception:
-                    sell_sig = pd.DataFrame(index=df_3min.index)
-                if not sell_sig.empty:
-                    if bool(sell_sig.get('sell_bisector_break', pd.Series([False]*len(df_3min))).iloc[i]):
-                        exit_reason = 'sell_bisector_break'
-                    elif bool(sell_sig.get('sell_support_break', pd.Series([False]*len(df_3min))).iloc[i]):
-                        exit_reason = 'sell_support_break'
-                    elif bool(sell_sig.get('stop_entry_low_break', pd.Series([False]*len(df_3min))).iloc[i]):
-                        exit_reason = 'stop_entry_low_break'
-            # (3) 익절 +1.5%
-            if exit_reason is None and entry_price is not None and c >= entry_price * (1.0 + 0.015):
-                exit_reason = 'take_profit_1_5pct'
+                # 매도 체크 (1분마다)
+                exit_reason = None
+                
+                # (1) 긴급 손절: -1%
+                if entry_price is not None and current_price <= entry_price * (1.0 - 0.010):
+                    exit_reason = 'emergency_stop_1pct'
+                # (2) 기본 익절: +1.5%  
+                elif entry_price is not None and current_price >= entry_price * (1.0 + 0.015):
+                    exit_reason = 'basic_profit_1_5pct'
+                # (3) 진입저가 실시간 체크: -0.2%
+                elif entry_low is not None and entry_low > 0 and current_price < entry_low * 0.998:
+                    exit_reason = 'realtime_entry_low_break'
+                
+                if exit_reason is not None:
+                    profit = (current_price - entry_price) / entry_price * 100.0 if entry_price and entry_price > 0 else 0.0
+                    trades.append({
+                        'buy_time': entry_time,
+                        'buy_type': entry_type,
+                        'buy_price': entry_price,
+                        'sell_time': hhmm,
+                        'sell_reason': exit_reason,
+                        'sell_price': current_price,
+                        'profit_rate': profit,
+                    })
+                    in_pos = False
+                    entry_price = None
+                    entry_time = None
+                    entry_type = None
+                    entry_low = None
+                    entry_datetime = None
+    else:
+        # 기존 3분봉 방식 (1분봉 데이터 없는 경우)
+        closes = pd.to_numeric(df_3min['close'], errors='coerce')
+        
+        for i in range(len(df_3min)):
+            ts = df_3min['datetime'].iloc[i]
+            hhmm = pd.Timestamp(ts).strftime('%H:%M')
+            c = float(closes.iloc[i]) if pd.notna(closes.iloc[i]) else None
+            if c is None:
+                continue
 
-            if exit_reason is not None:
-                profit = (c - entry_price) / entry_price * 100.0 if entry_price and entry_price > 0 else 0.0
-                trades.append({
-                    'buy_time': entry_time,
-                    'buy_type': entry_type,
-                    'buy_price': entry_price,
-                    'sell_time': hhmm,
-                    'sell_reason': exit_reason,
-                    'sell_price': c,
-                    'profit_rate': profit,
-                })
-                in_pos = False
-                entry_price = None
-                entry_time = None
-                entry_type = None
-                entry_low = None
+            if not in_pos:
+                if bool(buy_pb.iloc[i]) or bool(buy_rc.iloc[i]):
+                    in_pos = True
+                    # 실전 근사: 절반가 체결 시도 → 실패 시 종가
+                    try:
+                        hi = float(df_3min['high'].iloc[i])
+                        lo = float(df_3min['low'].iloc[i])
+                        half = lo + (hi - lo) * 0.5
+                        entry_price = half if (half > 0 and lo <= half <= hi) else c
+                    except Exception:
+                        entry_price = c
+                    entry_time = hhmm
+                    try:
+                        entry_low = float(df_3min['low'].iloc[i])
+                    except Exception:
+                        entry_low = None
+                    if bool(buy_pb.iloc[i]):
+                        entry_type = 'pullback'
+                    elif bool(buy_rc.iloc[i]):
+                        entry_type = 'bisector_recovery'
+            else:
+                exit_reason = None
+                
+                # 실시간과 동일한 매도 로직 적용
+                # (1) 긴급 손절: -1%
+                if entry_price is not None and c <= entry_price * (1.0 - 0.010):
+                    exit_reason = 'emergency_stop_1pct'
+                # (2) 기본 익절: +1.5%  
+                elif entry_price is not None and c >= entry_price * (1.0 + 0.015):
+                    exit_reason = 'basic_profit_1_5pct'
+                # (3) 진입저가 실시간 체크: -0.2%
+                elif entry_low is not None and entry_low > 0 and c < entry_low * 0.998:
+                    exit_reason = 'realtime_entry_low_break'
+                else:
+                    # (4) 3분봉 기준 기술적 분석 (기존 로직 유지)
+                    try:
+                        sell_sig = PullbackCandlePattern.generate_sell_signals(df_3min.iloc[:i+1], entry_low=entry_low)
+                    except Exception:
+                        sell_sig = pd.DataFrame(index=df_3min.index)
+                    if not sell_sig.empty:
+                        if bool(sell_sig.get('sell_bisector_break', pd.Series([False]*len(df_3min))).iloc[i]):
+                            exit_reason = 'pattern_bisector_break'
+                        elif bool(sell_sig.get('sell_support_break', pd.Series([False]*len(df_3min))).iloc[i]):
+                            exit_reason = 'pattern_support_break'
+                        elif bool(sell_sig.get('stop_entry_low_break', pd.Series([False]*len(df_3min))).iloc[i]):
+                            exit_reason = 'pattern_entry_low_break'
+
+                if exit_reason is not None:
+                    profit = (c - entry_price) / entry_price * 100.0 if entry_price and entry_price > 0 else 0.0
+                    trades.append({
+                        'buy_time': entry_time,
+                        'buy_type': entry_type,
+                        'buy_price': entry_price,
+                        'sell_time': hhmm,
+                        'sell_reason': exit_reason,
+                        'sell_price': c,
+                        'profit_rate': profit,
+                    })
+                    in_pos = False
+                    entry_price = None
+                    entry_time = None
+                    entry_type = None
+                    entry_low = None
 
     # EOD 청산
     if in_pos and entry_price is not None:
-        last_ts = df_3min['datetime'].iloc[-1]
+        # 1분봉 데이터가 있으면 1분봉의 마지막 가격, 없으면 3분봉 마지막 가격
+        if df_1min is not None and not df_1min.empty:
+            last_ts = df_1min['datetime'].iloc[-1]
+            last_close = float(pd.to_numeric(df_1min['close'], errors='coerce').iloc[-1])
+        else:
+            last_ts = df_3min['datetime'].iloc[-1]
+            closes = pd.to_numeric(df_3min['close'], errors='coerce')
+            last_close = float(closes.iloc[-1]) if pd.notna(closes.iloc[-1]) else entry_price
+        
         last_hhmm = pd.Timestamp(last_ts).strftime('%H:%M')
-        last_close = float(closes.iloc[-1]) if pd.notna(closes.iloc[-1]) else entry_price
+        if pd.isna(last_close):
+            last_close = entry_price
+            
         profit = (last_close - entry_price) / entry_price * 100.0 if entry_price and entry_price > 0 else 0.0
         trades.append({
             'buy_time': entry_time,
@@ -431,15 +533,16 @@ async def run(date_str: str, codes: List[str], times_map: Dict[str, List[str]]) 
     all_trades: Dict[str, List[Dict[str, object]]] = {}
     for code in codes:
         try:
-            df_3min = await fetch_and_prepare_3min(code, date_str)
+            # 1분봉과 3분봉 데이터를 모두 가져오기
+            df_1min, df_3min = await fetch_and_prepare_data(code, date_str)
             evals = evaluate_signals_at_times(df_3min, date_str, times_map.get(code, []))
             print_report(code, date_str, evals)
             all_rows.extend(to_csv_rows(code, date_str, evals))
             # 전체 매수신호 추출
             signals_full = list_all_buy_signals(df_3min) if df_3min is not None else []
             all_signals[code] = signals_full
-            # 체결 시뮬레이션
-            trades = simulate_trades(df_3min) if df_3min is not None else []
+            # 체결 시뮬레이션 (1분봉 데이터도 전달)
+            trades = simulate_trades(df_3min, df_1min) if df_3min is not None else []
             all_trades[code] = trades
         except Exception as e:
             logger.error(f"{code} 처리 오류: {e}")
@@ -475,7 +578,7 @@ def main():
     # 기본값 (요청하신 2025-08-08, 4개 종목/시각)
     DEFAULT_DATE = "20250812"
     DEFAULT_CODES = "023160,023790,026040,033340,044490,054300,054540,108490,240810,419050,452160"
-    DEFAULT_TIMES = "034230=14:39;078520=11:33,11:36,11:39;107600=11:24,11:27,14:51;214450=12:00,14:39;073010=10:30,10:33,10:36,10:39"
+    DEFAULT_TIMES = "034230=14:39;"
 
     date_str: str = (args.date or DEFAULT_DATE).strip()
     codes_input = args.codes or DEFAULT_CODES

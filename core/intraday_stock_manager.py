@@ -439,15 +439,16 @@ class IntradayStockManager:
     
     def get_combined_chart_data(self, stock_code: str) -> Optional[pd.DataFrame]:
         """
-        종목의 당일 전체 차트 데이터 조회 (09:00~현재)
+        종목의 당일 전체 차트 데이터 조회 (09:00~현재, 완성된 봉만)
         
         실시간 신호 생성을 위해 선정 시점과 관계없이 당일 전체 데이터를 반환합니다.
+        시뮬레이션과의 일관성을 위해 완성된 1분봉만 사용합니다.
         
         Args:
             stock_code: 종목코드
             
         Returns:
-            pd.DataFrame: 당일 전체 차트 데이터
+            pd.DataFrame: 당일 전체 차트 데이터 (완성된 봉만)
         """
         try:
             from api.kis_chart_api import get_inquire_time_itemchartprice
@@ -479,6 +480,9 @@ class IntradayStockManager:
                     combined_data = combined_data.drop('time_str', axis=1)
             else:
                 combined_data = chart_df.copy()
+            
+            # 완성된 봉만 사용 (현재 진행 중인 1분봉 제외)
+            combined_data = self._filter_completed_candles_only(combined_data, current_time)
             
             # 시간순 정렬
             if 'datetime' in combined_data.columns:
@@ -699,3 +703,65 @@ class IntradayStockManager:
         except Exception as e:
             self.logger.error(f"❌ {stock_code} 일봉 데이터 수집 오류: {e}")
             return None
+    
+    def _filter_completed_candles_only(self, chart_data: pd.DataFrame, current_time: datetime) -> pd.DataFrame:
+        """
+        완성된 캔들만 필터링 (진행 중인 1분봉 제외)
+        
+        시뮬레이션과의 일관성을 위해 현재 진행 중인 1분봉을 제외하고
+        완전히 완성된 1분봉만 반환합니다.
+        
+        Args:
+            chart_data: 원본 차트 데이터
+            current_time: 현재 시간
+            
+        Returns:
+            완성된 캔들만 포함한 데이터프레임
+        """
+        try:
+            if chart_data.empty:
+                return chart_data
+            
+            # 현재 분의 시작 시간 (초, 마이크로초 제거)
+            current_minute_start = current_time.replace(second=0, microsecond=0)
+            
+            # datetime 컬럼이 있는 경우
+            if 'datetime' in chart_data.columns:
+                # 현재 진행 중인 1분봉 제외 (완성되지 않았으므로)
+                completed_data = chart_data[chart_data['datetime'] < current_minute_start].copy()
+                
+                excluded_count = len(chart_data) - len(completed_data)
+                if excluded_count > 0:
+                    self.logger.debug(f"📊 미완성 봉 {excluded_count}개 제외 (진행 중인 1분봉)")
+                
+                return completed_data
+            
+            # time 컬럼만 있는 경우
+            elif 'time' in chart_data.columns:
+                # 이전 분의 시간 문자열 생성
+                prev_minute = current_minute_start - timedelta(minutes=1)
+                prev_time_str = prev_minute.strftime('%H%M%S')
+                
+                # time을 문자열로 변환하여 비교
+                chart_data_copy = chart_data.copy()
+                chart_data_copy['time_str'] = chart_data_copy['time'].astype(str).str.zfill(6)
+                completed_data = chart_data_copy[chart_data_copy['time_str'] <= prev_time_str].copy()
+                
+                # time_str 컬럼 제거
+                if 'time_str' in completed_data.columns:
+                    completed_data = completed_data.drop('time_str', axis=1)
+                
+                excluded_count = len(chart_data) - len(completed_data)
+                if excluded_count > 0:
+                    self.logger.debug(f"📊 미완성 봉 {excluded_count}개 제외 (진행 중인 1분봉)")
+                
+                return completed_data
+            
+            # 시간 컬럼이 없으면 원본 반환
+            else:
+                self.logger.warning("시간 컬럼을 찾을 수 없어 원본 데이터 반환")
+                return chart_data
+                
+        except Exception as e:
+            self.logger.error(f"완성된 캔들 필터링 오류: {e}")
+            return chart_data  # 오류 시 원본 반환
