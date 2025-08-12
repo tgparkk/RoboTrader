@@ -55,6 +55,50 @@ class DatabaseManager:
         
         # 테이블 생성
         self._create_tables()
+
+    def _get_today_range_strings(self) -> tuple:
+        """KST 기준 오늘의 시작과 내일 시작 시간 문자열(YYYY-MM-DD HH:MM:SS)을 반환."""
+        try:
+            today = now_kst().date()
+            from datetime import datetime, time, timedelta
+            start_dt = datetime.combine(today, time(hour=0, minute=0, second=0))
+            next_dt = start_dt + timedelta(days=1)
+            return (
+                start_dt.strftime('%Y-%m-%d %H:%M:%S'),
+                next_dt.strftime('%Y-%m-%d %H:%M:%S'),
+            )
+        except Exception:
+            # 안전: 실패 시 넓은 범위 반환
+            return ("1970-01-01 00:00:00", "2100-01-01 00:00:00")
+
+    def get_today_real_loss_count(self, stock_code: str) -> int:
+        """해당 종목의 실거래 기준, 오늘 발생한 손실 매도 건수 반환.
+
+        기준:
+        - real_trading_records에서 action='SELL'이고 profit_loss < 0
+        - timestamp가 KST 오늘 00:00:00 이상, 내일 00:00:00 미만
+        - stock_code 일치
+        """
+        try:
+            start_str, next_str = self._get_today_range_strings()
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    SELECT COUNT(1)
+                    FROM real_trading_records
+                    WHERE stock_code = ?
+                      AND action = 'SELL'
+                      AND profit_loss < 0
+                      AND timestamp >= ? AND timestamp < ?
+                    ''',
+                    (stock_code, start_str, next_str),
+                )
+                row = cursor.fetchone()
+                return int(row[0]) if row and row[0] is not None else 0
+        except Exception as e:
+            self.logger.error(f"실거래 당일 손실 카운트 조회 실패({stock_code}): {e}")
+            return 0
     
     def _create_tables(self):
         """데이터베이스 테이블 생성"""
