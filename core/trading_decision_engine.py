@@ -68,6 +68,16 @@ class TradingDecisionEngine:
             if self._is_already_holding(stock_code):
                 return False, f"이미 보유 중인 종목 (매수 제외)"
             
+            # 당일 손실 2회 이상이면 신규 매수 차단
+            try:
+                if self.db_manager and hasattr(self.db_manager, 'get_today_real_loss_count'):
+                    today_losses = self.db_manager.get_today_real_loss_count(stock_code)
+                    if today_losses >= 2:
+                        return False, "당일 손실 2회 초과(매수 제한)"
+            except Exception:
+                # 조회 실패 시 차단하지 않음
+                pass
+
             # 전략 1: 가격박스 + 이등분선 매수 신호 (1분봉 사용)
             #signal_result, reason = self._check_price_box_bisector_buy_signal(combined_data)
             #if signal_result:
@@ -159,7 +169,15 @@ class TradingDecisionEngine:
                 from core.indicators.pullback_candle_pattern import PullbackCandlePattern
                 data_3min = self._convert_to_3min_data(combined_data)
                 if data_3min is not None and not data_3min.empty:
-                    signals_3m = PullbackCandlePattern.generate_trading_signals(data_3min)
+                    signals_3m = PullbackCandlePattern.generate_trading_signals(
+                        data_3min,
+                        enable_candle_shrink_expand=True,
+                        enable_divergence_precondition=True,
+                        enable_overhead_supply_filter=True,
+                        candle_expand_multiplier=1.10,
+                        overhead_lookback=10,
+                        overhead_threshold_hits=2,
+                    )
                     if signals_3m is not None and not signals_3m.empty:
                         buy_cols = []
                         # 이등분선 회복 신호
@@ -866,8 +884,16 @@ class TradingDecisionEngine:
                 self.logger.warning(f"📊 3분봉 데이터 부족: {len(data_3min) if data_3min is not None else 0}개 (최소 10개 필요)")
                 return False, f"3분봉 데이터 부족 ({len(data_3min) if data_3min is not None else 0}/10)"
             
-            # 눌림목 캔들패턴 신호 계산 (3분봉 기준)
-            signals = PullbackCandlePattern.generate_trading_signals(data_3min)
+            # 눌림목 캔들패턴 신호 계산 (3분봉 기준, 개선 옵션 활성화)
+            signals = PullbackCandlePattern.generate_trading_signals(
+                data_3min,
+                enable_candle_shrink_expand=True,
+                enable_divergence_precondition=True,
+                enable_overhead_supply_filter=True,
+                candle_expand_multiplier=1.10,
+                overhead_lookback=10,
+                overhead_threshold_hits=2,
+            )
             
             if signals.empty:
                 return False, "신호 계산 실패"
@@ -937,8 +963,16 @@ class TradingDecisionEngine:
             if data_3min is None or data_3min.empty:
                 return {'error': '데이터 없음'}
             
-            # signal_replay와 동일한 방식으로 신호 계산
-            signals = PullbackCandlePattern.generate_trading_signals(data_3min)
+            # signal_replay와 동일한 방식으로 신호 계산 (개선 옵션 활성화)
+            signals = PullbackCandlePattern.generate_trading_signals(
+                data_3min,
+                enable_candle_shrink_expand=True,
+                enable_divergence_precondition=True,
+                enable_overhead_supply_filter=True,
+                candle_expand_multiplier=1.10,
+                overhead_lookback=10,
+                overhead_threshold_hits=2,
+            )
             
             if signals.empty:
                 return {'error': '신호 계산 실패'}

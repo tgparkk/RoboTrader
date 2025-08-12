@@ -153,7 +153,16 @@ class PullbackCandlePattern:
         return np.min(recent_lows)
     
     @staticmethod
-    def generate_trading_signals(data: pd.DataFrame) -> pd.DataFrame:
+    def generate_trading_signals(
+        data: pd.DataFrame,
+        *,
+        enable_candle_shrink_expand: bool = False,
+        enable_divergence_precondition: bool = False,
+        enable_overhead_supply_filter: bool = False,
+        candle_expand_multiplier: float = 1.10,
+        overhead_lookback: int = 10,
+        overhead_threshold_hits: int = 2,
+    ) -> pd.DataFrame:
         """눌림목 캔들패턴 매매 신호 생성 (3분봉 권장)
 
         반환 컬럼:
@@ -200,6 +209,11 @@ class PullbackCandlePattern:
             entry_price = None
             entry_low = None
 
+            # 캔들 크기(고-저) 사전 계산
+            candle_sizes = (df['high'] - df['low']).astype(float)
+            closes = df['close'].astype(float)
+            volumes = df['volume'].astype(float)
+
             for i in range(len(df)):
                 if i < retrace_lookback + 2:
                     continue
@@ -226,6 +240,54 @@ class PullbackCandlePattern:
                 max_low_vol = float(window['volume'].max())
                 avg_recent_vol = float(df['volume'].iloc[max(0, i-10):i].mean()) if i > 0 else 0.0
                 volume_recovers = (current['volume'] > max_low_vol) or (current['volume'] > avg_recent_vol)
+
+                # 옵션: 가격↑·거래량↓ 발산(배경) 조건
+                divergence_ok = True
+                if enable_divergence_precondition and i >= 20:
+                    try:
+                        x = np.arange(20)
+                        price_window = closes.iloc[i-19:i+1].values
+                        vol_window = volumes.iloc[i-19:i+1].values
+                        price_slope = np.polyfit(x, price_window, 1)[0]
+                        vol_slope = np.polyfit(x, vol_window, 1)[0]
+                        divergence_ok = (price_slope > 0) and (vol_slope < 0)
+                    except Exception:
+                        divergence_ok = False
+
+                # 옵션: 캔들 축소→확대 패턴
+                shrink_expand_ok = True
+                if enable_candle_shrink_expand and i >= max(retrace_lookback + 2, 10):
+                    recent_avg_size = float(candle_sizes.iloc[max(0, i-10):i].mean()) if i > 0 else 0.0
+                    # 조정 구간의 작은 캔들(축소) 확인
+                    shrink_ok = True
+                    try:
+                        shrink_window = candle_sizes.iloc[i - retrace_lookback:i]
+                        shrink_ok = bool((shrink_window < recent_avg_size * 0.9).all()) if recent_avg_size > 0 else False
+                    except Exception:
+                        shrink_ok = False
+                    # 현재 봉의 확대 + 최근 3봉 크기 증가 추세
+                    try:
+                        expand_now = candle_sizes.iloc[i] > recent_avg_size * candle_expand_multiplier
+                        inc_trend = True
+                        if i >= 2:
+                            inc_trend = bool(candle_sizes.iloc[i-2] <= candle_sizes.iloc[i-1] <= candle_sizes.iloc[i])
+                        shrink_expand_ok = shrink_ok and expand_now and inc_trend
+                    except Exception:
+                        shrink_expand_ok = False
+
+                # 옵션: 오버헤드 서플라이(하락봉에서 기준의 1/2 이상 거래량 반복) 필터
+                allow_signal = True
+                if enable_overhead_supply_filter and i >= 1:
+                    try:
+                        lb = max(0, i - overhead_lookback)
+                        down_mask = (closes.diff().iloc[lb:i] < 0)
+                        baseline_now = float(rolling_baseline.iloc[i]) if not pd.isna(rolling_baseline.iloc[i]) else 0.0
+                        vol_mask = (volumes.iloc[lb:i] >= baseline_now * 0.5) if baseline_now > 0 else (volumes.iloc[lb:i] > 0)
+                        hits = int((down_mask & vol_mask).sum())
+                        if hits >= overhead_threshold_hits:
+                            allow_signal = False
+                    except Exception:
+                        allow_signal = True
 
                 # 대안 진입 조건: "직전 강한 양봉의 1/2 구간 되돌림" 확인
                 # 최근 6개의 봉에서 강한 양봉(몸통이 최근 평균 대비 크고, 거래량이 평균 이상)을 찾음
@@ -265,10 +327,15 @@ class PullbackCandlePattern:
                     # 매수 신호 1: 저거래 조정 후 회복 양봉(+이등분선 지지/회복)
                     # 또는 강한 양봉의 1/2 되돌림 + 회복 양봉(+이등분선 지지/회복)
                     # 완화: 1/2 되돌림 케이스에서는 거래량 회복(volume_recovers)을 필수에서 제외
-                    if (
+                    base_buy_pb = (
                         (is_low_volume_retrace and is_bullish and volume_recovers and (above_bisector or crosses_bisector_up))
                         or
                         (half_retrace_ok and is_bullish and (above_bisector or crosses_bisector_up))
+                    )
+                    if (
+                        allow_signal and base_buy_pb and
+                        (not enable_divergence_precondition or divergence_ok) and
+                        (not enable_candle_shrink_expand or shrink_expand_ok)
                     ):
                         signals.iloc[i, signals.columns.get_loc('buy_pullback_pattern')] = True
                         in_position = True
@@ -277,7 +344,11 @@ class PullbackCandlePattern:
                         continue
 
                     # 매수 신호 2: 이등분선 회복 양봉(종가가 이등분선을 넘어야 함) + 거래량 회복
-                    if is_bullish and crosses_bisector_up and volume_recovers:
+                    if (
+                        allow_signal and is_bullish and crosses_bisector_up and volume_recovers and
+                        (not enable_divergence_precondition or divergence_ok) and
+                        (not enable_candle_shrink_expand or shrink_expand_ok)
+                    ):
                         signals.iloc[i, signals.columns.get_loc('buy_bisector_recovery')] = True
                         in_position = True
                         entry_price = float(current['close'])

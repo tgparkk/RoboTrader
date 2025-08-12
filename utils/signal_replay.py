@@ -304,8 +304,16 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
     if df_3min is None or df_3min.empty or 'datetime' not in df_3min.columns:
         return trades
     
-    # 3분봉 매수 신호 계산
-    sig = PullbackCandlePattern.generate_trading_signals(df_3min)
+    # 3분봉 매수 신호 계산 (개선 옵션 활성화: 시뮬레이션 전용)
+    sig = PullbackCandlePattern.generate_trading_signals(
+        df_3min,
+        enable_candle_shrink_expand=True,
+        enable_divergence_precondition=True,
+        enable_overhead_supply_filter=True,
+        candle_expand_multiplier=1.10,
+        overhead_lookback=10,
+        overhead_threshold_hits=2,
+    )
     if sig is None or sig.empty:
         sig = pd.DataFrame(index=df_3min.index)
 
@@ -319,6 +327,10 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
     entry_type = None
     entry_low = None
     entry_datetime = None
+
+    # 당일 손실 2회 시 신규 진입 차단
+    daily_loss_count = 0
+    can_enter = True
 
     # 1분봉이 있으면 1분 단위로 매도 체크, 없으면 3분봉 단위로 체크
     if df_1min is not None and not df_1min.empty and 'datetime' in df_1min.columns:
@@ -335,6 +347,8 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
 
             # 매수 신호 체크 (3분봉과 시간 매핑)
             if not in_pos:
+                if not can_enter:
+                    continue
                 # 현재 1분봉 시간에 해당하는 3분봉 찾기
                 for j in range(len(df_3min)):
                     ts_3min = df_3min['datetime'].iloc[j]
@@ -395,6 +409,11 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                     entry_type = None
                     entry_low = None
                     entry_datetime = None
+                    # 손실 집계 및 진입 차단
+                    if profit < 0:
+                        daily_loss_count += 1
+                        if daily_loss_count >= 2:
+                            can_enter = False
     else:
         # 기존 3분봉 방식 (1분봉 데이터 없는 경우)
         closes = pd.to_numeric(df_3min['close'], errors='coerce')
@@ -407,6 +426,8 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                 continue
 
             if not in_pos:
+                if not can_enter:
+                    continue
                 if bool(buy_pb.iloc[i]) or bool(buy_rc.iloc[i]):
                     in_pos = True
                     # 실전 근사: 절반가 체결 시도 → 실패 시 종가
@@ -469,6 +490,11 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                     entry_time = None
                     entry_type = None
                     entry_low = None
+                    # 손실 집계 및 진입 차단
+                    if profit < 0:
+                        daily_loss_count += 1
+                        if daily_loss_count >= 2:
+                            can_enter = False
 
     # EOD 청산
     if in_pos and entry_price is not None:
