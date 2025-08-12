@@ -33,6 +33,49 @@ class OrderManager:
         """TradingStockManager 참조를 등록 (가격 정정 시 주문ID 동기화용)"""
         self.trading_manager = trading_manager
     
+    def _get_current_3min_candle_time(self) -> datetime:
+        """현재 시간을 기준으로 3분봉 시간 계산 (3분 단위로 반올림)"""
+        try:
+            current_time = now_kst()
+            
+            # 9시부터의 경과 분 계산
+            market_open = current_time.replace(hour=9, minute=0, second=0, microsecond=0)
+            elapsed_minutes = int((current_time - market_open).total_seconds() / 60)
+            
+            # 3분 단위로 반올림 (예: 0-2분 → 3분, 3-5분 → 6분)
+            candle_minute = ((elapsed_minutes // 3) + 1) * 3
+            
+            # 실제 3분봉 시간 생성 (해당 구간의 끝 시간)
+            candle_time = market_open + timedelta(minutes=candle_minute)
+            
+            # 15:30 초과 시 15:30으로 제한
+            market_close = current_time.replace(hour=15, minute=30, second=0, microsecond=0)
+            if candle_time > market_close:
+                candle_time = market_close
+            
+            return candle_time
+            
+        except Exception as e:
+            self.logger.error(f"❌ 3분봉 시간 계산 오류: {e}")
+            return now_kst()
+    
+    def _has_3_candles_passed(self, order_candle_time: datetime) -> bool:
+        """주문 시점부터 3분봉 3개가 지났는지 확인"""
+        try:
+            if order_candle_time is None:
+                return False
+            
+            current_candle_time = self._get_current_3min_candle_time()
+            
+            # 3분봉 3개 = 9분 후
+            three_candles_later = order_candle_time + timedelta(minutes=9)
+            
+            return current_candle_time >= three_candles_later
+            
+        except Exception as e:
+            self.logger.error(f"❌ 3분봉 경과 확인 오류: {e}")
+            return False
+    
     async def place_buy_order(self, stock_code: str, quantity: int, price: float, 
                              timeout_seconds: int = None) -> Optional[str]:
         """매수 주문 실행"""
@@ -58,7 +101,8 @@ class OrderManager:
                     quantity=quantity,
                     timestamp=now_kst(),
                     status=OrderStatus.PENDING,
-                    remaining_quantity=quantity
+                    remaining_quantity=quantity,
+                    order_3min_candle_time=self._get_current_3min_candle_time()  # 3분봉 시간 기록
                 )
                 
                 # 미체결 관리에 추가
@@ -216,6 +260,12 @@ class OrderManager:
                 if timeout_time and current_time > timeout_time:
                     await self._handle_timeout(order_id)
                 
+                # 2-1. 매수 주문의 3분봉 체크 (3봉 후 취소)
+                if order.order_type == OrderType.BUY and order.order_3min_candle_time:
+                    if self._has_3_candles_passed(order.order_3min_candle_time):
+                        await self._handle_3candle_timeout(order_id)
+                        continue  # 취소된 주문은 더 이상 처리하지 않음
+                
                 # 3. 가격 변동 시 정정 검토
                 await self._check_price_adjustment(order_id)
                 
@@ -286,6 +336,33 @@ class OrderManager:
             
         except Exception as e:
             self.logger.error(f"타임아웃 처리 실패 {order_id}: {e}")
+    
+    async def _handle_3candle_timeout(self, order_id: str):
+        """3분봉 기준 타임아웃 처리 (매수 주문 후 3봉 지나면 취소)"""
+        try:
+            if order_id not in self.pending_orders:
+                return
+            
+            order = self.pending_orders[order_id]
+            current_candle = self._get_current_3min_candle_time()
+            
+            self.logger.warning(f"📊 매수 주문 3봉 타임아웃: {order_id} ({order.stock_code}) "
+                              f"주문봉: {order.order_3min_candle_time.strftime('%H:%M') if order.order_3min_candle_time else 'N/A'} "
+                              f"현재봉: {current_candle.strftime('%H:%M')}")
+            
+            # 미체결 주문 취소
+            cancel_success = await self.cancel_order(order_id)
+            
+            # 텔레그램 알림 (기존 cancel_order에서 이미 알림이 발송되므로 추가 정보만 포함)
+            if cancel_success and self.telegram:
+                await self.telegram.notify_order_cancelled({
+                    'stock_code': order.stock_code,
+                    'stock_name': f'Stock_{order.stock_code}',
+                    'order_type': order.order_type.value
+                }, "3분봉 3개 경과")
+            
+        except Exception as e:
+            self.logger.error(f"3분봉 타임아웃 처리 실패 {order_id}: {e}")
     
     async def _check_price_adjustment(self, order_id: str):
         """가격 정정 검토"""

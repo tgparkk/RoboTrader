@@ -1,7 +1,7 @@
 """
 눌림목 캔들패턴 지표 (3분봉 권장)
 주가 상승 후 저거래 조정(기준 거래량의 1/4) → 회복 양봉에서 거래량 회복 → 이등분선 지지/회복 확인
-손절: 진입 양봉 저가 0.2% 이탈, 또는 이등분선/지지 저점 이탈
+손절: 진입 양봉 저가 0.2% 이탈, 또는 이등분선 기준 아래로 0.2% 이탈, 또는 지지 저점 이탈
 익절: 매수가 대비 +3%
 """
 import pandas as pd
@@ -159,7 +159,7 @@ class PullbackCandlePattern:
         반환 컬럼:
         - buy_pullback_pattern: 저거래 조정 후 회복 양봉 매수
         - buy_bisector_recovery: 이등분선 회복/상향 돌파 매수
-        - sell_bisector_break: 이등분선 지지 이탈
+        - sell_bisector_break: 이등분선 기준 아래로 0.2% 이탈
         - sell_support_break: 최근 저점 이탈
         - stop_entry_low_break: 진입 양봉 저가 0.2% 이탈
         - take_profit_3pct: 매수가 대비 +3% 도달
@@ -285,7 +285,8 @@ class PullbackCandlePattern:
                         continue
                 else:
                     # 손절/익절 신호
-                    if bl is not None and current['close'] < bl:
+                    # 이등분선 이탈: 이등분선 기준 아래로 0.2% 이탈 시 매도
+                    if bl is not None and current['close'] < bl * (1.0 - 0.002):
                         signals.iloc[i, signals.columns.get_loc('sell_bisector_break')] = True
                         in_position = False
                         entry_price = None

@@ -903,12 +903,13 @@ class TradingDecisionEngine:
             bisector_val = float(signals['bisector_line'].iloc[-1]) if 'bisector_line' in signals.columns else None
             
             # 디버깅 정보 로깅
+            bisector_str = f"{bisector_val:.0f}" if bisector_val is not None else "N/A"
             self.logger.debug(
                 f"🔍 신호디버그 [{current_time}]:\n"
                 f"  - 3분봉 데이터: {len(data_3min)}개\n"
                 f"  - 최근캔들: O={last_candle['open']:.0f} H={last_candle['high']:.0f} "
                 f"L={last_candle['low']:.0f} C={last_candle['close']:.0f} V={last_candle['volume']:,.0f}\n"
-                f"  - 이등분선: {bisector_val:.0f if bisector_val else 'N/A'}\n"
+                f"  - 이등분선: {bisector_str}\n"
                 f"  - 매수신호: pullback={buy_pullback}, bisector_recovery={buy_bisector}"
             )
             
@@ -1068,9 +1069,9 @@ class TradingDecisionEngine:
             if signals.empty:
                 return False, ""
             
-            # 손절 조건 1: 이등분선 이탈
+            # 손절 조건 1: 이등분선 이탈 (0.2% 기준)
             if signals['sell_bisector_break'].iloc[-1]:
-                return True, "이등분선 이탈"
+                return True, "이등분선 이탈 (0.2%)"
             
             # 손절 조건 2: 지지 저점 이탈
             if signals['sell_support_break'].iloc[-1]:
