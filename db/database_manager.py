@@ -178,30 +178,50 @@ class DatabaseManager:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 
-                # 기존 당일 데이터 비활성화
+                # 당일 이미 저장된 종목 조회 (성능 최적화)
+                target_date = selection_date.strftime('%Y-%m-%d')
                 cursor.execute('''
-                    UPDATE candidate_stocks 
-                    SET status = 'inactive' 
-                    WHERE DATE(selection_date) = DATE(?)
-                ''', (selection_date.strftime('%Y-%m-%d %H:%M:%S'),))
+                    SELECT DISTINCT stock_code FROM candidate_stocks 
+                    WHERE DATE(selection_date) = ?
+                ''', (target_date,))
                 
-                # 새로운 후보 종목 저장
+                existing_stocks = {row[0] for row in cursor.fetchall()}
+                
+                # 당일 처음 발견되는 종목만 저장
+                new_candidates = 0
+                duplicate_candidates = 0
+                
                 for candidate in candidates:
-                    cursor.execute('''
-                        INSERT INTO candidate_stocks 
-                        (stock_code, stock_name, selection_date, score, reasons, status, created_at)
-                        VALUES (?, ?, ?, ?, ?, 'active', ?)
-                    ''', (
-                        candidate.code,
-                        candidate.name,
-                        selection_date.strftime('%Y-%m-%d %H:%M:%S'),
-                        candidate.score,
-                        candidate.reason,
-                        now_kst().strftime('%Y-%m-%d %H:%M:%S')
-                    ))
+                    if candidate.code not in existing_stocks:
+                        # 해당 날짜에 처음 발견되는 종목만 저장
+                        cursor.execute('''
+                            INSERT INTO candidate_stocks 
+                            (stock_code, stock_name, selection_date, score, reasons, status, created_at)
+                            VALUES (?, ?, ?, ?, ?, 'active', ?)
+                        ''', (
+                            candidate.code,
+                            candidate.name,
+                            selection_date.strftime('%Y-%m-%d %H:%M:%S'),
+                            candidate.score,
+                            candidate.reason,
+                            now_kst().strftime('%Y-%m-%d %H:%M:%S')
+                        ))
+                        new_candidates += 1
+                        existing_stocks.add(candidate.code)  # 추가된 종목을 세트에 추가
+                    else:
+                        duplicate_candidates += 1
+                        self.logger.debug(f"📝 {candidate.code}({candidate.name}) 당일 이미 저장됨 - 중복 제외")
                 
                 conn.commit()
-                self.logger.info(f"후보 종목 {len(candidates)}개 저장 완료: {selection_date.strftime('%Y-%m-%d')}")
+                
+                if new_candidates > 0:
+                    self.logger.info(f"✅ 새로운 후보 종목 {new_candidates}개 저장 완료")
+                    if duplicate_candidates > 0:
+                        self.logger.info(f"   중복 제외: {duplicate_candidates}개 (당일 이미 저장됨)")
+                    self.logger.info(f"   전체 후보: {len(candidates)}개, 날짜: {selection_date.strftime('%Y-%m-%d %H:%M:%S')}")
+                else:
+                    self.logger.info(f"📝 모든 후보 종목이 당일 이미 저장되어 있음 ({len(candidates)}개 모두 중복)")
+                
                 return True
                 
         except Exception as e:

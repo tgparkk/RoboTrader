@@ -319,6 +319,166 @@ class PullbackCandlePattern:
         except Exception as e:
             print(f"눌림목 캔들패턴 신호 생성 오류: {e}")
             return pd.DataFrame()
+
+    @staticmethod
+    def generate_sell_signals(
+        data: pd.DataFrame,
+        entry_low: Optional[float] = None,
+        support_lookback: int = 5,
+        bisector_leeway: float = 0.002,
+    ) -> pd.DataFrame:
+        """눌림목 캔들패턴 - 매도 신호 전용 계산 (현재 상태 기반, in_position 비의존)
+
+        반환 컬럼:
+        - sell_bisector_break: 종가가 이등분선 대비 0.2% 하회
+        - sell_support_break: 종가가 직전 구간의 최근 저점(lookback) 하회(현재 캔들 제외)
+        - stop_entry_low_break: 종가가 진입 양봉의 저가 대비 0.2% 하회 (entry_low 제공 시)
+        - bisector_line: 이등분선 값(보조)
+        """
+        try:
+            if data is None or data.empty:
+                return pd.DataFrame()
+
+            required_cols = ['open', 'high', 'low', 'close']
+            if not all(col in data.columns for col in required_cols):
+                return pd.DataFrame(index=data.index)
+
+            df = data.copy()
+
+            # 이등분선 계산
+            bl = BisectorLine.calculate_bisector_line(df['high'], df['low'])
+
+            # 최근 저점(현재 캔들 제외: 직전 N봉 기준)
+            recent_low_prev = df['low'].shift(1).rolling(window=max(1, support_lookback), min_periods=1).min()
+
+            closes = df['close']
+
+            sell_bisector_break = (closes < (bl * (1.0 - bisector_leeway)))
+            sell_support_break = (closes < recent_low_prev)
+
+            if entry_low is not None and entry_low > 0:
+                stop_entry_low_break = (closes <= entry_low * (1.0 - bisector_leeway))
+            else:
+                stop_entry_low_break = pd.Series(False, index=df.index)
+
+            out = pd.DataFrame(index=df.index)
+            out['sell_bisector_break'] = sell_bisector_break.fillna(False)
+            out['sell_support_break'] = sell_support_break.fillna(False)
+            out['stop_entry_low_break'] = stop_entry_low_break.fillna(False)
+            out['bisector_line'] = bl
+
+            return out
+
+        except Exception as e:
+            print(f"눌림목 캔들패턴 매도 신호 계산 오류: {e}")
+            return pd.DataFrame(index=(data.index if data is not None else None))
+
+    @staticmethod
+    def generate_buy_signals(
+        data: pd.DataFrame,
+        retrace_lookback: int = 2,
+        low_vol_ratio: float = 0.25,
+    ) -> pd.DataFrame:
+        """눌림목 캔들패턴 - 매수 신호 전용 계산 (현재 상태 기반, in_position 비의존)
+
+        반환 컬럼:
+        - buy_pullback_pattern
+        - buy_bisector_recovery
+        - bisector_line
+        """
+        try:
+            if data is None or data.empty or len(data) < retrace_lookback + 3:
+                return pd.DataFrame()
+
+            required_cols = ['open', 'high', 'low', 'close', 'volume']
+            if not all(col in data.columns for col in required_cols):
+                return pd.DataFrame(index=data.index)
+
+            df = data.copy()
+            bl = BisectorLine.calculate_bisector_line(df['high'], df['low'])
+
+            buy_pullback = pd.Series(False, index=df.index)
+            buy_bis_up = pd.Series(False, index=df.index)
+
+            # 기준 거래량 (최근 50봉 최대) 시계열
+            rolling_baseline = df['volume'].rolling(window=min(50, len(df)), min_periods=1).max()
+
+            for i in range(len(df)):
+                if i < retrace_lookback + 2:
+                    continue
+
+                current_open = float(df['open'].iloc[i])
+                current_close = float(df['close'].iloc[i])
+                current_high = float(df['high'].iloc[i])
+                current_low = float(df['low'].iloc[i])
+                current_vol = float(df['volume'].iloc[i])
+                bl_i = float(bl.iloc[i]) if not pd.isna(bl.iloc[i]) else None
+
+                # 이등분선 위/회복
+                above_bisector = (bl_i is not None) and (current_close >= bl_i)
+                crosses_bisector_up = (bl_i is not None) and (current_open <= bl_i < current_close)
+
+                # 저거래 하락 조정
+                window = df.iloc[i - retrace_lookback:i]
+                baseline_now = float(rolling_baseline.iloc[i]) if not pd.isna(rolling_baseline.iloc[i]) else 0.0
+                low_volume_all = (window['volume'] < baseline_now * low_vol_ratio).all() if baseline_now > 0 else False
+                downtrend_all = (window['close'].diff().fillna(0) < 0).iloc[1:].all() if len(window) >= 2 else False
+                is_low_volume_retrace = low_volume_all and downtrend_all
+
+                # 회복 양봉 + 거래량 회복
+                is_bullish = current_close > current_open
+                max_low_vol = float(window['volume'].max()) if len(window) > 0 else 0.0
+                avg_recent_vol = float(df['volume'].iloc[max(0, i - 10):i].mean()) if i > 0 else 0.0
+                volume_recovers = (current_vol > max_low_vol) or (current_vol > avg_recent_vol)
+
+                # 1/2 되돌림 허용
+                recent_start = max(0, i - 12)
+                recent_range = df.iloc[recent_start:i]
+                half_retrace_ok = False
+                if len(recent_range) > 0:
+                    recent_candle_size = (recent_range['high'] - recent_range['low']).mean()
+                    recent_vol_mean = recent_range['volume'].mean()
+                    impulse_idx = None
+                    for j in range(i - 1, recent_start - 1, -1):
+                        open_j = float(df['open'].iloc[j])
+                        close_j = float(df['close'].iloc[j])
+                        high_j = float(df['high'].iloc[j])
+                        low_j = float(df['low'].iloc[j])
+                        vol_j = float(df['volume'].iloc[j])
+                        body = abs(close_j - open_j)
+                        size = high_j - low_j
+                        if close_j > open_j and size > 0:
+                            if body >= float(recent_candle_size) * 0.8 and vol_j >= float(recent_vol_mean) * 0.8:
+                                impulse_idx = j
+                                break
+                    if impulse_idx is not None:
+                        ih = float(df['high'].iloc[impulse_idx])
+                        il = float(df['low'].iloc[impulse_idx])
+                        half_point = il + (ih - il) * 0.5
+                        eps = max(half_point * 0.01, 1.0)
+                        if (abs(current_close - half_point) <= eps) or (current_low <= half_point <= current_close):
+                            half_retrace_ok = True
+
+                # 매수 신호 판정
+                if (
+                    (is_low_volume_retrace and is_bullish and volume_recovers and (above_bisector or crosses_bisector_up))
+                    or
+                    (half_retrace_ok and is_bullish and (above_bisector or crosses_bisector_up))
+                ):
+                    buy_pullback.iloc[i] = True
+
+                if is_bullish and crosses_bisector_up and volume_recovers:
+                    buy_bis_up.iloc[i] = True
+
+            out = pd.DataFrame(index=df.index)
+            out['buy_pullback_pattern'] = buy_pullback
+            out['buy_bisector_recovery'] = buy_bis_up
+            out['bisector_line'] = bl
+            return out
+
+        except Exception as e:
+            print(f"눌림목 캔들패턴 매수 신호 계산 오류: {e}")
+            return pd.DataFrame(index=(data.index if data is not None else None))
     
     @staticmethod
     def get_pattern_info(data: pd.DataFrame) -> Dict:

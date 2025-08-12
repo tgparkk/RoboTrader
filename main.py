@@ -412,6 +412,44 @@ class DayTradingBot:
                     try:
                         entry_price = self._determine_entry_price_like_virtual(combined_data, buy_reason)
                         entry_price = self._round_to_tick(entry_price)
+                        # 진입저가 보조값 설정 (실시간 손절 일치용)
+                        try:
+                            from core.indicators.pullback_candle_pattern import PullbackCandlePattern
+                            import pandas as pd
+                            # 1분→3분 변환 및 최근 신호 캔들 찾기
+                            df = combined_data
+                            if 'datetime' in df.columns:
+                                base = df.copy()
+                                base['datetime'] = pd.to_datetime(base['datetime'])
+                                base = base.set_index('datetime')
+                            elif 'date' in df.columns and 'time' in df.columns:
+                                base = df.copy()
+                                base['datetime'] = pd.to_datetime(base['date'].astype(str) + ' ' + df['time'].astype(str))
+                                base = base.set_index('datetime')
+                            else:
+                                base = df.copy()
+                                base.index = pd.date_range(start='09:00', periods=len(base), freq='1min')
+                            data_3min = base.resample('3T').agg({'open':'first','high':'max','low':'min','close':'last','volume':'sum'}).dropna().reset_index()
+                            signals = PullbackCandlePattern.generate_trading_signals(data_3min)
+                            last_idx = None
+                            if not signals.empty:
+                                for col in ['buy_bisector_recovery','buy_pullback_pattern']:
+                                    if col in signals.columns:
+                                        idxs = signals.index[signals[col] == True].tolist()
+                                        if idxs:
+                                            candidate = idxs[-1]
+                                            last_idx = candidate if last_idx is None else max(last_idx, candidate)
+                            if last_idx is not None and 0 <= last_idx < len(data_3min):
+                                try:
+                                    entry_low_val = float(data_3min['low'].iloc[last_idx])
+                                    # TradingDecisionEngine의 손절 로직에서 사용
+                                    ts = self.trading_manager.get_trading_stock(stock_code)
+                                    if ts:
+                                        setattr(ts, '_entry_low', entry_low_val)
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
                         if entry_price <= 0:
                             self.logger.warning(f"⚠️ 유효하지 않은 매수가 계산: {entry_price}")
                             return

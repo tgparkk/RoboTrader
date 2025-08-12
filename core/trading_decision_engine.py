@@ -182,6 +182,11 @@ class TradingDecisionEngine:
                             half_price = sig_low + (sig_high - sig_low) * 0.5
                             if half_price > 0:
                                 current_price = half_price
+                            # 진입 양봉 저가를 보조 저장 (실전 손절: 진입저가 0.2% 이탈 검사용)
+                            try:
+                                setattr(trading_stock, '_entry_low', sig_low)
+                            except Exception:
+                                pass
             except Exception as _:
                 # 계산 실패 시 기존 가격 유지
                 pass
@@ -485,10 +490,9 @@ class TradingDecisionEngine:
             current_price = data['close'].iloc[-1]
             buy_price = trading_stock.position.avg_price
             
-            # 공통 손절: 매수가 대비 -1.5% 손실 (최대 손실 한도)
             loss_rate = (current_price - buy_price) / buy_price
-            if loss_rate <= -0.015:
-                return True, "매수가 대비 -1.5% 손실"
+            if loss_rate <= -0.01:
+                return True, "매수가 대비 -1.0% 손실"
             
             # 매수 사유에 따른 개별 손절 조건
             if "가격박스" in trading_stock.selection_reason:
@@ -498,7 +502,7 @@ class TradingDecisionEngine:
             elif "볼린저밴드" in trading_stock.selection_reason:
                 return self._check_bollinger_stop_loss(data, buy_price, current_price, trading_stock)
             elif "눌림목캔들패턴" in trading_stock.selection_reason:
-                return self._check_pullback_candle_stop_loss(data, buy_price, current_price)
+                return self._check_pullback_candle_stop_loss(trading_stock, data, buy_price, current_price)
             
             return False, ""
             
@@ -609,8 +613,8 @@ class TradingDecisionEngine:
             buy_price = trading_stock.position.avg_price
             profit_rate = (current_price - buy_price) / buy_price
             
-            if profit_rate >= 0.025:
-                return True, "매수가 대비 +2.5% 수익실현"
+            if profit_rate >= 0.015:
+                return True, "매수가 대비 +1.5% 수익실현"
             
             return False, ""
             
@@ -858,8 +862,9 @@ class TradingDecisionEngine:
             
             # 1분봉 데이터를 3분봉으로 변환
             data_3min = self._convert_to_3min_data(data)
-            if data_3min is None or len(data_3min) < 20:
-                return False, "3분봉 데이터 부족"
+            if data_3min is None or len(data_3min) < 10:  # 20개 → 10개로 완화
+                self.logger.warning(f"📊 3분봉 데이터 부족: {len(data_3min) if data_3min is not None else 0}개 (최소 10개 필요)")
+                return False, f"3분봉 데이터 부족 ({len(data_3min) if data_3min is not None else 0}/10)"
             
             # 눌림목 캔들패턴 신호 계산 (3분봉 기준)
             signals = PullbackCandlePattern.generate_trading_signals(data_3min)
@@ -1052,7 +1057,7 @@ class TradingDecisionEngine:
         except Exception as e:
             return [f"분석 오류: {e}"]
     
-    def _check_pullback_candle_stop_loss(self, data, buy_price, current_price) -> Tuple[bool, str]:
+    def _check_pullback_candle_stop_loss(self, trading_stock, data, buy_price, current_price) -> Tuple[bool, str]:
         """눌림목 캔들패턴 전략 손절 조건 (3분봉 기준)"""
         try:
             from core.indicators.pullback_candle_pattern import PullbackCandlePattern
@@ -1062,22 +1067,30 @@ class TradingDecisionEngine:
             if data_3min is None or len(data_3min) < 15:
                 return False, ""
             
-            # 눌림목 캔들패턴 신호 계산 (3분봉 기준)
-            signals = PullbackCandlePattern.generate_trading_signals(data_3min)
+            # 매도 신호 직접 계산 (in_position 비의존)
+            entry_low_value = None
+            try:
+                entry_low_value = getattr(trading_stock, '_entry_low', None)
+            except Exception:
+                entry_low_value = None
+            sell_signals = PullbackCandlePattern.generate_sell_signals(
+                data_3min,
+                entry_low=entry_low_value
+            )
             
-            if signals.empty:
+            if sell_signals is None or sell_signals.empty:
                 return False, ""
             
             # 손절 조건 1: 이등분선 이탈 (0.2% 기준)
-            if signals['sell_bisector_break'].iloc[-1]:
+            if 'sell_bisector_break' in sell_signals.columns and bool(sell_signals['sell_bisector_break'].iloc[-1]):
                 return True, "이등분선 이탈 (0.2%)"
             
             # 손절 조건 2: 지지 저점 이탈
-            if signals['sell_support_break'].iloc[-1]:
+            if 'sell_support_break' in sell_signals.columns and bool(sell_signals['sell_support_break'].iloc[-1]):
                 return True, "지지 저점 이탈"
             
-            # 손절 조건 3: 진입 양봉 저가 0.2% 이탈
-            if 'stop_entry_low_break' in signals.columns and signals['stop_entry_low_break'].iloc[-1]:
+            # 손절 조건 3: 진입 양봉 저가 0.2% 이탈 (entry_low 전달 시에만 유효)
+            if 'stop_entry_low_break' in sell_signals.columns and bool(sell_signals['stop_entry_low_break'].iloc[-1]):
                 return True, "진입 양봉 저가 0.2% 이탈"
             
             return False, ""

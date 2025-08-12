@@ -64,13 +64,12 @@ class OrderManager:
         try:
             if order_candle_time is None:
                 return False
-            
-            current_candle_time = self._get_current_3min_candle_time()
-            
-            # 3분봉 3개 = 9분 후
+
+            # 3분봉 3개 = 9분 후 (실제 시각 기준 비교: 장마감 15:30 클램프에 걸려 무한 대기되는 문제 방지)
+            now_time = now_kst()
             three_candles_later = order_candle_time + timedelta(minutes=9)
-            
-            return current_candle_time >= three_candles_later
+
+            return now_time >= three_candles_later
             
         except Exception as e:
             self.logger.error(f"❌ 3분봉 경과 확인 오류: {e}")

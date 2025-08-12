@@ -139,10 +139,10 @@ class IntradayStockManager:
     
     async def _collect_historical_data(self, stock_code: str) -> bool:
         """
-        선정 시점 이전의 과거 분봉 데이터 수집 (전체 거래시간)
+        당일 09:00부터 선정시점까지의 전체 분봉 데이터 수집
         
         장중에 종목이 선정되었을 때 09:00부터 선정시점까지의 모든 분봉 데이터를 수집합니다.
-        기존 API 제한(30건 또는 120건)을 극복하여 전체 거래시간 데이터를 확보합니다.
+        이를 통해 시뮬레이션과 동일한 조건의 데이터로 신호를 생성할 수 있습니다.
         
         Args:
             stock_code: 종목코드
@@ -161,42 +161,38 @@ class IntradayStockManager:
             self.logger.info(f"📈 {stock_code} 전체 거래시간 분봉 데이터 수집 시작")
             self.logger.info(f"   선정 시간: {selected_time.strftime('%H:%M:%S')}")
             
-            # 새로운 전체 거래시간 데이터 수집 함수 사용
+            # 당일 09:00부터 선정시점까지의 전체 거래시간 데이터 수집
             target_date = selected_time.strftime("%Y%m%d")
             target_hour = selected_time.strftime("%H%M%S")
             
-            # 전체 거래시간 분봉 데이터 수집 (09:00부터 선정시점까지)
+            self.logger.info(f"📈 {stock_code} 당일 전체 데이터 수집 시작 (09:00 ~ {target_hour})")
+            
             historical_data = await get_full_trading_day_data_async(
                 stock_code=stock_code,
                 target_date=target_date,
-                selected_time=target_hour
+                selected_time=target_hour,
+                start_time="090000"  # 09:00부터 시작
             )
             
-            if historical_data is None:
-                self.logger.error(f"❌ {stock_code} 전체 거래시간 분봉 데이터 조회 실패")
+            if historical_data is None or historical_data.empty:
+                self.logger.error(f"❌ {stock_code} 당일 전체 분봉 데이터 조회 실패")
                 # 실패 시 기존 방식으로 폴백
                 return await self._collect_historical_data_fallback(stock_code)
             
-            if historical_data.empty:
-                self.logger.warning(f"⚠️ {stock_code} 전체 거래시간 분봉 데이터 없음")
-                # 빈 DataFrame이라도 저장
-                with self._lock:
-                    if stock_code in self.selected_stocks:
-                        self.selected_stocks[stock_code].historical_data = pd.DataFrame()
-                        self.selected_stocks[stock_code].data_complete = True
-                return True
-            
-            # 선정 시점 이전 데이터만 필터링 (추가 안전장치)
+            # 데이터 정렬 및 정리 (시간 순서)
             if 'datetime' in historical_data.columns:
+                historical_data = historical_data.sort_values('datetime').reset_index(drop=True)
                 # 선정 시간을 timezone-naive로 변환하여 pandas datetime64[ns]와 비교
                 selected_time_naive = selected_time.replace(tzinfo=None)
                 filtered_data = historical_data[historical_data['datetime'] <= selected_time_naive].copy()
             elif 'time' in historical_data.columns:
+                historical_data = historical_data.sort_values('time').reset_index(drop=True)
                 # time 컬럼을 이용한 필터링
                 selected_time_str = selected_time.strftime("%H%M%S")
                 historical_data['time_str'] = historical_data['time'].astype(str).str.zfill(6)
                 filtered_data = historical_data[historical_data['time_str'] <= selected_time_str].copy()
-                filtered_data = filtered_data.drop('time_str', axis=1)
+                if 'time_str' in filtered_data.columns:
+                    filtered_data = filtered_data.drop('time_str', axis=1)
             else:
                 # 시간 컬럼이 없으면 전체 데이터 사용
                 filtered_data = historical_data.copy()
@@ -229,12 +225,21 @@ class IntradayStockManager:
                 # 시간 범위 계산
                 time_range_minutes = self._calculate_time_range_minutes(start_time, end_time)
                 
-                self.logger.info(f"✅ {stock_code} 전체 거래시간 분봉 수집 성공!")
-                self.logger.info(f"   데이터 범위: {start_time} ~ {end_time} ({time_range_minutes}분)")
-                self.logger.info(f"   총 분봉 수: {data_count}건")
+                self.logger.info(f"✅ {stock_code} 당일 전체 분봉 수집 성공! (09:00~{selected_time.strftime('%H:%M')})")
+                self.logger.info(f"   총 데이터: {data_count}건")
+                self.logger.info(f"   시간 범위: {start_time} ~ {end_time} ({time_range_minutes}분)")
                 
-                # 09:00 이전 데이터가 있는지 확인
-                if start_time and start_time < "090000":
+                # 3분봉 변환 예상 개수 계산
+                expected_3min_count = data_count // 3
+                self.logger.info(f"   예상 3분봉: {expected_3min_count}개 (최소 10개 필요)")
+                
+                if expected_3min_count >= 10:
+                    self.logger.info(f"   ✅ 신호 생성 조건 충족!")
+                else:
+                    self.logger.warning(f"   ⚠️ 3분봉 데이터 부족 위험: {expected_3min_count}/10")
+                
+                # 09:00부터 데이터가 시작되는지 확인
+                if start_time and start_time <= "090100":
                     self.logger.info(f"   📊 프리마켓 데이터 포함: {start_time}부터")
                 elif start_time and start_time >= "090000":
                     self.logger.info(f"   📊 정규장 데이터: {start_time}부터")
@@ -434,38 +439,62 @@ class IntradayStockManager:
     
     def get_combined_chart_data(self, stock_code: str) -> Optional[pd.DataFrame]:
         """
-        종목의 과거 + 실시간 결합 차트 데이터 조회
+        종목의 당일 전체 차트 데이터 조회 (09:00~현재)
+        
+        실시간 신호 생성을 위해 선정 시점과 관계없이 당일 전체 데이터를 반환합니다.
         
         Args:
             stock_code: 종목코드
             
         Returns:
-            pd.DataFrame: 결합된 차트 데이터
+            pd.DataFrame: 당일 전체 차트 데이터
         """
         try:
-            with self._lock:
-                if stock_code not in self.selected_stocks:
-                    return None
-                    
-                stock_data = self.selected_stocks[stock_code]
-                historical_data = stock_data.historical_data.copy()
-                realtime_data = stock_data.realtime_data.copy()
+            from api.kis_chart_api import get_inquire_time_itemchartprice
+            from utils.korean_time import now_kst
             
-            # 두 데이터 결합
-            if historical_data.empty and realtime_data.empty:
+            # 현재 시간까지의 당일 전체 분봉 데이터 조회
+            current_time = now_kst()
+            target_hour = current_time.strftime("%H%M%S")
+            
+            result = get_inquire_time_itemchartprice(
+                stock_code=stock_code,
+                input_hour=target_hour,
+                past_data_yn="Y"
+            )
+            
+            if result is None:
+                return None
+            
+            summary_df, chart_df = result
+            
+            if chart_df.empty:
                 return pd.DataFrame()
-            elif historical_data.empty:
-                combined_data = realtime_data
-            elif realtime_data.empty:
-                combined_data = historical_data
+            
+            # 당일 09:00 이후 데이터만 필터링 (정규장 데이터)
+            if 'time' in chart_df.columns:
+                chart_df['time_str'] = chart_df['time'].astype(str).str.zfill(6)
+                combined_data = chart_df[chart_df['time_str'] >= '090000'].copy()
+                if 'time_str' in combined_data.columns:
+                    combined_data = combined_data.drop('time_str', axis=1)
             else:
-                combined_data = pd.concat([historical_data, realtime_data], ignore_index=True)
+                combined_data = chart_df.copy()
             
             # 시간순 정렬
             if 'datetime' in combined_data.columns:
                 combined_data = combined_data.sort_values('datetime').reset_index(drop=True)
             elif 'date' in combined_data.columns and 'time' in combined_data.columns:
                 combined_data = combined_data.sort_values(['date', 'time']).reset_index(drop=True)
+            
+            # 데이터 수집 현황 로깅
+            if not combined_data.empty:
+                data_count = len(combined_data)
+                if 'time' in combined_data.columns:
+                    start_time = combined_data.iloc[0]['time']
+                    end_time = combined_data.iloc[-1]['time']
+                    self.logger.debug(f"📊 {stock_code} 당일 전체 데이터: {data_count}건 ({start_time}~{end_time})")
+                else:
+                    self.logger.debug(f"📊 {stock_code} 당일 전체 데이터: {data_count}건")
             
             return combined_data
             

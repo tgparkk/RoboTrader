@@ -33,10 +33,7 @@ from utils.logger import setup_logger
 from visualization.data_processor import DataProcessor
 from core.indicators.pullback_candle_pattern import PullbackCandlePattern
 from core.indicators.bisector_line import BisectorLine
-from core.indicators.consolidation_breakout import (
-    generate_consolidation_breakout_signals,
-    ConsolidationParams,
-)
+# 실전 흐름 기준: 현재 리플레이는 눌림목(3분)만 사용하여 실전 규칙을 재현합니다.
 from api.kis_api_manager import KISAPIManager
 
 
@@ -259,24 +256,22 @@ def evaluate_signals_at_times(df_3min: pd.DataFrame, target_date: str, times: Li
 
 
 def list_all_buy_signals(df_3min: pd.DataFrame) -> List[Dict[str, object]]:
-    """해당 3분봉 전체에서 발생한 매수 신호 시각/유형 리스트."""
+    """해당 3분봉 전체에서 발생한 매수 신호 시각/유형 리스트.
+
+    실전 기준: 눌림목(3분) 신호만 사용 (consolidation breakout 제외)
+    """
     out: List[Dict[str, object]] = []
     if df_3min is None or df_3min.empty or 'datetime' not in df_3min.columns:
         return out
     sig = PullbackCandlePattern.generate_trading_signals(df_3min)
-    cns = generate_consolidation_breakout_signals(df_3min)
     if sig is None or sig.empty:
         sig = pd.DataFrame(index=df_3min.index)
-    if cns is None or cns.empty:
-        cns = pd.DataFrame(index=df_3min.index)
     has_pb = sig.get('buy_pullback_pattern', pd.Series([False]*len(df_3min)))
     has_rc = sig.get('buy_bisector_recovery', pd.Series([False]*len(df_3min)))
-    has_cnb = cns.get('buy_consolidation_breakout', pd.Series([False]*len(df_3min)))
     for i in range(len(df_3min)):
         pb = bool(has_pb.iloc[i])
         rc = bool(has_rc.iloc[i])
-        cb = bool(has_cnb.iloc[i])
-        if not (pb or rc or cb):
+        if not (pb or rc):
             continue
         ts = df_3min['datetime'].iloc[i]
         hhmm = pd.Timestamp(ts).strftime('%H:%M')
@@ -285,42 +280,37 @@ def list_all_buy_signals(df_3min: pd.DataFrame) -> List[Dict[str, object]]:
             types.append('pullback')
         if rc:
             types.append('bisector_recovery')
-        if cb:
-            types.append('consolidation_breakout')
         out.append({'time': hhmm, 'types': '+'.join(types)})
     return out
 
 
 def simulate_trades(df_3min: pd.DataFrame) -> List[Dict[str, object]]:
-    """눌림목(3분) 신호 기반 단순 체결 시뮬레이션: 매수→매도 페어와 수익률(%) 계산.
-    - 매수: buy_pullback_pattern 또는 buy_bisector_recovery가 True일 때 진입(종가 체결)
-    - 매도: sell_bisector_break, sell_support_break, stop_entry_low_break, take_profit_3pct 순으로 우선 매도(종가 체결)
-    - 복수 매매 가능 (매도 후 재매수 허용). 데이터 끝까지 보유 시 EOD 청산
+    """실전(_execute_trading_decision) 기준에 맞춘 눌림목(3분) 체결 시뮬레이션.
+
+    규칙(실전 근사):
+    - 매수: buy_pullback_pattern 또는 buy_bisector_recovery가 True일 때 진입
+      • 체결가: 신호 캔들의 절반가(half: low + (high-low)*0.5), 실패 시 해당 캔들 종가
+    - 매도 우선순위: (1) 공통 최대손실 -1.0% → (2) 손절(이등분선 -0.2%, 지지저점 이탈, 진입저가 -0.2%) → (3) 익절 +1.5%
+    - 종가 체결 가정, 복수 매매 허용, 끝까지 보유 시 EOD 청산
     """
     trades: List[Dict[str, object]] = []
     if df_3min is None or df_3min.empty or 'datetime' not in df_3min.columns:
         return trades
     sig = PullbackCandlePattern.generate_trading_signals(df_3min)
-    cns = generate_consolidation_breakout_signals(df_3min)
     if sig is None or sig.empty:
         sig = pd.DataFrame(index=df_3min.index)
-    if cns is None or cns.empty:
-        cns = pd.DataFrame(index=df_3min.index)
 
     closes = pd.to_numeric(df_3min['close'], errors='coerce')
     in_pos = False
     entry_price = None
     entry_time = None
     entry_type = None
+    entry_low = None
 
     # 안전: 불리언 시리즈 확보
     buy_pb = sig.get('buy_pullback_pattern', pd.Series([False]*len(df_3min)))
     buy_rc = sig.get('buy_bisector_recovery', pd.Series([False]*len(df_3min)))
-    buy_cb = cns.get('buy_consolidation_breakout', pd.Series([False]*len(df_3min)))
-    sell_bis = sig.get('sell_bisector_break', pd.Series([False]*len(df_3min)))
-    sell_sup = sig.get('sell_support_break', pd.Series([False]*len(df_3min)))
-    stop_low = sig.get('stop_entry_low_break', pd.Series([False]*len(df_3min)))
-    take_pf = sig.get('take_profit_3pct', pd.Series([False]*len(df_3min)))
+    # 매도는 실전과 동일하게 직접계산 API 사용
 
     for i in range(len(df_3min)):
         ts = df_3min['datetime'].iloc[i]
@@ -330,26 +320,46 @@ def simulate_trades(df_3min: pd.DataFrame) -> List[Dict[str, object]]:
             continue
 
         if not in_pos:
-            if bool(buy_pb.iloc[i]) or bool(buy_rc.iloc[i]) or bool(buy_cb.iloc[i]):
+            if bool(buy_pb.iloc[i]) or bool(buy_rc.iloc[i]):
                 in_pos = True
-                entry_price = c
+                # 실전 근사: 절반가 체결 시도 → 실패 시 종가
+                try:
+                    hi = float(df_3min['high'].iloc[i])
+                    lo = float(df_3min['low'].iloc[i])
+                    half = lo + (hi - lo) * 0.5
+                    entry_price = half if (half > 0 and lo <= half <= hi) else c
+                except Exception:
+                    entry_price = c
                 entry_time = hhmm
+                try:
+                    entry_low = float(df_3min['low'].iloc[i])
+                except Exception:
+                    entry_low = None
                 if bool(buy_pb.iloc[i]):
                     entry_type = 'pullback'
                 elif bool(buy_rc.iloc[i]):
                     entry_type = 'bisector_recovery'
-                else:
-                    entry_type = 'consolidation_breakout'
         else:
             exit_reason = None
-            if bool(sell_bis.iloc[i]):
-                exit_reason = 'sell_bisector_break'
-            elif bool(sell_sup.iloc[i]):
-                exit_reason = 'sell_support_break'
-            elif bool(stop_low.iloc[i]):
-                exit_reason = 'stop_entry_low_break'
-            elif bool(take_pf.iloc[i]):
-                exit_reason = 'take_profit_3pct'
+            # (1) 공통 최대손실 -1.0%
+            if entry_price is not None and c <= entry_price * (1.0 - 0.010):
+                exit_reason = 'max_loss_1_0pct'
+            else:
+                # (2) 손절 조건: 이등분선 0.2% 이탈 / 지지저점 이탈 / 진입저가 0.2% 이탈
+                try:
+                    sell_sig = PullbackCandlePattern.generate_sell_signals(df_3min.iloc[:i+1], entry_low=entry_low)
+                except Exception:
+                    sell_sig = pd.DataFrame(index=df_3min.index)
+                if not sell_sig.empty:
+                    if bool(sell_sig.get('sell_bisector_break', pd.Series([False]*len(df_3min))).iloc[i]):
+                        exit_reason = 'sell_bisector_break'
+                    elif bool(sell_sig.get('sell_support_break', pd.Series([False]*len(df_3min))).iloc[i]):
+                        exit_reason = 'sell_support_break'
+                    elif bool(sell_sig.get('stop_entry_low_break', pd.Series([False]*len(df_3min))).iloc[i]):
+                        exit_reason = 'stop_entry_low_break'
+            # (3) 익절 +1.5%
+            if exit_reason is None and entry_price is not None and c >= entry_price * (1.0 + 0.015):
+                exit_reason = 'take_profit_1_5pct'
 
             if exit_reason is not None:
                 profit = (c - entry_price) / entry_price * 100.0 if entry_price and entry_price > 0 else 0.0
@@ -366,6 +376,7 @@ def simulate_trades(df_3min: pd.DataFrame) -> List[Dict[str, object]]:
                 entry_price = None
                 entry_time = None
                 entry_type = None
+                entry_low = None
 
     # EOD 청산
     if in_pos and entry_price is not None:
@@ -462,8 +473,8 @@ def main():
         return str(code).strip().zfill(6)
 
     # 기본값 (요청하신 2025-08-08, 4개 종목/시각)
-    DEFAULT_DATE = "20250811"
-    DEFAULT_CODES = "017510, 054300,103840, 122870, 131400, 475050"
+    DEFAULT_DATE = "20250812"
+    DEFAULT_CODES = "023160,023790,026040,033340,044490,054300,054540,108490,240810,419050,452160"
     DEFAULT_TIMES = "034230=14:39;078520=11:33,11:36,11:39;107600=11:24,11:27,14:51;214450=12:00,14:39;073010=10:30,10:33,10:36,10:39"
 
     date_str: str = (args.date or DEFAULT_DATE).strip()

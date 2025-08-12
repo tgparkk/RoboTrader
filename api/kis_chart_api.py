@@ -615,7 +615,7 @@ def get_full_trading_day_data(stock_code: str, target_date: str = "",
 
 
 async def get_full_trading_day_data_async(stock_code: str, target_date: str = "", 
-                                        selected_time: str = "") -> Optional[pd.DataFrame]:
+                                        selected_time: str = "", start_time: str = "") -> Optional[pd.DataFrame]:
     """
     비동기 버전의 전체 거래시간 분봉 데이터 조회
     
@@ -623,15 +623,18 @@ async def get_full_trading_day_data_async(stock_code: str, target_date: str = ""
         stock_code: 종목코드
         target_date: 조회 날짜 (YYYYMMDD, 기본값: 오늘)
         selected_time: 종목 선정 시간 (HHMMSS, 기본값: 현재시간)
+        start_time: 시작 시간 (HHMMSS, 기본값: 090000)
         
     Returns:
-        pd.DataFrame: 09:00부터 선정시점까지의 전체 분봉 데이터
+        pd.DataFrame: start_time부터 selected_time까지의 전체 분봉 데이터
     """
     try:
         if not target_date:
             target_date = now_kst().strftime("%Y%m%d")
         if not selected_time:
             selected_time = now_kst().strftime("%H%M%S")
+        if not start_time:
+            start_time = "090000"
 
         from datetime import datetime as _dt, timedelta as _td
         base_dt = _dt.strptime(target_date, "%Y%m%d")
@@ -648,11 +651,20 @@ async def get_full_trading_day_data_async(stock_code: str, target_date: str = ""
             logger.info(f"📊 {stock_code} 전체 거래시간 분봉 데이터 수집 시작 (비동기, {attempt_date} {selected_time}까지)")
 
             needed_segments = []
-            for start_time, end_time in time_segments:
-                if start_time >= selected_time:
+            for segment_start, segment_end in time_segments:
+                # start_time보다 이른 구간은 건너뛰기
+                if segment_end <= start_time:
+                    continue
+                # selected_time보다 늦은 구간은 건너뛰기
+                if segment_start >= selected_time:
                     break
-                segment_end_time = min(end_time, selected_time)
-                needed_segments.append((start_time, segment_end_time))
+                
+                # 실제 필요한 구간 계산
+                actual_start = max(segment_start, start_time)
+                actual_end = min(segment_end, selected_time)
+                
+                if actual_start < actual_end:
+                    needed_segments.append((actual_start, actual_end))
 
             async def fetch_segment_data(start_time: str, end_time: str):
                 try:

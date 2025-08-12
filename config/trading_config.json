@@ -9,7 +9,7 @@
     "max_adjustments": 3,
     "adjustment_threshold_percent": 0.5,
     "market_order_threshold_percent": 2.0,
-    "buy_budget_ratio": 0.20
+    "buy_budget_ratio": 0.15
   },
   "risk_management": {
     "max_position_count": 20,
