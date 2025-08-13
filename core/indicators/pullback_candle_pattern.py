@@ -196,10 +196,10 @@ class PullbackCandlePattern:
             signals['bisector_line'] = bisector_line
 
             # 파라미터 (완화 적용)
-            retrace_lookback = 2      # 저거래 조정 연속 봉 (기존 3 → 2)
+            retrace_lookback = 1      # 저거래 조정 연속 봉 (기존 3 → 2)
             low_vol_ratio = 0.25      # 기준 거래량의 25% 
             stop_leeway = 0.002       # 0.2%
-            take_profit = 0.03        # +3%
+            take_profit = 0.02        # +2%
 
             # 기준 거래량(최근 50봉 최대)을 시계열로 계산
             rolling_baseline = df['volume'].rolling(window=min(50, len(df)), min_periods=1).max()

@@ -357,10 +357,25 @@ class DayTradingBot:
             self.logger.error(f"❌ 매매 판단 시스템 오류: {e}")
     
     async def _analyze_buy_decision(self, trading_stock):
-        """매수 판단 분석"""
+        """매수 판단 분석 (3분봉 완성 시점에만)"""
         try:
             stock_code = trading_stock.stock_code
             stock_name = trading_stock.stock_name
+            
+            # ✅ 3분봉 완성 전후 40초 구간에서만 매수 신호 체크
+            current_time = now_kst()
+            minute = current_time.minute
+            second = current_time.second
+            
+            # 3분봉 완성 20초 전 (x:x2:40~x:x2:59)
+            is_before_complete = (minute % 3 == 2) and (40 <= second <= 59)
+            # 3분봉 완성 20초 후 (x:x0:00~x:x0:19, x:x3:00~x:x3:19, x:x6:00~x:x6:19)
+            is_after_complete = (minute % 3 == 0) and (0 <= second <= 19)
+            
+            if not (is_before_complete or is_after_complete):
+                return
+            
+            self.logger.debug(f"🕒 3분봉 완성 시점 매수 체크: {stock_code} at {current_time.strftime('%H:%M:%S')}")
             
             # 추가 안전 검증: 현재 보유 중인 종목인지 다시 한번 확인
             positioned_stocks = self.trading_manager.get_stocks_by_state(StockState.POSITIONED)
