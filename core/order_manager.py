@@ -265,9 +265,6 @@ class OrderManager:
                         await self._handle_3candle_timeout(order_id)
                         continue  # 취소된 주문은 더 이상 처리하지 않음
                 
-                # 3. 가격 변동 시 정정 검토 (비활성화)
-                # await self._check_price_adjustment(order_id)
-                
             except Exception as e:
                 self.logger.error(f"주문 모니터링 중 오류 {order_id}: {e}")
     
@@ -300,7 +297,7 @@ class OrderManager:
                     order.status = OrderStatus.CANCELLED
                     self._move_to_completed(order_id)
                     self.logger.info(f"주문 취소 확인: {order_id}")
-                elif filled_qty == order.quantity:
+                elif remaining_qty == 0 and filled_qty >= order.quantity and not bool(status_data.get('actual_unfilled', False)):
                     order.status = OrderStatus.FILLED
                     self._move_to_completed(order_id)
                     self.logger.info(f"✅ 주문 완전 체결: {order_id} ({order.stock_code})")
@@ -351,63 +348,52 @@ class OrderManager:
             
             # 미체결 주문 취소
             cancel_success = await self.cancel_order(order_id)
-            
-            # 텔레그램 알림 (기존 cancel_order에서 이미 알림이 발송되므로 추가 정보만 포함)
-            if cancel_success and self.telegram:
-                await self.telegram.notify_order_cancelled({
-                    'stock_code': order.stock_code,
-                    'stock_name': f'Stock_{order.stock_code}',
-                    'order_type': order.order_type.value
-                }, "3분봉 3개 경과")
+
+            if cancel_success:
+                # 취소 성공은 cancel_order에서 알림 처리됨
+                if self.telegram:
+                    await self.telegram.notify_order_cancelled({
+                        'stock_code': order.stock_code,
+                        'stock_name': f'Stock_{order.stock_code}',
+                        'order_type': order.order_type.value
+                    }, "3분봉 3개 경과")
+            else:
+                # 취소 실패 → 사용자 제안: 체결로 간주. 단, 한 번 더 상태 조회로 검증
+                self.logger.warning(f"⚠️ 3봉 타임아웃 취소 실패: {order_id} → 상태 재확인 후 체결로 간주")
+                loop = asyncio.get_event_loop()
+                status_data = await loop.run_in_executor(
+                    self.executor,
+                    self.api_manager.get_order_status,
+                    order_id
+                )
+
+                try:
+                    filled_qty = int(status_data.get('tot_ccld_qty', 0)) if status_data else 0
+                    remaining_qty = int(status_data.get('rmn_qty', 0)) if status_data else order.quantity
+                except Exception:
+                    filled_qty = 0
+                    remaining_qty = order.quantity
+
+                if status_data is None or (remaining_qty == 0 and filled_qty >= order.quantity and not bool((status_data or {}).get('actual_unfilled', False))):
+                    # 체결로 처리
+                    order.status = OrderStatus.FILLED
+                    self._move_to_completed(order_id)
+                    self.logger.info(f"✅ 3봉 타임아웃: 취소 실패로 체결 간주 처리 {order_id} ({order.stock_code})")
+                    if self.telegram:
+                        await self.telegram.notify_order_filled({
+                            'stock_code': order.stock_code,
+                            'stock_name': f'Stock_{order.stock_code}',
+                            'order_type': order.order_type.value,
+                            'quantity': order.quantity,
+                            'price': order.price
+                        })
+                else:
+                    # 여전히 미체결로 확인되면 유지 (추가 모니터링)
+                    self.logger.warning(f"⏳ 3봉 타임아웃 후에도 미체결 상태 유지: {order_id} - filled={filled_qty}, remaining={remaining_qty}")
             
         except Exception as e:
             self.logger.error(f"3분봉 타임아웃 처리 실패 {order_id}: {e}")
     
-    async def _check_price_adjustment(self, order_id: str):
-        """가격 정정 검토"""
-        try:
-            if order_id not in self.pending_orders:
-                return
-            
-            order = self.pending_orders[order_id]
-            
-            # 최대 정정 횟수 체크
-            if order.adjustment_count >= self.config.order_management.max_adjustments:
-                return
-            
-            # 현재가 조회
-            loop = asyncio.get_event_loop()
-            price_data = await loop.run_in_executor(
-                self.executor,
-                self.api_manager.get_current_price,
-                order.stock_code
-            )
-            
-            if not price_data:
-                return
-            
-            current_price = price_data.current_price
-            
-            # 정정 로직
-            should_adjust = False
-            new_price = order.price
-            
-            if order.order_type == OrderType.BUY:
-                # 매수: 현재가가 주문가보다 0.5% 이상 높으면 정정
-                if current_price > order.price * 1.005:
-                    new_price = current_price * 1.001  # 현재가 + 0.1%
-                    should_adjust = True
-            else:  # SELL
-                # 매도: 현재가가 주문가보다 0.5% 이상 낮으면 정정
-                if current_price < order.price * 0.995:
-                    new_price = current_price * 0.999  # 현재가 - 0.1%
-                    should_adjust = True
-            
-            if should_adjust:
-                await self._adjust_order_price(order_id, new_price)
-                
-        except Exception as e:
-            self.logger.error(f"가격 정정 검토 실패 {order_id}: {e}")
     
     async def _adjust_order_price(self, order_id: str, new_price: float):
         """주문 가격 정정"""

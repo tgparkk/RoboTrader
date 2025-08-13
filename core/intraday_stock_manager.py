@@ -728,7 +728,9 @@ class IntradayStockManager:
             # datetime 컬럼이 있는 경우
             if 'datetime' in chart_data.columns:
                 # 현재 진행 중인 1분봉 제외 (완성되지 않았으므로)
-                completed_data = chart_data[chart_data['datetime'] < current_minute_start].copy()
+                # pandas datetime64[ns](tz-naive)와 비교를 위해 현재 시각을 tz-naive로 변환
+                current_minute_start_naive = current_minute_start.replace(tzinfo=None)
+                completed_data = chart_data[chart_data['datetime'] < current_minute_start_naive].copy()
                 
                 excluded_count = len(chart_data) - len(completed_data)
                 if excluded_count > 0:

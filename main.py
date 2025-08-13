@@ -677,8 +677,9 @@ class DayTradingBot:
                     # 상태 전환 후 시장가 매도 주문 실행
                     moved = self.trading_manager.move_to_sell_candidate(stock_code, "장마감 일괄청산")
                     if moved:
+                        # 시장가 청산: 시장가 주문일 때 단가는 0으로 전달
                         await self.trading_manager.execute_sell_order(
-                            stock_code, quantity, sell_price, "장마감 일괄청산", market=True
+                            stock_code, quantity, 0.0, "장마감 일괄청산", market=True
                         )
                         self.logger.info(
                             f"🧹 장마감 청산 주문: {stock_code} {quantity}주 시장가 @{sell_price:,.0f}원"

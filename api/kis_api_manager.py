@@ -738,97 +738,89 @@ class KISAPIManager:
                     self.logger.debug(f"📊 미체결 상태: {order_id} - 주문량: {total_order_qty} (잔여: {remaining_qty})")
                 
             elif all_filled_records is not None and not all_filled_records.empty:
-                # ✅ 미체결 주문 목록에 없고 체결 내역 존재 = 완전 체결
-                
-                # 🔧 개선: 체결 수량 계산 로직 강화
-                total_filled_qty = 0
+                # ✅ 미체결 주문 목록에 없고 체결 내역 존재
+                # 누적체결량(tot_ccld_qty)이 있다면 '최대값'을, 없다면 개별체결량의 합계를 사용
                 order_qty = 0
                 last_record = None
+                max_tot_cumulative = 0
+                sum_incremental = 0
                 
                 self.logger.debug(f"📊 체결 내역 분석 시작: {order_id}")
                 
                 for idx, record in all_filled_records.iterrows():
-                    # 🔧 개선: 다양한 체결량 필드명 확인 및 안전한 변환
-                    # KIS API는 응답 시점에 따라 다른 필드명 사용 가능 (API 문서 기준)
-                    possible_qty_fields = ['tot_ccld_qty', 'ord_qty', 'rmn_qty', 'cnc_cfrm_qty']
-                    ccld_qty_str = '0'
+                    # 주문수량 후보 추출
                     ord_qty_str = '0'
-                    
-                    # 체결량 필드 찾기 (API 문서 기준 우선순위 순으로)
-                    for field in ['tot_ccld_qty', 'ccld_qty', 'cnc_cfrm_qty']:
-                        if field in record and record[field] not in ['', '-', 'None', 'nan', None]:
-                            ccld_qty_str = str(record[field]).strip()
-                            break
-                    
-                    # 주문량 필드 찾기
                     for field in ['ord_qty', 'ord_qty_org']:
                         if field in record and record[field] not in ['', '-', 'None', 'nan', None]:
                             ord_qty_str = str(record[field]).strip()
                             break
-                    
-                    # 빈 문자열이나 '-' 처리
-                    if ccld_qty_str in ['', '-', 'None', 'nan']:
-                        ccld_qty_str = '0'
                     if ord_qty_str in ['', '-', 'None', 'nan']:
                         ord_qty_str = '0'
-                    
                     try:
-                        # 쉼표 제거 후 변환
-                        ccld_qty_str = ccld_qty_str.replace(',', '')
-                        ord_qty_str = ord_qty_str.replace(',', '')
-                        ccld_qty = int(float(ccld_qty_str))  # float로 먼저 변환 후 int
-                        ord_qty = int(float(ord_qty_str))
+                        ord_qty_val = int(float(ord_qty_str.replace(',', '')))
                     except (ValueError, TypeError):
-                        self.logger.warning(f"⚠️ 체결량 변환 실패: ccld_qty={ccld_qty_str}, ord_qty={ord_qty_str}")
-                        self.logger.debug(f"📋 전체 레코드 데이터: {record.to_dict()}")
-                        ccld_qty = 0
-                        ord_qty = 0
+                        ord_qty_val = 0
+                    if ord_qty_val > 0:
+                        order_qty = ord_qty_val
                     
-                    total_filled_qty += ccld_qty
-                    if ord_qty > 0:  # 주문수량이 유효한 경우에만 업데이트
-                        order_qty = ord_qty
+                    # 누적 체결량 후보
+                    tot_str = None
+                    for field in ['tot_ccld_qty', 'tot_ccld_qty_org']:
+                        if field in record and record[field] not in ['', '-', 'None', 'nan', None]:
+                            tot_str = str(record[field]).strip()
+                            break
+                    if tot_str not in [None, '', '-', 'None', 'nan']:
+                        try:
+                            tot_val = int(float(tot_str.replace(',', '')))
+                            if tot_val > max_tot_cumulative:
+                                max_tot_cumulative = tot_val
+                        except (ValueError, TypeError):
+                            pass
+                    
+                    # 개별 체결량 후보
+                    inc_str = None
+                    for field in ['ccld_qty', 'cnc_cfrm_qty']:
+                        if field in record and record[field] not in ['', '-', 'None', 'nan', None]:
+                            inc_str = str(record[field]).strip()
+                            break
+                    if inc_str not in [None, '', '-', 'None', 'nan']:
+                        try:
+                            inc_val = int(float(inc_str.replace(',', '')))
+                            sum_incremental += inc_val
+                        except (ValueError, TypeError):
+                            pass
+                    
                     last_record = record
-                    
-                    self.logger.debug(f"  📊 체결 레코드 {idx+1}: 체결량={ccld_qty}, 주문량={ord_qty}")
-                    
-                    # 🔧 추가: 레코드별 상세 정보 로깅 (디버깅용)
-                    if ccld_qty > 0:
-                        self.logger.debug(f"    ✅ 유효한 체결: 시간={record.get('ord_tmd', 'N/A')}, 가격={record.get('avg_prvs', record.get('ccld_unpr', 'N/A'))}")
-                    else:
-                        self.logger.debug(f"    ⚠️ 체결량 0: 가능한 필드값들 = {[record.get(f, 'N/A') for f in possible_qty_fields]}")
+                    self.logger.debug(f"  📊 레코드 {idx+1}: tot={tot_str}, inc={inc_str}, ord_qty={ord_qty_val}")
                 
-                # 🚨 핵심 수정: 체결량이 0인 경우 실제 미체결 상태로 처리
+                # 누적 체결량 우선
+                total_filled_qty = max_tot_cumulative if max_tot_cumulative > 0 else sum_incremental
+                
                 if total_filled_qty == 0 and order_qty > 0:
-                    # 체결 내역은 있지만 체결량이 0인 경우 = 실제로는 아직 미체결
+                    # 체결 내역은 있으나 체결량 0 → 실제 미체결로 간주
                     self.logger.info(f"📊 체결 내역에서 체결량 0 확인: {order_id} - 실제 미체결 상태")
-                    self.logger.debug(f"📋 체결 내역 상세:")
+                    self.logger.debug("📋 체결 내역 상세:")
                     for idx, record in all_filled_records.iterrows():
                         self.logger.debug(f"  레코드 {idx+1}: {record.to_dict()}")
-                    
-                    # 🆕 체결량이 0이면 미체결 주문으로 재분류하여 반환
-                    # (완전 체결 처리하지 않고 미체결로 처리)
-                    self.logger.info(f"🔄 체결량 0이므로 미체결 상태로 분류: {order_id}")
-                    
-                    # 미체결 상태로 반환 (remaining_qty = order_qty)
                     return {
                         'odno': order_id,
-                        'tot_ccld_qty': '0',           # 체결량 0
-                        'rmn_qty': str(order_qty),     # 잔여량 = 전체 주문량
-                        'ord_qty': str(order_qty),     # 주문량
-                        'cncl_yn': 'N',                # 취소 아님
+                        'tot_ccld_qty': '0',
+                        'rmn_qty': str(order_qty),
+                        'ord_qty': str(order_qty),
+                        'cncl_yn': 'N',
                         'ord_dvsn': last_record.get('ord_dvsn', '00') if last_record is not None else '00',
                         'sll_buy_dvsn_cd': last_record.get('sll_buy_dvsn_cd', '01') if last_record is not None else '01',
                         'pdno': last_record.get('pdno', '') if last_record is not None else '',
                         'ord_unpr': last_record.get('ord_unpr', '0') if last_record is not None else '0',
-                        'actual_unfilled': True        # 실제 미체결 플래그
+                        'actual_unfilled': True
                     }
                 
                 if last_record is not None:
                     order_data = last_record.to_dict()
-                    order_data['tot_ccld_qty'] = str(total_filled_qty)   # 총체결수량 (실제 계산된 값)
-                    order_data['rmn_qty'] = str(max(0, order_qty - total_filled_qty))  # 잔여수량
-                    order_data['ord_qty'] = str(order_qty)              # 주문수량
-                    order_data['cncl_yn'] = 'N'                         # 취소여부
+                    order_data['tot_ccld_qty'] = str(total_filled_qty)
+                    order_data['rmn_qty'] = str(max(0, order_qty - total_filled_qty))
+                    order_data['ord_qty'] = str(order_qty)
+                    order_data['cncl_yn'] = 'N'
                     
                     if total_filled_qty == order_qty and total_filled_qty > 0:
                         self.logger.info(f"✅ 완전 체결 확인: {order_id} - 체결: {total_filled_qty}/{order_qty}")
@@ -836,32 +828,22 @@ class KISAPIManager:
                         self.logger.warning(f"⚠️ 체결 내역 불일치: {order_id} - 체결: {total_filled_qty}/{order_qty}")
                 else:
                     self.logger.error(f"❌ 체결 내역 처리 실패: {order_id}")
-                    
-                    # 🆕 체결 내역 처리 실패 시 대체 방법: 계좌 잔고 조회로 확인
                     try:
-                        self.logger.info(f"🔍 대체 확인 방법 시도: 계좌 잔고 조회로 체결 확인")
+                        self.logger.info("🔍 대체 확인 방법 시도: 계좌 잔고 조회로 체결 확인")
                         from api.kis_market_api import get_stock_balance
-                        
                         balance_result = get_stock_balance()
                         if balance_result:
                             balance_df, account_summary = balance_result
-                            
-                            # 주문 시점과 현재 잔고를 비교하여 체결 여부 추정
-                            # (이 방법은 완벽하지 않지만 마지막 수단으로 사용)
-                            self.logger.debug(f"📊 대체 확인: 계좌 잔고 기반 체결 추정 시도")
-                            
-                            # 기본 구조 반환 (미체결로 간주)
                             return {
                                 'odno': order_id,
                                 'tot_ccld_qty': '0',
-                                'rmn_qty': '0', 
+                                'rmn_qty': '0',
                                 'ord_qty': '0',
                                 'cncl_yn': 'N',
-                                'alternative_check': True  # 대체 확인 플래그
+                                'alternative_check': True
                             }
                     except Exception as alt_error:
                         self.logger.error(f"❌ 대체 확인 방법도 실패: {alt_error}")
-                    
                     return None
             else:
                 # ❌ 미체결 주문도 없고 체결 내역도 없음 = 주문 취소 또는 오류
