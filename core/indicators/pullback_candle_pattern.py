@@ -194,6 +194,9 @@ class PullbackCandlePattern:
             signals['stop_entry_low_break'] = False
             signals['take_profit_3pct'] = False
             signals['bisector_line'] = bisector_line
+            # 신규 신호 컬럼: 변곡 실패 가격 재회복 매수, 상승 이후 고점 경고/매도
+            signals['buy_reclaim_failed_inflection'] = False
+            signals['sell_peak_warning'] = False
 
             # 파라미터 (완화 적용)
             retrace_lookback = 1      # 저거래 조정 연속 봉 (기존 3 → 2)
@@ -208,9 +211,13 @@ class PullbackCandlePattern:
             in_position = False
             entry_price = None
             entry_low = None
+            # 변곡 관련 상태값
+            last_inflection_mid = None  # 최근 변곡 양봉(매수 신호 캔들)의 중간가
+            failed_level = None         # 손절 확정 후 재탈환해야 하는 가격(중간가)
 
             # 캔들 크기(고-저) 사전 계산
             candle_sizes = (df['high'] - df['low']).astype(float)
+            body_sizes = (df['close'] - df['open']).abs().astype(float)
             closes = df['close'].astype(float)
             volumes = df['volume'].astype(float)
 
@@ -324,6 +331,25 @@ class PullbackCandlePattern:
                             half_retrace_ok = True
 
                 if not in_position:
+                    # 0) 변곡 실패 레벨(중간가) 재탈환 매수
+                    if failed_level is not None:
+                        is_bullish_now = current['close'] > current['open']
+                        if is_bullish_now and (current['close'] >= failed_level) and (above_bisector or crosses_bisector_up):
+                            signals.iloc[i, signals.columns.get_loc('buy_reclaim_failed_inflection')] = True
+                            # 시뮬레이션 상태 업데이트 (차트 표기 일관성용)
+                            in_position = True
+                            entry_price = float(current['close'])
+                            entry_low = float(current['low'])
+                            # 새 변곡 중간가 저장
+                            try:
+                                ch = float(current['high']); cl = float(current['low'])
+                                last_inflection_mid = cl + (ch - cl) * 0.5
+                            except Exception:
+                                last_inflection_mid = None
+                            # 재탈환 신호 소진
+                            failed_level = None
+                            continue
+
                     # 매수 신호 1: 저거래 조정 후 회복 양봉(+이등분선 지지/회복)
                     # 또는 강한 양봉의 1/2 되돌림 + 회복 양봉(+이등분선 지지/회복)
                     # 완화: 1/2 되돌림 케이스에서는 거래량 회복(volume_recovers)을 필수에서 제외
@@ -341,6 +367,12 @@ class PullbackCandlePattern:
                         in_position = True
                         entry_price = float(current['close'])
                         entry_low = float(current['low'])
+                        # 변곡 캔들의 중간가 저장 (실패 레벨 기준값)
+                        try:
+                            ch = float(current['high']); cl = float(current['low'])
+                            last_inflection_mid = cl + (ch - cl) * 0.5
+                        except Exception:
+                            last_inflection_mid = None
                         continue
 
                     # 매수 신호 2: 이등분선 회복 양봉(종가가 이등분선을 넘어야 함) + 거래량 회복
@@ -353,12 +385,21 @@ class PullbackCandlePattern:
                         in_position = True
                         entry_price = float(current['close'])
                         entry_low = float(current['low'])
+                        # 변곡 캔들의 중간가 저장 (실패 레벨 기준값)
+                        try:
+                            ch = float(current['high']); cl = float(current['low'])
+                            last_inflection_mid = cl + (ch - cl) * 0.5
+                        except Exception:
+                            last_inflection_mid = None
                         continue
                 else:
                     # 손절/익절 신호
                     # 이등분선 이탈: 이등분선 기준 아래로 0.2% 이탈 시 매도
                     if bl is not None and current['close'] < bl * (1.0 - 0.002):
                         signals.iloc[i, signals.columns.get_loc('sell_bisector_break')] = True
+                        # 변곡 실패 레벨 기록(중간가)
+                        if last_inflection_mid is not None:
+                            failed_level = float(last_inflection_mid)
                         in_position = False
                         entry_price = None
                         entry_low = None
@@ -366,6 +407,8 @@ class PullbackCandlePattern:
 
                     if current['close'] < recent_low:
                         signals.iloc[i, signals.columns.get_loc('sell_support_break')] = True
+                        if last_inflection_mid is not None:
+                            failed_level = float(last_inflection_mid)
                         in_position = False
                         entry_price = None
                         entry_low = None
@@ -373,6 +416,8 @@ class PullbackCandlePattern:
 
                     if entry_low is not None and current['close'] <= entry_low * (1.0 - stop_leeway):
                         signals.iloc[i, signals.columns.get_loc('stop_entry_low_break')] = True
+                        if last_inflection_mid is not None:
+                            failed_level = float(last_inflection_mid)
                         in_position = False
                         entry_price = None
                         entry_low = None
@@ -384,6 +429,27 @@ class PullbackCandlePattern:
                         entry_price = None
                         entry_low = None
                         continue
+
+                # 상승 이후 고점 경고/매도 신호 계산(포지션 상태와 무관하게 계산, 표기/후속 활용용)
+                try:
+                    # 기준 거래량의 1/2 이상
+                    vol_ok = False
+                    if not pd.isna(baseline_now) and baseline_now > 0:
+                        vol_ok = float(current['volume']) >= float(baseline_now) * 0.5
+                    # 장대 음봉(바디 >= 최근 10봉 평균의 1.5배) 또는 긴 윗꼬리 음봉(윗꼬리 비율 >= 60%)
+                    bearish = current['close'] < current['open']
+                    # 최근 평균 바디
+                    recent_body_avg = float(body_sizes.iloc[max(0, i-10):i].mean()) if i > 0 else 0.0
+                    body_now = float(abs(current['close'] - current['open']))
+                    long_bear_body = bearish and recent_body_avg > 0 and (body_now >= recent_body_avg * 1.5)
+                    total_range = float(current['high'] - current['low'])
+                    upper_shadow = float(current['high'] - max(current['open'], current['close']))
+                    upper_ratio = (upper_shadow / total_range) if total_range > 0 else 0.0
+                    long_upper_bear = bearish and (upper_ratio >= 0.60)
+                    if vol_ok and (long_bear_body or long_upper_bear):
+                        signals.iloc[i, signals.columns.get_loc('sell_peak_warning')] = True
+                except Exception:
+                    pass
 
             return signals
 
