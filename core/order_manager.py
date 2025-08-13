@@ -60,16 +60,16 @@ class OrderManager:
             return now_kst()
     
     def _has_3_candles_passed(self, order_candle_time: datetime) -> bool:
-        """주문 시점부터 3분봉 3개가 지났는지 확인"""
+        """주문 시점부터 3분봉 5개가 지났는지 확인"""
         try:
             if order_candle_time is None:
                 return False
 
-            # 3분봉 3개 = 9분 후 (실제 시각 기준 비교: 장마감 15:30 클램프에 걸려 무한 대기되는 문제 방지)
+            # 3분봉 5개 = 15분 후 (실제 시각 기준 비교: 장마감 15:30 클램프에 걸려 무한 대기되는 문제 방지)
             now_time = now_kst()
-            three_candles_later = order_candle_time + timedelta(minutes=9)
+            five_candles_later = order_candle_time + timedelta(minutes=15)
 
-            return now_time >= three_candles_later
+            return now_time >= five_candles_later
             
         except Exception as e:
             self.logger.error(f"❌ 3분봉 경과 확인 오류: {e}")
@@ -259,7 +259,7 @@ class OrderManager:
                 if timeout_time and current_time > timeout_time:
                     await self._handle_timeout(order_id)
                 
-                # 2-1. 매수 주문의 3분봉 체크 (3봉 후 취소)
+                # 2-1. 매수 주문의 3분봉 체크 (5봉 후 취소)
                 if order.order_type == OrderType.BUY and order.order_3min_candle_time:
                     if self._has_3_candles_passed(order.order_3min_candle_time):
                         await self._handle_3candle_timeout(order_id)
@@ -334,7 +334,7 @@ class OrderManager:
             self.logger.error(f"타임아웃 처리 실패 {order_id}: {e}")
     
     async def _handle_3candle_timeout(self, order_id: str):
-        """3분봉 기준 타임아웃 처리 (매수 주문 후 3봉 지나면 취소)"""
+        """3분봉 기준 타임아웃 처리 (매수 주문 후 5봉 지나면 취소)"""
         try:
             if order_id not in self.pending_orders:
                 return
@@ -342,7 +342,7 @@ class OrderManager:
             order = self.pending_orders[order_id]
             current_candle = self._get_current_3min_candle_time()
             
-            self.logger.warning(f"📊 매수 주문 3봉 타임아웃: {order_id} ({order.stock_code}) "
+            self.logger.warning(f"📊 매수 주문 5봉 타임아웃: {order_id} ({order.stock_code}) "
                               f"주문봉: {order.order_3min_candle_time.strftime('%H:%M') if order.order_3min_candle_time else 'N/A'} "
                               f"현재봉: {current_candle.strftime('%H:%M')}")
             
@@ -356,10 +356,10 @@ class OrderManager:
                         'stock_code': order.stock_code,
                         'stock_name': f'Stock_{order.stock_code}',
                         'order_type': order.order_type.value
-                    }, "3분봉 3개 경과")
+                    }, "3분봉 5개 경과")
             else:
                 # 취소 실패 → 사용자 제안: 체결로 간주. 단, 한 번 더 상태 조회로 검증
-                self.logger.warning(f"⚠️ 3봉 타임아웃 취소 실패: {order_id} → 상태 재확인 후 체결로 간주")
+                self.logger.warning(f"⚠️ 5봉 타임아웃 취소 실패: {order_id} → 상태 재확인 후 체결로 간주")
                 loop = asyncio.get_event_loop()
                 status_data = await loop.run_in_executor(
                     self.executor,
@@ -378,7 +378,7 @@ class OrderManager:
                     # 체결로 처리
                     order.status = OrderStatus.FILLED
                     self._move_to_completed(order_id)
-                    self.logger.info(f"✅ 3봉 타임아웃: 취소 실패로 체결 간주 처리 {order_id} ({order.stock_code})")
+                    self.logger.info(f"✅ 5봉 타임아웃: 취소 실패로 체결 간주 처리 {order_id} ({order.stock_code})")
                     if self.telegram:
                         await self.telegram.notify_order_filled({
                             'stock_code': order.stock_code,

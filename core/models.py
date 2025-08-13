@@ -94,7 +94,7 @@ class Order:
     filled_quantity: int = 0
     remaining_quantity: int = 0
     adjustment_count: int = 0  # 정정 횟수
-    order_3min_candle_time: Optional[datetime] = None  # 주문 시점의 3분봉 시간 (3봉 후 취소용)
+    order_3min_candle_time: Optional[datetime] = None  # 주문 시점의 3분봉 시간 (5봉 후 취소용)
     
     def __post_init__(self):
         """초기화 후 처리"""

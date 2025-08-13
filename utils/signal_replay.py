@@ -35,12 +35,22 @@ from core.indicators.pullback_candle_pattern import PullbackCandlePattern
 from core.indicators.bisector_line import BisectorLine
 # 실전 흐름 기준: 현재 리플레이는 눌림목(3분)만 사용하여 실전 규칙을 재현합니다.
 from api.kis_api_manager import KISAPIManager
+from api.kis_market_api import get_inquire_price
+from post_market_chart_generator import PostMarketChartGenerator
 
 
 try:
     # PowerShell cp949 콘솔에서 이모지/UTF-8 로그 출력 오류 방지
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
+# Windows에서 Proactor 루프 종료 경고 방지: 단일 이벤트 루프 + Selector 정책 사용
+try:
+    if os.name == "nt":
+        import asyncio
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 except Exception:
     pass
 
@@ -587,6 +597,11 @@ async def run(date_str: str, codes: List[str], times_map: Dict[str, List[str]]) 
     return all_rows, all_signals, all_trades
 
 
+async def _main_async(date_str: str, codes_union: List[str], times_map: Dict[str, List[str]], codes: List[str]):
+    rows, all_signals, all_trades = await run(date_str, codes_union, times_map)
+    return rows, all_signals, all_trades
+
+
 def main():
     parser = argparse.ArgumentParser(description="눌림목(3분) 매수신호 재현 리포트")
     parser.add_argument("--date", required=False, default=None, help="대상 날짜 (YYYYMMDD)")
@@ -636,7 +651,7 @@ def main():
         print("\n❌ KIS API 인증/초기화 실패. key.ini/환경설정 확인 후 다시 시도하세요.")
         sys.exit(1)
 
-    rows, all_signals, all_trades = asyncio.run(run(date_str, codes_union, times_map))
+    rows, all_signals, all_trades = asyncio.run(_main_async(date_str, codes_union, times_map, codes))
 
     if args.export == "csv":
         try:
@@ -702,6 +717,64 @@ def main():
             print(f"\n📄 TXT 저장 완료: {args.txt_path}")
         except Exception as e:
             print(f"\n❌ TXT 저장 실패: {e}")
+
+    # DEFAULT_CODES에 포함된 종목들 차트 직접 생성 (PostMarketChartGenerator)
+    try:
+        async def _generate_charts_for_default_codes_and_main():
+            # 1) DEFAULT_CODES 차트 생성
+            try:
+                generator = PostMarketChartGenerator()
+                if not generator.initialize():
+                    print("\n❌ 차트 생성기 초기화 실패")
+                else:
+                    target_date = date_str
+                    tasks = []
+                    for code in codes:
+                        stock_name = code
+                        try:
+                            df_quote = get_inquire_price(itm_no=code)
+                            if df_quote is not None and not df_quote.empty:
+                                name_val = df_quote.iloc[0].get('prdt_name', '')
+                                stock_name = str(name_val).strip() or code
+                        except Exception:
+                            stock_name = code
+                        tasks.append(
+                            generator.create_dual_strategy_charts(
+                                stock_code=code,
+                                stock_name=stock_name,
+                                target_date=target_date,
+                                selection_reason="signal_replay DEFAULT_CODES"
+                            )
+                        )
+                    results = await asyncio.gather(*tasks, return_exceptions=True)
+                    success = 0
+                    for r in results:
+                        if isinstance(r, dict) and any(v for v in r.values() if isinstance(v, str)):
+                            success += 1
+                    print(f"\n🎨 DEFAULT_CODES 차트 생성 완료: {success}/{len(results)}")
+            except Exception as e:
+                print(f"\n❌ DEFAULT_CODES 차트 생성 실패: {e}")
+
+            # 2) main.py 장마감 차트 루틴 실행
+            try:
+                from main import DayTradingBot
+                bot = DayTradingBot()
+                if not await bot.initialize():
+                    print("\n❌ 장마감 차트 실행 실패: 봇 초기화 실패")
+                    return
+                try:
+                    await bot._generate_post_market_charts()
+                    print("\n🎨 main.py 장마감 차트 생성 루틴 실행 완료")
+                finally:
+                    await bot.shutdown()
+            except Exception as e:
+                print(f"\n❌ 장마감 차트 생성 루틴 실행 실패: {e}")
+
+        asyncio.run(_generate_charts_for_default_codes_and_main())
+    except Exception as e:
+        print(f"\n❌ 후속 차트 실행 실패: {e}")
+
+    # 위에서 단일 루프 내에 포함되어 실행됨
 
 
 if __name__ == "__main__":
