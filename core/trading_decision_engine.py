@@ -631,8 +631,8 @@ class TradingDecisionEngine:
             buy_price = trading_stock.position.avg_price
             profit_rate = (current_price - buy_price) / buy_price
             
-            if profit_rate >= 0.015:
-                return True, "매수가 대비 +1.5% 수익실현"
+            if profit_rate >= 0.020:
+                return True, "매수가 대비 +2.0% 수익실현"
             
             return False, ""
             
@@ -859,6 +859,10 @@ class TradingDecisionEngine:
             
             # NaN 제거 후 인덱스 리셋 (DataProcessor와 동일)
             resampled = resampled.dropna().reset_index()
+
+            # 확정 봉만 사용: 마지막 행은 진행 중일 수 있으므로 제외
+            if resampled is not None and len(resampled) >= 1:
+                resampled = resampled.iloc[:-1] if len(resampled) > 0 else resampled
             
             self.logger.debug(f"📊 3분봉 변환: {len(data)}개 → {len(resampled)}개 (DataProcessor 방식)")
             
@@ -1104,8 +1108,8 @@ class TradingDecisionEngine:
                 if profit_rate <= -0.02:
                     return True, f"⚡긴급손절 {profit_rate*100:.1f}%"
                 
-                # 기본 익절: +1.5% (기존 +3%에서 조정)  
-                if profit_rate >= 0.015:
+                # 기본 익절: +2.0% (기존 +1.5%에서 조정)  
+                if profit_rate >= 0.020:
                     return True, f"⚡기본익절 {profit_rate*100:.1f}%"
                 
                 # 진입저가 실시간 체크

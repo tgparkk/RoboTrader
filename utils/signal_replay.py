@@ -24,12 +24,16 @@ import argparse
 import asyncio
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional
+import io
+import logging
+from datetime import datetime
 import sys
 import os
 
 import pandas as pd
 
 from utils.logger import setup_logger
+from utils.korean_time import KST
 from visualization.data_processor import DataProcessor
 from core.indicators.pullback_candle_pattern import PullbackCandlePattern
 from core.indicators.bisector_line import BisectorLine
@@ -256,7 +260,15 @@ async def fetch_and_prepare_3min(stock_code: str, target_date: str) -> Optional[
     return df_3min
 
 
-def evaluate_signals_at_times(df_3min: pd.DataFrame, target_date: str, times: List[str]) -> List[Dict[str, object]]:
+def evaluate_signals_at_times(
+    df_3min: pd.DataFrame,
+    target_date: str,
+    times: List[str],
+    *,
+    logger: Optional[logging.Logger] = None,
+    debug_logs: bool = True,
+    log_level: int = logging.INFO,
+) -> List[Dict[str, object]]:
     """지정 시각들에서 눌림목 매수신호 ON/OFF와 미충족 사유를 평가."""
     results: List[Dict[str, object]] = []
     if df_3min is None or df_3min.empty:
@@ -272,12 +284,15 @@ def evaluate_signals_at_times(df_3min: pd.DataFrame, target_date: str, times: Li
     # 신호 전체 계산(3분봉) - main.py와 동일한 옵션 활성화
     signals = PullbackCandlePattern.generate_trading_signals(
         df_3min,
-        enable_candle_shrink_expand=True,
-        enable_divergence_precondition=True,
-        enable_overhead_supply_filter=True,
+        enable_candle_shrink_expand=False,
+        enable_divergence_precondition=False,
+        enable_overhead_supply_filter=False,
         candle_expand_multiplier=1.10,
         overhead_lookback=10,
         overhead_threshold_hits=2,
+        debug=debug_logs,
+        logger=logger,
+        log_level=log_level,
     )
     for t in times:
         row_idx = locate_row_for_time(df_3min, target_date, t)
@@ -318,7 +333,7 @@ def evaluate_signals_at_times(df_3min: pd.DataFrame, target_date: str, times: Li
     return results
 
 
-def list_all_buy_signals(df_3min: pd.DataFrame) -> List[Dict[str, object]]:
+def list_all_buy_signals(df_3min: pd.DataFrame, *, logger: Optional[logging.Logger] = None) -> List[Dict[str, object]]:
     """해당 3분봉 전체에서 발생한 매수 신호 시각/유형 리스트.
 
     실전 기준: 눌림목(3분) 신호만 사용 (consolidation breakout 제외)
@@ -329,12 +344,13 @@ def list_all_buy_signals(df_3min: pd.DataFrame) -> List[Dict[str, object]]:
     # main.py와 동일한 옵션으로 신호 계산
     sig = PullbackCandlePattern.generate_trading_signals(
         df_3min,
-        enable_candle_shrink_expand=True,
-        enable_divergence_precondition=True,
-        enable_overhead_supply_filter=True,
+        enable_candle_shrink_expand=False,
+        enable_divergence_precondition=False,
+        enable_overhead_supply_filter=False,
         candle_expand_multiplier=1.10,
         overhead_lookback=10,
         overhead_threshold_hits=2,
+        debug=False,
     )
     if sig is None or sig.empty:
         sig = pd.DataFrame(index=df_3min.index)
@@ -356,7 +372,7 @@ def list_all_buy_signals(df_3min: pd.DataFrame) -> List[Dict[str, object]]:
     return out
 
 
-def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = None) -> List[Dict[str, object]]:
+def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = None, *, logger: Optional[logging.Logger] = None) -> List[Dict[str, object]]:
     """실전(_execute_trading_decision) 기준에 맞춘 눌림목(3분) 체결 시뮬레이션.
 
     규칙(실전 근사):
@@ -372,12 +388,13 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
     # 3분봉 매수 신호 계산 (main.py와 동일한 옵션 활성화)
     sig = PullbackCandlePattern.generate_trading_signals(
         df_3min,
-        enable_candle_shrink_expand=True,
-        enable_divergence_precondition=True,
-        enable_overhead_supply_filter=True,
+        enable_candle_shrink_expand=False,
+        enable_divergence_precondition=False,
+        enable_overhead_supply_filter=False,
         candle_expand_multiplier=1.10,
         overhead_lookback=10,
         overhead_threshold_hits=2,
+        debug=False,
     )
     if sig is None or sig.empty:
         sig = pd.DataFrame(index=df_3min.index)
@@ -387,6 +404,7 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
     buy_rc = sig.get('buy_bisector_recovery', pd.Series([False]*len(df_3min)))
 
     in_pos = False
+    pending_entry = None  # {'index_3min': j, 'type': 'pullback'|'bisector_recovery', 'entry_low': float}
     entry_price = None
     entry_time = None
     entry_type = None
@@ -417,32 +435,48 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                 # 현재 1분봉 시간에 해당하는 3분봉 찾기
                 for j in range(len(df_3min)):
                     ts_3min = df_3min['datetime'].iloc[j]
-                    # 3분봉 시간 범위 계산 (예: 10:30~10:33)
-                    start_time = pd.Timestamp(ts_3min) - pd.Timedelta(minutes=2)
-                    end_time = pd.Timestamp(ts_3min)
+                    # 3분봉 시간 범위 계산 (예: 10:30~10:32)
+                    # 라벨(ts_3min)은 구간 시작 시각이므로 [라벨, 라벨+2분]을 포함
+                    start_time = pd.Timestamp(ts_3min)
+                    end_time = pd.Timestamp(ts_3min) + pd.Timedelta(minutes=2)
                     
                     if start_time <= pd.Timestamp(current_time) <= end_time:
-                        if bool(buy_pb.iloc[j]) or bool(buy_rc.iloc[j]):
-                            in_pos = True
-                            # 실전 근사: 절반가 체결 시도 → 실패 시 종가
+                        # 신호 봉에서는 즉시 진입하지 않고, 봉 확정 후(라벨+3분 이후) 첫 시점에 진입
+                        if pending_entry is None and (bool(buy_pb.iloc[j]) or bool(buy_rc.iloc[j])):
+                            typ = 'pullback' if bool(buy_pb.iloc[j]) else 'bisector_recovery'
                             try:
-                                hi = float(df_3min['high'].iloc[j])
-                                lo = float(df_3min['low'].iloc[j])
-                                half = lo + (hi - lo) * 0.5
-                                entry_price = half if (half > 0 and lo <= half <= hi) else current_price
+                                pending_entry = {
+                                    'index_3min': j,
+                                    'type': typ,
+                                    'entry_low': float(df_3min['low'].iloc[j])
+                                }
                             except Exception:
-                                entry_price = current_price
-                            entry_time = hhmm
-                            entry_datetime = current_time
-                            try:
-                                entry_low = float(df_3min['low'].iloc[j])
-                            except Exception:
-                                entry_low = None
-                            if bool(buy_pb.iloc[j]):
-                                entry_type = 'pullback'
-                            elif bool(buy_rc.iloc[j]):
-                                entry_type = 'bisector_recovery'
-                            break
+                                pending_entry = {
+                                    'index_3min': j,
+                                    'type': typ,
+                                    'entry_low': None
+                                }
+                        break
+
+                # 대기 엔트리가 있고, 해당 3분봉이 확정된 이후(라벨+3분 경과)면 진입
+                if (not in_pos) and pending_entry is not None:
+                    j = pending_entry['index_3min']
+                    ts_close = pd.Timestamp(df_3min['datetime'].iloc[j]) + pd.Timedelta(minutes=3)
+                    if pd.Timestamp(current_time) >= ts_close:
+                        in_pos = True
+                        # 절반가 우선, 실패 시 현재가
+                        try:
+                            hi = float(df_3min['high'].iloc[j])
+                            lo = float(df_3min['low'].iloc[j])
+                            half = lo + (hi - lo) * 0.5
+                            entry_price = half if (half > 0 and lo <= half <= hi) else current_price
+                        except Exception:
+                            entry_price = current_price
+                        entry_time = hhmm
+                        entry_datetime = current_time
+                        entry_low = pending_entry.get('entry_low', None)
+                        entry_type = pending_entry.get('type', None)
+                        pending_entry = None
             else:
                 # 매도 체크 (1분마다)
                 exit_reason = None
@@ -493,25 +527,28 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
             if not in_pos:
                 if not can_enter:
                     continue
-                if bool(buy_pb.iloc[i]) or bool(buy_rc.iloc[i]):
+                # 직전 신호 봉 대기 중이면, 신호 봉의 다음 봉(i)에서 진입
+                if pending_entry is not None:
                     in_pos = True
-                    # 실전 근사: 절반가 체결 시도 → 실패 시 종가
+                    j = pending_entry['index_3min']
                     try:
-                        hi = float(df_3min['high'].iloc[i])
-                        lo = float(df_3min['low'].iloc[i])
+                        hi = float(df_3min['high'].iloc[j])
+                        lo = float(df_3min['low'].iloc[j])
                         half = lo + (hi - lo) * 0.5
                         entry_price = half if (half > 0 and lo <= half <= hi) else c
                     except Exception:
                         entry_price = c
                     entry_time = hhmm
-                    try:
-                        entry_low = float(df_3min['low'].iloc[i])
-                    except Exception:
-                        entry_low = None
-                    if bool(buy_pb.iloc[i]):
-                        entry_type = 'pullback'
-                    elif bool(buy_rc.iloc[i]):
-                        entry_type = 'bisector_recovery'
+                    entry_low = pending_entry.get('entry_low', None)
+                    entry_type = pending_entry.get('type', None)
+                    pending_entry = None
+                # 현재 봉이 신호 봉이면 '대기'만 등록(진입은 다음 봉에서)
+                elif bool(buy_pb.iloc[i]) or bool(buy_rc.iloc[i]):
+                    pending_entry = {
+                        'index_3min': i,
+                        'type': 'pullback' if bool(buy_pb.iloc[i]) else 'bisector_recovery',
+                        'entry_low': float(df_3min['low'].iloc[i]) if not pd.isna(df_3min['low'].iloc[i]) else None,
+                    }
             else:
                 exit_reason = None
                 
@@ -617,23 +654,58 @@ def to_csv_rows(stock_code: str, target_date: str, evaluations: List[Dict[str, o
     return rows
 
 
-async def run(date_str: str, codes: List[str], times_map: Dict[str, List[str]]) -> Tuple[List[Dict[str, object]], Dict[str, List[Dict[str, object]]], Dict[str, List[Dict[str, object]]]]:
+async def run(
+    date_str: str,
+    codes: List[str],
+    times_map: Dict[str, List[str]],
+    *,
+    debug_logs: bool = True,
+    log_level: int = logging.INFO,
+) -> Tuple[List[Dict[str, object]], Dict[str, List[Dict[str, object]]], Dict[str, List[Dict[str, object]]], str]:
     """메인 실행 코루틴."""
     all_rows: List[Dict[str, object]] = []
     all_signals: Dict[str, List[Dict[str, object]]] = {}
     all_trades: Dict[str, List[Dict[str, object]]] = {}
+    # 캡처 로거(메모리 버퍼, KST 포맷)
+    log_buffer = io.StringIO()
+    capture_logger: Optional[logging.Logger] = None
+    if debug_logs:
+        capture_logger = logging.getLogger('PullbackCandlePattern')
+        capture_logger.setLevel(log_level)
+        capture_logger.propagate = False
+        # 기존 핸들러 제거 후 메모리 핸들러만 부착
+        if capture_logger.handlers:
+            capture_logger.handlers.clear()
+        handler = logging.StreamHandler(log_buffer)
+        formatter = logging.Formatter('%(asctime)s | %(name)s | %(levelname)s | %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+        # 한국시간 변환
+        try:
+            def _kst_conv(secs: float):
+                return datetime.fromtimestamp(secs, KST).timetuple()
+            formatter.converter = _kst_conv  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        handler.setFormatter(formatter)
+        capture_logger.addHandler(handler)
     for code in codes:
         try:
             # 1분봉과 3분봉 데이터를 모두 가져오기
             df_1min, df_3min = await fetch_and_prepare_data(code, date_str)
-            evals = evaluate_signals_at_times(df_3min, date_str, times_map.get(code, []))
+            evals = evaluate_signals_at_times(
+                df_3min,
+                date_str,
+                times_map.get(code, []),
+                logger=capture_logger,
+                debug_logs=debug_logs,
+                log_level=log_level,
+            )
             print_report(code, date_str, evals)
             all_rows.extend(to_csv_rows(code, date_str, evals))
             # 전체 매수신호 추출
-            signals_full = list_all_buy_signals(df_3min) if df_3min is not None else []
+            signals_full = list_all_buy_signals(df_3min, logger=capture_logger) if df_3min is not None else []
             all_signals[code] = signals_full
             # 체결 시뮬레이션 (1분봉 데이터도 전달)
-            trades = simulate_trades(df_3min, df_1min) if df_3min is not None else []
+            trades = simulate_trades(df_3min, df_1min, logger=capture_logger) if df_3min is not None else []
             all_trades[code] = trades
         except Exception as e:
             logger.error(f"{code} 처리 오류: {e}")
@@ -649,7 +721,9 @@ async def run(date_str: str, codes: List[str], times_map: Dict[str, List[str]]) 
                 })
             all_signals[code] = []
             all_trades[code] = []
-    return all_rows, all_signals, all_trades
+    # 캡처된 로그 텍스트
+    logs_text = log_buffer.getvalue() if debug_logs else ""
+    return all_rows, all_signals, all_trades, logs_text
 
 
 def main():
@@ -667,13 +741,14 @@ def main():
         return str(code).strip().zfill(6)
 
     # 기본값 (요청하신 2025-08-08, 4개 종목/시각)
-    DEFAULT_DATE = "20250814"
-    DEFAULT_CODES = "086280,047770,026040,107600,214450,033340,230360,226950,336260,298380,208640,445680,073010,084370,009270,017510,095610,240810,332290,408900,077970,078520,460930"
+    #DEFAULT_DATE = "20250814"
+    #DEFAULT_CODES = "086280,047770,026040,107600,214450,033340,230360,226950,336260,298380,208640,445680,073010,084370,009270,017510,095610,240810,332290,408900,077970,078520,460930"
 
-    #DEFAULT_DATE = "20250813"
-    #DEFAULT_CODES = "036200,026040,240810,097230,034220,213420,090460,036010,104040,087010"
+    DEFAULT_DATE = "20250813"
+    #DEFAULT_CODES = "034220"
+    DEFAULT_CODES = "036200,026040,240810,097230,034220,213420,090460,036010,104040,087010"
 
-    DEFAULT_TIMES = "034230=14:39;"
+    DEFAULT_TIMES = ""
 
     date_str: str = (args.date or DEFAULT_DATE).strip()
     codes_input = args.codes or DEFAULT_CODES
@@ -705,7 +780,27 @@ def main():
         print("\n❌ KIS API 인증/초기화 실패. key.ini/환경설정 확인 후 다시 시도하세요.")
         sys.exit(1)
 
-    rows, all_signals, all_trades = asyncio.run(run(date_str, codes_union, times_map))
+    # 기본 로깅 설정을 한 곳에서 관리
+    DEFAULT_LOG_DEBUG = True
+    DEFAULT_LOG_LEVEL = 'INFO'
+    level_map = {
+        'DEBUG': logging.DEBUG,
+        'INFO': logging.INFO,
+        'WARNING': logging.WARNING,
+        'ERROR': logging.ERROR,
+        'CRITICAL': logging.CRITICAL,
+    }
+    log_level = level_map.get(DEFAULT_LOG_LEVEL.upper(), logging.INFO)
+
+    rows, all_signals, all_trades, logs_text = asyncio.run(
+        run(
+            date_str,
+            codes_union,
+            times_map,
+            debug_logs=DEFAULT_LOG_DEBUG,
+            log_level=log_level,
+        )
+    )
 
     if args.export == "csv":
         try:
@@ -723,8 +818,36 @@ def main():
                 code_to_rows[r.get("stock_code", "")] .append(r)
 
             lines: list[str] = []
+            # 전체 승패 요약 (profit_rate > 0 승, < 0 패, =0 제외)
+            total_wins = 0
+            total_losses = 0
+            for _code, _trades in all_trades.items():
+                for tr in _trades:
+                    try:
+                        pr = float(tr.get('profit_rate', 0.0))
+                    except Exception:
+                        pr = 0.0
+                    if pr > 0:
+                        total_wins += 1
+                    elif pr < 0:
+                        total_losses += 1
+            lines.append(f"=== 총 승패: {total_wins}승 {total_losses}패 ===")
+            lines.append("")
             for code in codes_union:
                 lines.append(f"=== {code} - {date_str} 눌림목(3분) 신호 재현 ===")
+                # 종목별 승패 요약
+                code_wins = 0
+                code_losses = 0
+                for tr in all_trades.get(code, []):
+                    try:
+                        pr = float(tr.get('profit_rate', 0.0))
+                    except Exception:
+                        pr = 0.0
+                    if pr > 0:
+                        code_wins += 1
+                    elif pr < 0:
+                        code_losses += 1
+                lines.append(f"  승패: {code_wins}승 {code_losses}패")
                 # 입력 시각 순서를 유지하여 출력
                 for t in times_map.get(code, []):
                     # 해당 시각의 레코드 찾기
@@ -765,6 +888,10 @@ def main():
                     lines.append("    없음")
                 lines.append("")
 
+            # 캡처 로그를 텍스트 끝에 덧붙임
+            if logs_text and logs_text.strip():
+                lines.append("=== Debug Logs (KST) ===")
+                lines.extend([ln for ln in logs_text.splitlines()])
             content = "\n".join(lines).rstrip() + "\n"
             with open(args.txt_path, "w", encoding="utf-8-sig") as f:
                 f.write(content)
