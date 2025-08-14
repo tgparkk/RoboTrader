@@ -288,9 +288,18 @@ class OrderManager:
             )
             
             if status_data:
-                filled_qty = int(status_data.get('tot_ccld_qty', 0))
-                remaining_qty = int(status_data.get('rmn_qty', 0))
+                # 방어적 파싱 (쉼표/공백 등 제거)
+                try:
+                    filled_qty = int(str(status_data.get('tot_ccld_qty', 0)).replace(',', '').strip() or 0)
+                except Exception:
+                    filled_qty = 0
+                try:
+                    remaining_qty = int(str(status_data.get('rmn_qty', 0)).replace(',', '').strip() or 0)
+                except Exception:
+                    remaining_qty = 0
                 cancelled = status_data.get('cncl_yn', 'N')
+                is_actual_unfilled = bool(status_data.get('actual_unfilled', False))
+                is_status_unknown = bool(status_data.get('status_unknown', False))
                 
                 # 상태 업데이트
                 order.filled_quantity = filled_qty
@@ -300,7 +309,14 @@ class OrderManager:
                     order.status = OrderStatus.CANCELLED
                     self._move_to_completed(order_id)
                     self.logger.info(f"주문 취소 확인: {order_id}")
-                elif filled_qty == order.quantity:
+                elif is_status_unknown:
+                    # 불명 상태는 판정 유보
+                    self.logger.warning(f"⚠️ 주문 상태 불명, 판정 유보: {order_id} - data={status_data}")
+                elif is_actual_unfilled:
+                    # 실제 미체결 플래그가 명시된 경우 대기 유지
+                    self.logger.debug(f"🔍 실제 미체결 상태: {order_id} - 잔여 {remaining_qty}")
+                elif remaining_qty == 0 and filled_qty >= order.quantity and filled_qty > 0:
+                    # 전량 체결 확정
                     order.status = OrderStatus.FILLED
                     self._move_to_completed(order_id)
                     self.logger.info(f"✅ 주문 완전 체결: {order_id} ({order.stock_code})")
@@ -314,9 +330,11 @@ class OrderManager:
                             'quantity': order.quantity,
                             'price': order.price
                         })
-                elif filled_qty > 0:
+                elif filled_qty > 0 and remaining_qty > 0:
                     order.status = OrderStatus.PARTIAL
-                    self.logger.info(f"🔄 주문 부분 체결: {order_id} - {filled_qty}/{order.quantity}")
+                    self.logger.info(f"🔄 주문 부분 체결: {order_id} - {filled_qty}/{order.quantity} (잔여 {remaining_qty})")
+                else:
+                    self.logger.debug(f"⏳ 주문 대기: {order_id} - 체결 {filled_qty}, 잔여 {remaining_qty}")
                 
         except Exception as e:
             self.logger.error(f"주문 상태 확인 실패 {order_id}: {e}")

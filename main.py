@@ -419,19 +419,18 @@ class DayTradingBot:
                             import pandas as pd
                             # 1분→3분 변환 및 최근 신호 캔들 찾기
                             df = combined_data
-                            if 'datetime' in df.columns:
-                                base = df.copy()
-                                base['datetime'] = pd.to_datetime(base['datetime'])
-                                base = base.set_index('datetime')
-                            elif 'date' in df.columns and 'time' in df.columns:
-                                base = df.copy()
-                                base['datetime'] = pd.to_datetime(base['date'].astype(str) + ' ' + df['time'].astype(str))
-                                base = base.set_index('datetime')
-                            else:
-                                base = df.copy()
-                                base.index = pd.date_range(start='09:00', periods=len(base), freq='1min')
-                            data_3min = base.resample('3T').agg({'open':'first','high':'max','low':'min','close':'last','volume':'sum'}).dropna().reset_index()
-                            signals = PullbackCandlePattern.generate_trading_signals(data_3min)
+                            data_3min = self.decision_engine._convert_to_3min_data(combined_data)
+                            if data_3min is None or data_3min.empty:
+                                return
+                            signals = PullbackCandlePattern.generate_trading_signals(
+                                data_3min,
+                                enable_candle_shrink_expand=True,
+                                enable_divergence_precondition=True,
+                                enable_overhead_supply_filter=True,
+                                candle_expand_multiplier=1.10,
+                                overhead_lookback=10,
+                                overhead_threshold_hits=2,
+                            )
                             last_idx = None
                             if not signals.empty:
                                 for col in ['buy_bisector_recovery','buy_pullback_pattern']:

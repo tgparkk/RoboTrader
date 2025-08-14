@@ -75,6 +75,53 @@ def parse_times_mapping(arg_value: str) -> Dict[str, List[str]]:
     return mapping
 
 
+def _convert_to_3min_data(data: pd.DataFrame) -> Optional[pd.DataFrame]:
+    """1분봉 데이터를 3분봉으로 변환 (main.py _convert_to_3min_data와 동일한 방식)"""
+    try:
+        if data is None or len(data) < 3:
+            return None
+        
+        df = data.copy()
+        
+        # datetime 컬럼 확인 및 변환 (main.py 방식과 동일)
+        if 'datetime' not in df.columns:
+            if 'date' in df.columns and 'time' in df.columns:
+                df['datetime'] = pd.to_datetime(df['date'].astype(str) + ' ' + df['time'].astype(str))
+            elif 'time' in df.columns:
+                # time 컬럼만 있는 경우 임시 날짜 추가
+                time_str = df['time'].astype(str).str.zfill(6)
+                df['datetime'] = pd.to_datetime('2024-01-01 ' + 
+                                              time_str.str[:2] + ':' + 
+                                              time_str.str[2:4] + ':' + 
+                                              time_str.str[4:6])
+            else:
+                # datetime 컬럼이 없으면 순차적으로 생성 (09:00부터)
+                df['datetime'] = pd.date_range(start='09:00', periods=len(df), freq='1min')
+        
+        # datetime을 인덱스로 설정
+        df['datetime'] = pd.to_datetime(df['datetime'])
+        df = df.set_index('datetime')
+        
+        # 3분봉으로 리샘플링 (main.py와 완전히 동일)
+        resampled = df.resample('3T').agg({
+            'open': 'first',
+            'high': 'max',
+            'low': 'min',
+            'close': 'last',
+            'volume': 'sum'
+        })
+        
+        # NaN 제거 후 인덱스 리셋 (main.py와 동일)
+        resampled = resampled.dropna().reset_index()
+        
+        logger.debug(f"📊 3분봉 변환: {len(data)}개 → {len(resampled)}개 (main.py 방식)")
+        
+        return resampled
+        
+    except Exception as e:
+        logger.error(f"❌ 3분봉 변환 오류: {e}")
+        return None
+
 def floor_to_3min(ts: pd.Timestamp) -> pd.Timestamp:
     """주어진 타임스탬프를 3분 경계로 내림(floor)한다."""
     return ts.floor("3T")
@@ -195,7 +242,8 @@ async def fetch_and_prepare_data(stock_code: str, target_date: str) -> Tuple[Opt
         logger.error(f"{stock_code} {target_date} 1분봉 데이터 조회 실패")
         return None, None
     
-    df_3min = dp.get_timeframe_data(stock_code, target_date, "3min", base_data=base_1min)
+    # main.py와 동일한 방식으로 3분봉 변환
+    df_3min = _convert_to_3min_data(base_1min)
     if df_3min is None or df_3min.empty:
         logger.error(f"{stock_code} {target_date} 3분봉 변환 실패")
         return base_1min, None
@@ -221,8 +269,16 @@ def evaluate_signals_at_times(df_3min: pd.DataFrame, target_date: str, times: Li
             })
         return results
 
-    # 신호 전체 계산(3분봉)
-    signals = PullbackCandlePattern.generate_trading_signals(df_3min)
+    # 신호 전체 계산(3분봉) - main.py와 동일한 옵션 활성화
+    signals = PullbackCandlePattern.generate_trading_signals(
+        df_3min,
+        enable_candle_shrink_expand=True,
+        enable_divergence_precondition=True,
+        enable_overhead_supply_filter=True,
+        candle_expand_multiplier=1.10,
+        overhead_lookback=10,
+        overhead_threshold_hits=2,
+    )
     for t in times:
         row_idx = locate_row_for_time(df_3min, target_date, t)
         if row_idx is None:
@@ -270,7 +326,16 @@ def list_all_buy_signals(df_3min: pd.DataFrame) -> List[Dict[str, object]]:
     out: List[Dict[str, object]] = []
     if df_3min is None or df_3min.empty or 'datetime' not in df_3min.columns:
         return out
-    sig = PullbackCandlePattern.generate_trading_signals(df_3min)
+    # main.py와 동일한 옵션으로 신호 계산
+    sig = PullbackCandlePattern.generate_trading_signals(
+        df_3min,
+        enable_candle_shrink_expand=True,
+        enable_divergence_precondition=True,
+        enable_overhead_supply_filter=True,
+        candle_expand_multiplier=1.10,
+        overhead_lookback=10,
+        overhead_threshold_hits=2,
+    )
     if sig is None or sig.empty:
         sig = pd.DataFrame(index=df_3min.index)
     has_pb = sig.get('buy_pullback_pattern', pd.Series([False]*len(df_3min)))
@@ -304,7 +369,7 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
     if df_3min is None or df_3min.empty or 'datetime' not in df_3min.columns:
         return trades
     
-    # 3분봉 매수 신호 계산 (개선 옵션 활성화: 시뮬레이션 전용)
+    # 3분봉 매수 신호 계산 (main.py와 동일한 옵션 활성화)
     sig = PullbackCandlePattern.generate_trading_signals(
         df_3min,
         enable_candle_shrink_expand=True,
@@ -385,9 +450,9 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                 # (1) 긴급 손절: -1%
                 if entry_price is not None and current_price <= entry_price * (1.0 - 0.010):
                     exit_reason = 'emergency_stop_1pct'
-                # (2) 기본 익절: +1.5%  
-                elif entry_price is not None and current_price >= entry_price * (1.0 + 0.015):
-                    exit_reason = 'basic_profit_1_5pct'
+                # (2) 기본 익절: +2.0%  
+                elif entry_price is not None and current_price >= entry_price * (1.0 + 0.020):
+                    exit_reason = 'basic_profit_2pct'
                 # (3) 진입저가 실시간 체크: -0.2%
                 elif entry_low is not None and entry_low > 0 and current_price < entry_low * 0.998:
                     exit_reason = 'realtime_entry_low_break'
@@ -454,9 +519,9 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                 # (1) 긴급 손절: -1%
                 if entry_price is not None and c <= entry_price * (1.0 - 0.010):
                     exit_reason = 'emergency_stop_1pct'
-                # (2) 기본 익절: +1.5%  
-                elif entry_price is not None and c >= entry_price * (1.0 + 0.015):
-                    exit_reason = 'basic_profit_1_5pct'
+                # (2) 기본 익절: +2.0%  
+                elif entry_price is not None and c >= entry_price * (1.0 + 0.020):
+                    exit_reason = 'basic_profit_2pct'
                 # (3) 진입저가 실시간 체크: -0.2%
                 elif entry_low is not None and entry_low > 0 and c < entry_low * 0.998:
                     exit_reason = 'realtime_entry_low_break'
@@ -602,8 +667,12 @@ def main():
         return str(code).strip().zfill(6)
 
     # 기본값 (요청하신 2025-08-08, 4개 종목/시각)
-    DEFAULT_DATE = "20250812"
-    DEFAULT_CODES = "023160,023790,026040,033340,044490,054300,054540,108490,240810,419050,452160"
+    DEFAULT_DATE = "20250814"
+    DEFAULT_CODES = "086280,047770,026040,107600,214450,033340,230360,226950,336260,298380,208640,445680,073010,084370,009270,017510,095610,240810,332290,408900,077970,078520,460930"
+
+    #DEFAULT_DATE = "20250813"
+    #DEFAULT_CODES = "036200,026040,240810,097230,034220,213420,090460,036010,104040,087010"
+
     DEFAULT_TIMES = "034230=14:39;"
 
     date_str: str = (args.date or DEFAULT_DATE).strip()
