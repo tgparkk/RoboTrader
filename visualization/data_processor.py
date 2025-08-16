@@ -6,7 +6,7 @@ import pandas as pd
 import numpy as np
 from typing import Optional, Dict, List, Any
 from utils.logger import setup_logger
-from api.kis_chart_api import get_inquire_time_dailychartprice
+from api.kis_chart_api import get_inquire_time_dailychartprice, get_div_code_for_stock, get_stock_data_with_fallback
 from core.indicators.price_box import PriceBox
 from core.indicators.bisector_line import BisectorLine
 from core.indicators.bollinger_bands import BollingerBands
@@ -44,8 +44,8 @@ class DataProcessor:
                 )
             else:
                 return None
-            # 09:00 ~ 15:30 그리드 생성
-            start_dt = pd.Timestamp.combine(pd.Timestamp(base_date), pd.Timestamp('09:00').time())
+            # 08:00 ~ 15:30 그리드 생성
+            start_dt = pd.Timestamp.combine(pd.Timestamp(base_date), pd.Timestamp('08:00').time())
             end_dt = pd.Timestamp.combine(pd.Timestamp(base_date), pd.Timestamp('15:30').time())
             full_index = pd.date_range(start=start_dt, end=end_dt, freq='T')
             # close 시리즈를 1분 그리드에 맵핑
@@ -91,7 +91,7 @@ class DataProcessor:
             target_date: 조회 날짜 (YYYYMMDD)
             
         Returns:
-            pd.DataFrame: 전체 거래시간 분봉 데이터 (09:00~15:30)
+            pd.DataFrame: 전체 거래시간 분봉 데이터 (08:00~15:30)
         """
         try:
             self.logger.info(f"{stock_code} {target_date} 전체 분봉 데이터 조회 시작")
@@ -100,14 +100,15 @@ class DataProcessor:
             all_data = []
             
             # 15:30부터 거슬러 올라가면서 조회 (API는 최신 데이터부터 제공)
-            # 1회 호출당 최대 120분 데이터 → 4번 호출로 전체 커버 (390분)
-            time_points = ["153000", "143000", "123000", "103000", "093000"]  # 15:30, 14:30, 12:30, 10:30, 09:30
+            # 1회 호출당 최대 120분 데이터 → 7번 호출로 전체 커버 (450분: 08:00~15:30)
+            time_points = ["153000", "143000", "123000", "103000", "093000", "083000", "080000"]  # 15:30, 14:30, 12:30, 10:30, 09:30, 08:30, 08:00
             
             for i, end_time in enumerate(time_points):
                 try:
-                    self.logger.info(f"{stock_code} 분봉 데이터 조회 {i+1}/5: {end_time[:2]}:{end_time[2:4]}까지")
+                    self.logger.info(f"{stock_code} 분봉 데이터 조회 {i+1}/7: {end_time[:2]}:{end_time[2:4]}까지")
+                    # 폴백 방식으로 데이터 조회 (UN → J → NX 순서)
                     result = await asyncio.to_thread(
-                        get_inquire_time_dailychartprice,
+                        get_stock_data_with_fallback,
                         stock_code=stock_code,
                         input_date=target_date,
                         input_hour=end_time,
@@ -152,6 +153,14 @@ class DataProcessor:
                             first_time = chart_df[time_col].iloc[0]
                             last_time = chart_df[time_col].iloc[-1]
                             self.logger.info(f"{stock_code} {end_time} 시점 데이터 수집 완료: {len(chart_df)}건 ({first_time} ~ {last_time})")
+                            
+                            # 08시대 데이터 디버깅 (08:00와 08:30 조회 모두에서 확인)
+                            if end_time in ["083000", "080000"]:
+                                early_data = chart_df[chart_df[time_col].astype(str).str[:2] == '08'] if time_col == 'time' else chart_df[chart_df[time_col].dt.hour == 8]
+                                self.logger.info(f"🔍 {stock_code} {end_time} 조회에서 08시대 데이터: {len(early_data)}건")
+                                if not early_data.empty:
+                                    self.logger.info(f"   첫 번째 08시 데이터: {early_data[time_col].iloc[0]}")
+                                    self.logger.info(f"   마지막 08시 데이터: {early_data[time_col].iloc[-1]}")
                         else:
                             self.logger.info(f"{stock_code} {end_time} 시점 데이터 수집 완료: {len(chart_df)}건")
                             
@@ -367,8 +376,8 @@ class DataProcessor:
             
             # 이론적으로 있어야 할 5분봉들 확인
             expected_times = []
-            start_time = pd.Timestamp('2024-01-01 09:00:00')
-            for i in range(78):  # 09:00 ~ 15:30 = 78개
+            start_time = pd.Timestamp('2024-01-01 08:00:00')
+            for i in range(90):  # 08:00 ~ 15:30 = 450분 ÷ 5분 = 90개
                 time_str = (start_time + pd.Timedelta(minutes=i*5)).strftime('%H:%M:%S')
                 expected_times.append(time_str)
             

@@ -14,7 +14,8 @@ from utils.korean_time import now_kst, is_market_open
 from api.kis_chart_api import (
     get_inquire_time_itemchartprice, 
     get_inquire_time_dailychartprice,
-    get_full_trading_day_data_async
+    get_full_trading_day_data_async,
+    get_div_code_for_stock
 )
 from api.kis_market_api import get_inquire_daily_itemchartprice
 
@@ -139,9 +140,10 @@ class IntradayStockManager:
     
     async def _collect_historical_data(self, stock_code: str) -> bool:
         """
-        당일 09:00부터 선정시점까지의 전체 분봉 데이터 수집
+        당일 08:00부터 선정시점까지의 전체 분봉 데이터 수집
         
-        장중에 종목이 선정되었을 때 09:00부터 선정시점까지의 모든 분봉 데이터를 수집합니다.
+        장중에 종목이 선정되었을 때 08:00부터 선정시점까지의 모든 분봉 데이터를 수집합니다.
+        NXT 거래소 종목(08:30~15:30)과 KRX 종목(09:00~15:30) 모두 지원.
         이를 통해 시뮬레이션과 동일한 조건의 데이터로 신호를 생성할 수 있습니다.
         
         Args:
@@ -165,13 +167,13 @@ class IntradayStockManager:
             target_date = selected_time.strftime("%Y%m%d")
             target_hour = selected_time.strftime("%H%M%S")
             
-            self.logger.info(f"📈 {stock_code} 당일 전체 데이터 수집 시작 (09:00 ~ {target_hour})")
+            self.logger.info(f"📈 {stock_code} 당일 전체 데이터 수집 시작 (08:00 ~ {target_hour})")
             
             historical_data = await get_full_trading_day_data_async(
                 stock_code=stock_code,
                 target_date=target_date,
                 selected_time=target_hour,
-                start_time="090000"  # 09:00부터 시작
+                start_time="080000"  # 08:00부터 시작 (NXT 거래소 지원)
             )
             
             if historical_data is None or historical_data.empty:
@@ -280,7 +282,11 @@ class IntradayStockManager:
             target_hour = selected_time.strftime("%H%M%S")
             
             # 당일분봉조회 API 사용 (최대 30건)
+            # 종목별 적절한 시장 구분 코드 사용
+            div_code = get_div_code_for_stock(stock_code)
+            
             result = get_inquire_time_itemchartprice(
+                div_code=div_code,
                 stock_code=stock_code,
                 input_hour=target_hour,
                 past_data_yn="Y"
@@ -388,7 +394,11 @@ class IntradayStockManager:
             current_time = now_kst()
             target_hour = current_time.strftime("%H%M%S")
             
+            # 종목별 적절한 시장 구분 코드 사용
+            div_code = get_div_code_for_stock(stock_code)
+            
             result = get_inquire_time_itemchartprice(
+                div_code=div_code,
                 stock_code=stock_code,
                 input_hour=target_hour,
                 past_data_yn="Y"
@@ -458,7 +468,11 @@ class IntradayStockManager:
             current_time = now_kst()
             target_hour = current_time.strftime("%H%M%S")
             
+            # 종목별 적절한 시장 구분 코드 사용
+            div_code = get_div_code_for_stock(stock_code)
+            
             result = get_inquire_time_itemchartprice(
+                div_code=div_code,
                 stock_code=stock_code,
                 input_hour=target_hour,
                 past_data_yn="Y"

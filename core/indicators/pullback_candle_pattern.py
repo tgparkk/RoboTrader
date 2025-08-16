@@ -167,6 +167,7 @@ class PullbackCandlePattern:
         debug: bool = False,
         logger: Optional[logging.Logger] = None,
         log_level: int = logging.INFO,
+
     ) -> pd.DataFrame:
         """눌림목 캔들패턴 매매 신호 생성 (3분봉 권장)
 
@@ -187,6 +188,8 @@ class PullbackCandlePattern:
             required_cols = ['open', 'high', 'low', 'close', 'volume']
             if not all(col in df.columns for col in required_cols):
                 return pd.DataFrame()
+
+
 
             # 이등분선(누적 고/저가 기반)
             bisector_line = BisectorLine.calculate_bisector_line(df['high'], df['low'])
@@ -224,6 +227,11 @@ class PullbackCandlePattern:
             in_position = False
             entry_price = None
             entry_low = None
+            
+            # 신호 품질 관리
+            recent_losses = 0  # 최근 연속 손실 횟수
+            last_signal_time = None  # 마지막 신호 시간
+            signal_cooldown = 5  # 신호 간 최소 간격 (봉 수)
 
             # 캔들 크기(고-저) 사전 계산
             candle_sizes = (df['high'] - df['low']).astype(float)
@@ -369,6 +377,15 @@ class PullbackCandlePattern:
 
                 # 옵션: 오버헤드 서플라이(하락봉에서 기준의 1/2 이상 거래량 반복) 필터
                 allow_signal = True
+                
+                # 품질 필터 1: 연속 손실 후 신호 억제
+                if recent_losses >= 2:
+                    allow_signal = False
+                    
+                # 품질 필터 2: 신호 간 최소 간격 확보
+                if last_signal_time is not None and (i - last_signal_time) < signal_cooldown:
+                    allow_signal = False
+                
                 if enable_overhead_supply_filter and i >= 1:
                     try:
                         lb = max(0, i - overhead_lookback)
@@ -433,6 +450,7 @@ class PullbackCandlePattern:
                         in_position = True
                         entry_price = float(current['close'])
                         entry_low = float(current['low'])
+                        last_signal_time = i  # 신호 시간 기록
                         if debug and logger is not None:
                             try:
                                 def _fmt_hhmm(idx: int) -> str:
@@ -461,6 +479,7 @@ class PullbackCandlePattern:
                         in_position = True
                         entry_price = float(current['close'])
                         entry_low = float(current['low'])
+                        last_signal_time = i  # 신호 시간 기록
                         if debug and logger is not None:
                             try:
                                 def _fmt_hhmm(idx: int) -> str:
@@ -483,6 +502,13 @@ class PullbackCandlePattern:
                     # 이등분선 이탈: 이등분선 기준 아래로 0.2% 이탈 시 매도
                     if bl is not None and current['close'] < bl * (1.0 - 0.002):
                         signals.iloc[i, signals.columns.get_loc('sell_bisector_break')] = True
+                        
+                        # 손실 여부 체크
+                        if entry_price is not None and current['close'] < entry_price:
+                            recent_losses += 1
+                        else:
+                            recent_losses = 0  # 수익 시 손실 카운트 리셋
+                            
                         in_position = False
                         entry_price = None
                         entry_low = None
@@ -583,6 +609,8 @@ class PullbackCandlePattern:
                 signals['debug_baseline_now'] = dbg_baseline_now
                 signals['debug_max_low_vol'] = dbg_max_low_vol
                 signals['debug_avg_recent_vol'] = dbg_avg_recent_vol
+
+
 
             return signals
 

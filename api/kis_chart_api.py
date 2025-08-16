@@ -15,6 +15,75 @@ logger = setup_logger(__name__)
 FALLBACK_MAX_DAYS = 3  # 주말/휴일 등 데이터 없을 때 최대 폴백 일수
 
 
+def get_div_code_for_stock(stock_code: str) -> str:
+    """
+    종목코드에 따른 시장 구분 코드 반환 (폴백 방식으로 변경 예정)
+    
+    Args:
+        stock_code: 종목코드 (6자리)
+        
+    Returns:
+        str: 시장 구분 코드 (J: KRX, NX: NXT, UN: 통합)
+    """
+    # 우선 통합 조회 시도 (NXT + KRX 모두 포함)
+    return "UN"  # 통합 (KRX + NXT)
+
+
+def get_stock_data_with_fallback(stock_code: str, input_date: str, input_hour: str, past_data_yn: str = "Y") -> Optional[Tuple[pd.DataFrame, pd.DataFrame]]:
+    """
+    폴백 방식으로 종목 데이터 조회
+    1. UN (통합) → 2. J (KRX) → 3. NX (NXT) 순서로 시도
+    
+    Args:
+        stock_code: 종목코드
+        input_date: 입력 날짜 (YYYYMMDD)
+        input_hour: 입력 시간 (HHMMSS)
+        past_data_yn: 과거 데이터 포함 여부
+        
+    Returns:
+        Tuple[pd.DataFrame, pd.DataFrame]: (종목요약정보, 분봉데이터) 또는 None
+    """
+    div_codes = ["UN", "J", "NX"]  # 통합 → KRX → NXT 순서
+    
+    for div_code in div_codes:
+        try:
+            logger.debug(f"📊 {stock_code} {div_code} 시장으로 조회 시도")
+            result = get_inquire_time_dailychartprice(
+                div_code=div_code,
+                stock_code=stock_code,
+                input_date=input_date,
+                input_hour=input_hour,
+                past_data_yn=past_data_yn
+            )
+            
+            if result is not None:
+                summary_df, chart_df = result
+                if not chart_df.empty:
+                    # 데이터 유효성 검증: 요청한 날짜와 일치하는 데이터가 있는지 확인
+                    if 'date' in chart_df.columns:
+                        valid_data = chart_df[chart_df['date'] == input_date]
+                        if not valid_data.empty:
+                            logger.info(f"✅ {stock_code} {div_code} 시장에서 데이터 조회 성공: {len(chart_df)}건 (유효 데이터: {len(valid_data)}건)")
+                            return result
+                        else:
+                            logger.debug(f"⚠️ {stock_code} {div_code} 시장 - 요청 날짜({input_date})와 일치하는 데이터 없음")
+                    else:
+                        # date 컬럼이 없는 경우 기존 로직 사용
+                        logger.info(f"✅ {stock_code} {div_code} 시장에서 데이터 조회 성공: {len(chart_df)}건")
+                        return result
+                else:
+                    logger.debug(f"⚠️ {stock_code} {div_code} 시장 데이터 없음")
+            else:
+                logger.debug(f"❌ {stock_code} {div_code} 시장 조회 실패")
+                
+        except Exception as e:
+            logger.warning(f"⚠️ {stock_code} {div_code} 시장 조회 중 오류: {e}")
+            continue
+    
+    logger.warning(f"❌ {stock_code} 모든 시장에서 데이터 조회 실패")
+    return None
+
+
 def get_inquire_time_dailychartprice(div_code: str = "J", stock_code: str = "", 
                                    input_hour: str = "", input_date: str = "",
                                    past_data_yn: str = "Y", fake_tick_yn: str = "",
@@ -60,7 +129,7 @@ def get_inquire_time_dailychartprice(div_code: str = "J", stock_code: str = "",
     }
     
     try:
-        logger.debug(f"📊 주식일별분봉조회: {stock_code}, 날짜={input_date}, 시간={input_hour}")
+        logger.debug(f"📊 주식일별분봉조회: {stock_code}, 날짜={input_date}, 시간={input_hour}, div_code={div_code}")
         res = kis._url_fetch(url, tr_id, tr_cont, params)
         
         if res and res.isOK():
@@ -110,7 +179,11 @@ def get_recent_minute_data(stock_code: str, minutes: int = 30,
         current_date = current_time.strftime("%Y%m%d")
         current_hour = current_time.strftime("%H%M%S")
         
+        # 종목별 적절한 시장 구분 코드 사용
+        div_code = get_div_code_for_stock(stock_code)
+        
         result = get_inquire_time_dailychartprice(
+            div_code=div_code,
             stock_code=stock_code,
             input_date=current_date,
             input_hour=current_hour,
@@ -165,8 +238,12 @@ def get_historical_minute_data(stock_code: str, target_date: str,
             d = (base_dt - _td(days=back)).strftime("%Y%m%d")
             attempt_dates.append(d)
 
+        # 종목별 적절한 시장 구분 코드 사용
+        div_code = get_div_code_for_stock(stock_code)
+        
         for idx, attempt_date in enumerate(attempt_dates):
             result = get_inquire_time_dailychartprice(
+                div_code=div_code,
                 stock_code=stock_code,
                 input_date=attempt_date,
                 input_hour=end_hour,
@@ -457,7 +534,11 @@ def get_today_minute_data(stock_code: str, target_hour: str = "",
         if not target_hour:
             target_hour = now_kst().strftime("%H%M%S")
         
+        # 종목별 적절한 시장 구분 코드 사용
+        div_code = get_div_code_for_stock(stock_code)
+        
         result = get_inquire_time_itemchartprice(
+            div_code=div_code,
             stock_code=stock_code,
             input_hour=target_hour,
             past_data_yn=past_data_yn
@@ -493,7 +574,11 @@ def get_realtime_minute_data(stock_code: str) -> Optional[pd.DataFrame]:
     try:
         current_time = now_kst().strftime("%H%M%S")
         
+        # 종목별 적절한 시장 구분 코드 사용
+        div_code = get_div_code_for_stock(stock_code)
+        
         result = get_inquire_time_itemchartprice(
+            div_code=div_code,
             stock_code=stock_code,
             input_hour=current_time,
             past_data_yn="Y"
@@ -519,9 +604,10 @@ def get_realtime_minute_data(stock_code: str) -> Optional[pd.DataFrame]:
 def get_full_trading_day_data(stock_code: str, target_date: str = "", 
                              selected_time: str = "") -> Optional[pd.DataFrame]:
     """
-    당일 전체 거래시간 분봉 데이터 조회 (연속 호출로 09:00-15:30 전체 수집)
+    당일 전체 거래시간 분봉 데이터 조회 (연속 호출로 08:00-15:30 전체 수집)
     
-    장중에 종목이 선정되었을 때 09:00부터 선정시점까지의 모든 분봉 데이터를 수집합니다.
+    장중에 종목이 선정되었을 때 08:00부터 선정시점까지의 모든 분봉 데이터를 수집합니다.
+    NXT 거래소 종목(08:00~15:30)과 KRX 종목(09:00~15:30) 모두 지원.
     API 제한(120건)을 우회하여 전체 거래시간 데이터를 확보합니다.
     
     Args:
@@ -530,7 +616,7 @@ def get_full_trading_day_data(stock_code: str, target_date: str = "",
         selected_time: 종목 선정 시간 (HHMMSS, 기본값: 현재시간)
         
     Returns:
-        pd.DataFrame: 09:00부터 선정시점까지의 전체 분봉 데이터
+        pd.DataFrame: 08:00부터 선정시점까지의 전체 분봉 데이터
     """
     try:
         # 기본값 설정
@@ -547,10 +633,10 @@ def get_full_trading_day_data(stock_code: str, target_date: str = "",
             logger.info(f"📊 {stock_code} 전체 거래시간 분봉 데이터 수집 시작 ({attempt_date} {selected_time}까지)")
 
             time_segments = [
-                ("090000", "110000"),
-                ("110000", "130000"),
-                ("130000", "150000"),
-                ("150000", "153000")
+                ("080000", "100000"),
+                ("100000", "120000"),
+                ("120000", "140000"),
+                ("140000", "153000")
             ]
 
             all_data_frames = []
@@ -562,7 +648,12 @@ def get_full_trading_day_data(stock_code: str, target_date: str = "",
                 segment_end_time = min(end_time, selected_time)
                 try:
                     logger.debug(f"  구간 수집: {start_time}~{segment_end_time}")
+                    
+                    # 종목별 적절한 시장 구분 코드 사용
+                    div_code = get_div_code_for_stock(stock_code)
+                    
                     result = get_inquire_time_dailychartprice(
+                        div_code=div_code,
                         stock_code=stock_code,
                         input_date=attempt_date,
                         input_hour=segment_end_time,
@@ -634,16 +725,16 @@ async def get_full_trading_day_data_async(stock_code: str, target_date: str = ""
         if not selected_time:
             selected_time = now_kst().strftime("%H%M%S")
         if not start_time:
-            start_time = "090000"
+            start_time = "080000"
 
         from datetime import datetime as _dt, timedelta as _td
         base_dt = _dt.strptime(target_date, "%Y%m%d")
 
         time_segments = [
-            ("090000", "110000"),
-            ("110000", "130000"),
-            ("130000", "150000"),
-            ("150000", "153000")
+            ("080000", "100000"),
+            ("100000", "120000"),
+            ("120000", "140000"),
+            ("140000", "153000")
         ]
 
         for back in range(0, FALLBACK_MAX_DAYS + 1):
@@ -669,7 +760,12 @@ async def get_full_trading_day_data_async(stock_code: str, target_date: str = ""
             async def fetch_segment_data(start_time: str, end_time: str):
                 try:
                     await asyncio.sleep(0.1)
+                    
+                    # 종목별 적절한 시장 구분 코드 사용
+                    div_code = get_div_code_for_stock(stock_code)
+                    
                     result = get_inquire_time_dailychartprice(
+                        div_code=div_code,
                         stock_code=stock_code,
                         input_date=attempt_date,
                         input_hour=end_time,

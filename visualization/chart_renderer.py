@@ -30,7 +30,8 @@ class ChartRenderer:
     def create_strategy_chart(self, stock_code: str, stock_name: str, target_date: str,
                              strategy, data: pd.DataFrame, 
                              indicators_data: Dict[str, Any], selection_reason: str,
-                             chart_suffix: str = "", timeframe: str = "1min") -> Optional[str]:
+                             chart_suffix: str = "", timeframe: str = "1min",
+                             trade_simulation_results: Optional[List[Dict[str, Any]]] = None) -> Optional[str]:
         """전략별 차트 생성"""
         try:
             # 시간프레임 저장 (다른 메서드에서 사용)
@@ -53,11 +54,13 @@ class ChartRenderer:
             # 전략별 지표 표시
             self._draw_strategy_indicators(ax1, cleaned_data, strategy, indicators_data)
             
-            # 매수 신호 표시 (빨간색 화살표)
-            self._draw_buy_signals(ax1, cleaned_data, strategy)
-            
-            # 매도/손절/익절 신호 표시
-            self._draw_sell_signals(ax1, cleaned_data, strategy)
+            # 체결 시뮬레이션 결과 기반 매수/매도 신호 표시
+            if trade_simulation_results:
+                self._draw_simulation_signals(ax1, cleaned_data, trade_simulation_results)
+            else:
+                # 폴백: 기존 신호 표시 방식
+                self._draw_buy_signals(ax1, cleaned_data, strategy)
+                self._draw_sell_signals(ax1, cleaned_data, strategy)
             
             # 거래량 차트
             self._draw_volume_chart(ax2, cleaned_data)
@@ -76,7 +79,10 @@ class ChartRenderer:
             ax2.set_xlabel('시간', fontsize=12)
             ax2.grid(True, alpha=0.3)
             
-            # X축 시간 레이블 설정 (09:00 ~ 15:30)
+            # 08:00~09:00 구간 회색 배경 표시 (데이터 없는 구간)
+            self._draw_no_data_background(ax1, ax2, cleaned_data, strategy.timeframe)
+            
+            # X축 시간 레이블 설정 (08:00 ~ 15:30)
             self._set_time_axis_labels(ax1, ax2, cleaned_data, strategy.timeframe)
             
             plt.tight_layout()
@@ -287,6 +293,152 @@ class ChartRenderer:
 
         except Exception as e:
             self.logger.error(f"매도 신호 표시 오류: {e}")
+
+    def _draw_simulation_signals(self, ax, data: pd.DataFrame, trades: List[Dict[str, Any]]):
+        """체결 시뮬레이션 결과 기반 매수/매도 신호 표시"""
+        try:
+            if not trades:
+                self.logger.info("체결 시뮬레이션 결과 없음")
+                return
+            
+            # 시간 기반 x 위치 계산
+            x_positions = self._calculate_x_positions(data)
+            
+            buy_signals_x = []
+            buy_signals_y = []
+            sell_signals_x = []
+            sell_signals_y = []
+            
+            # 데이터의 시간 컬럼 확인
+            if 'time' not in data.columns and 'datetime' not in data.columns:
+                self.logger.warning("time 또는 datetime 컬럼이 없어 체결 시뮬레이션 신호 표시 불가")
+                return
+            
+            for trade in trades:
+                try:
+                    # 매수 신호 처리
+                    buy_time_str = trade.get('buy_time', '')
+                    buy_price = trade.get('buy_price', 0.0)
+                    
+                    if buy_time_str and buy_price > 0:
+                        try:
+                            # 시간 문자열을 HH:MM 형식으로 파싱 (09:18 형식)
+                            hour, minute = buy_time_str.split(':')
+                            
+                            # 3분봉 캔들 시간으로 변환 (매수 시간을 포함하는 캔들 찾기)
+                            hour_int = int(hour)
+                            minute_int = int(minute)
+                            
+                            # 3분봉 캔들의 시작 시간 계산 (09:00 기준으로 3분 단위로 나누기)
+                            total_minutes_from_start = (hour_int - 9) * 60 + minute_int
+                            candle_index = total_minutes_from_start // 3
+                            candle_start_minute = candle_index * 3
+                            
+                            candle_hour = 9 + candle_start_minute // 60
+                            candle_min = candle_start_minute % 60
+                            
+                            buy_time_hhmm = f"{candle_hour:02d}{candle_min:02d}00"  # HHMMSS 형식으로 변환
+                            
+                            self.logger.debug(f"매수 시간 변환: {buy_time_str} -> {buy_time_hhmm}")
+                            
+                            # 데이터에서 time 컬럼 기준으로 매칭
+                            if 'time' in data.columns:
+                                time_values = data['time'].astype(str).str.zfill(6)
+                                matching_indices = data[time_values == buy_time_hhmm].index
+                            elif 'datetime' in data.columns:
+                                # datetime에서 시간 부분 추출하여 매칭
+                                data_times = pd.to_datetime(data['datetime']).dt.strftime('%H%M%S')
+                                matching_indices = data[data_times == buy_time_hhmm].index
+                            else:
+                                matching_indices = []
+                            
+                            if len(matching_indices) > 0:
+                                idx = matching_indices[0]
+                                data_idx = data.index.get_loc(idx)
+                                if data_idx < len(x_positions):
+                                    buy_signals_x.append(x_positions[data_idx])
+                                    buy_signals_y.append(buy_price)
+                                    self.logger.debug(f"매수 신호 매칭: {buy_time_str} -> 데이터 인덱스 {data_idx}")
+                                else:
+                                    self.logger.warning(f"매수 신호 X축 범위 초과: {buy_time_str} -> 인덱스 {data_idx}, X축 길이: {len(x_positions)}")
+                            else:
+                                self.logger.warning(f"매수 신호 시간 매칭 실패: {buy_time_str} -> {buy_time_hhmm}")
+                        except Exception as e:
+                            self.logger.warning(f"매수 시간 파싱 오류: {buy_time_str} - {e}")
+                    
+                    # 매도 신호 처리
+                    sell_time_str = trade.get('sell_time', '')
+                    sell_price = trade.get('sell_price', 0.0)
+                    
+                    if sell_time_str and sell_price > 0:
+                        try:
+                            # 시간 문자열을 HH:MM 형식으로 파싱 (09:23 형식)
+                            hour, minute = sell_time_str.split(':')
+                            
+                            # 3분봉 캔들 시간으로 변환 (매도 시간을 포함하는 캔들 찾기)
+                            hour_int = int(hour)
+                            minute_int = int(minute)
+                            
+                            # 3분봉 캔들의 시작 시간 계산 (09:00 기준으로 3분 단위로 나누기)
+                            # 09:00부터 시작하는 3분 간격: 09:00, 09:03, 09:06, 09:09, 09:12, 09:15, 09:18, 09:21, 09:24, ...
+                            total_minutes_from_start = (hour_int - 9) * 60 + minute_int
+                            candle_index = total_minutes_from_start // 3
+                            candle_start_minute = candle_index * 3
+                            
+                            candle_hour = 9 + candle_start_minute // 60
+                            candle_min = candle_start_minute % 60
+                            
+                            sell_time_hhmm = f"{candle_hour:02d}{candle_min:02d}00"  # HHMMSS 형식으로 변환
+                            
+                            self.logger.debug(f"매도 시간 변환: {sell_time_str} -> {sell_time_hhmm}")
+                            
+                            # 데이터에서 time 컬럼 기준으로 매칭
+                            if 'time' in data.columns:
+                                time_values = data['time'].astype(str).str.zfill(6)
+                                matching_indices = data[time_values == sell_time_hhmm].index
+                            elif 'datetime' in data.columns:
+                                # datetime에서 시간 부분 추출하여 매칭
+                                data_times = pd.to_datetime(data['datetime']).dt.strftime('%H%M%S')
+                                matching_indices = data[data_times == sell_time_hhmm].index
+                            else:
+                                matching_indices = []
+                            
+                            if len(matching_indices) > 0:
+                                idx = matching_indices[0]
+                                data_idx = data.index.get_loc(idx)
+                                if data_idx < len(x_positions):
+                                    sell_signals_x.append(x_positions[data_idx])
+                                    sell_signals_y.append(sell_price)
+                                    self.logger.debug(f"매도 신호 매칭: {sell_time_str} -> 데이터 인덱스 {data_idx}")
+                                else:
+                                    self.logger.warning(f"매도 신호 X축 범위 초과: {sell_time_str} -> 인덱스 {data_idx}, X축 길이: {len(x_positions)}")
+                            else:
+                                self.logger.warning(f"매도 신호 시간 매칭 실패: {sell_time_str} -> {sell_time_hhmm}")
+                        except Exception as e:
+                            self.logger.warning(f"매도 시간 파싱 오류: {sell_time_str} - {e}")
+                    
+                except Exception as e:
+                    self.logger.warning(f"체결 시뮬레이션 신호 처리 오류: {e}")
+                    continue
+            
+            # 매수 신호 표시 (빨간색 위 화살표)
+            if buy_signals_x:
+                ax.scatter(buy_signals_x, buy_signals_y, 
+                          color='red', s=150, marker='^', 
+                          label=f'매수신호({len(buy_signals_x)}개)', zorder=10, 
+                          edgecolors='darkred', linewidth=2)
+                self.logger.info(f"체결 시뮬레이션 매수 신호 {len(buy_signals_x)}개 표시됨")
+            
+            # 매도 신호 표시 (파란색 아래 화살표)
+            if sell_signals_x:
+                ax.scatter(sell_signals_x, sell_signals_y, 
+                          color='blue', s=150, marker='v', 
+                          label=f'매도신호({len(sell_signals_x)}개)', zorder=10, 
+                          edgecolors='darkblue', linewidth=2)
+                self.logger.info(f"체결 시뮬레이션 매도 신호 {len(sell_signals_x)}개 표시됨")
+            
+        except Exception as e:
+            self.logger.error(f"체결 시뮬레이션 신호 표시 오류: {e}")
 
     def _draw_price_box(self, ax, box_data, data: pd.DataFrame):
         """가격박스 그리기 - 정확한 x 위치 기준"""
@@ -559,11 +711,36 @@ class ChartRenderer:
         if timeframe is None:
             timeframe = getattr(self, 'current_timeframe', '1min')
             
-        if 'time' not in data.columns:
+        # time 또는 datetime 컬럼 확인
+        if 'time' in data.columns:
+            time_values = data['time'].astype(str).str.zfill(6)
+        elif 'datetime' in data.columns:
+            # datetime에서 시간 부분 추출 (HHMMSS 형식)
+            time_values = pd.to_datetime(data['datetime']).dt.strftime('%H%M%S')
+        else:
+            self.logger.error(f"❌ {timeframe}: 시간 컬럼 없음. 사용 가능한 컬럼: {list(data.columns)}")
             return list(range(len(data)))
-        
-        time_values = data['time'].astype(str).str.zfill(6)
-        start_minutes = 9 * 60  # 09:00 = 540분
+        # 데이터의 실제 시작 시간을 감지하여 기준점 설정
+        if len(time_values) > 0:
+            first_time = time_values.iloc[0] if hasattr(time_values, 'iloc') else time_values[0]
+            if len(str(first_time)) == 6:
+                try:
+                    first_hour = int(str(first_time)[:2])
+                    first_minute = int(str(first_time)[2:4])
+                    # 데이터가 09:00 이후에 시작하면 09:00 기준, 그렇지 않으면 08:00 기준
+                    if first_hour >= 9:
+                        start_minutes = 9 * 60  # 09:00 = 540분 (KRX 전용)
+                        self.logger.debug(f"📊 KRX 시간 기준 설정: 09:00 시작 (첫 데이터: {first_time})")
+                    else:
+                        start_minutes = 8 * 60   # 08:00 = 480분 (NXT 포함)
+                        self.logger.debug(f"📊 NXT 시간 기준 설정: 08:00 시작 (첫 데이터: {first_time})")
+                except ValueError:
+                    start_minutes = 8 * 60  # 기본값
+                    self.logger.warning(f"시간 파싱 실패, 기본값 08:00 사용")
+            else:
+                start_minutes = 8 * 60  # 기본값
+        else:
+            start_minutes = 8 * 60  # 기본값
         
         x_positions = []
         prev_x_pos = -1
@@ -577,7 +754,7 @@ class ChartRenderer:
                         minute = int(time_str[2:4])
                         current_minutes = hour * 60 + minute
                         
-                        # 09:00부터의 분 단위 인덱스 계산 (연속)
+                        # 08:00부터의 분 단위 인덱스 계산 (연속)
                         x_pos = current_minutes - start_minutes
                         
                         # 중복되거나 이상한 x 위치 방지
@@ -606,13 +783,50 @@ class ChartRenderer:
                 
             return x_positions
         else:
-            # 5분봉, 3분봉: 연속 인덱스 사용 (캔들들이 이어지도록)
-            x_positions = list(range(len(data)))
-            self.logger.debug(f"{timeframe} 연속 인덱스 사용: 0 ~ {len(data)-1}")
+            # 5분봉, 3분봉: 실제 시간 기반 인덱스 계산
+            timeframe_minutes = int(timeframe.replace('min', ''))
+            
+            for i, time_str in enumerate(time_values):
+                if len(time_str) == 6:
+                    try:
+                        hour = int(time_str[:2])
+                        minute = int(time_str[2:4])
+                        current_minutes = hour * 60 + minute
+                        
+                        # 08:00부터의 시간 기준으로 계산
+                        minutes_from_start = current_minutes - start_minutes
+                        
+                        # timeframe에 맞는 인덱스 계산 (3분봉이면 3분 단위로)
+                        x_pos = minutes_from_start // timeframe_minutes
+                        
+                        # 중복 방지
+                        if x_pos == prev_x_pos:
+                            x_pos = prev_x_pos + 1
+                        elif x_pos < prev_x_pos:
+                            x_pos = prev_x_pos + 1
+                        
+                        x_positions.append(x_pos)
+                        prev_x_pos = x_pos
+                        
+                    except ValueError:
+                        x_pos = prev_x_pos + 1 if prev_x_pos >= 0 else i
+                        x_positions.append(x_pos)
+                        prev_x_pos = x_pos
+                else:
+                    x_pos = prev_x_pos + 1 if prev_x_pos >= 0 else i
+                    x_positions.append(x_pos)
+                    prev_x_pos = x_pos
+            
+            # 성공 로그
+            if x_positions:
+                self.logger.info(f"✅ {timeframe} 시간 기반 X축 계산 완료: {min(x_positions)} ~ {max(x_positions)} ({len(x_positions)}개)")
+            else:
+                self.logger.error(f"❌ {timeframe} X 위치 계산 실패")
+            
             return x_positions
     
     def _set_time_axis_labels(self, ax1, ax2, data: pd.DataFrame, timeframe: str):
-        """X축 시간 레이블 설정 - 09:00~15:30 연속 거래시간 기반"""
+        """X축 시간 레이블 설정 - 08:00~15:30 연속 거래시간 기반"""
         try:
             data_len = len(data)
             if data_len == 0:
@@ -656,8 +870,21 @@ class ChartRenderer:
                 
                 self.logger.debug(f"데이터 시간 범위: {first_hour:02d}:{first_minute:02d} ~ {last_hour:02d}:{last_minute:02d}")
             
-            # 전체 거래시간 기준 (09:00~15:30 = 6.5시간 * 60분 = 390분)
-            total_trading_minutes = 390  # 09:00~15:30 연속 거래
+            # 데이터의 실제 시작 시간에 따른 거래시간 계산
+            if len(time_values) > 0:
+                first_hour, first_minute = parse_time(time_values.iloc[0])
+                # 09:00 이후 시작하면 KRX (09:00~15:30 = 6.5시간), 그렇지 않으면 NXT 포함 (08:00~15:30 = 7.5시간)
+                if first_hour >= 9:
+                    start_hour = 9
+                    total_trading_minutes = 390  # 09:00~15:30 = 6.5시간 * 60분
+                    self.logger.debug(f"📊 KRX 시간축 설정: 09:00~15:30 ({total_trading_minutes}분)")
+                else:
+                    start_hour = 8  
+                    total_trading_minutes = 450  # 08:00~15:30 = 7.5시간 * 60분
+                    self.logger.debug(f"📊 NXT 시간축 설정: 08:00~15:30 ({total_trading_minutes}분)")
+            else:
+                start_hour = 8
+                total_trading_minutes = 450  # 기본값
             
             if timeframe == "1min":
                 total_candles = total_trading_minutes  # 390개 캔들
@@ -669,8 +896,8 @@ class ChartRenderer:
                 total_candles = total_trading_minutes // 3  # 130개 캔들
                 step = interval_minutes // 3  # 10개 캔들 간격
             
-            # 09:00부터 15:30까지 30분 간격으로 레이블 생성
-            start_minutes = 9 * 60  # 09:00 = 540분
+            # 시작 시간부터 15:30까지 30분 간격으로 레이블 생성
+            start_minutes = start_hour * 60  # 동적 시작 시간
             end_minutes = 15 * 60 + 30  # 15:30 = 930분
             
             current_time_minutes = start_minutes
@@ -679,18 +906,27 @@ class ChartRenderer:
                 minute = current_time_minutes % 60
                 
                 # 해당 시간의 데이터 인덱스 계산 (연속)
+                real_data_start_minutes = start_hour * 60  # 실제 데이터 시작 시간
+                
                 if timeframe == "1min":
-                    data_index = current_time_minutes - start_minutes  # 분 단위
+                    if current_time_minutes < real_data_start_minutes:
+                        data_index = current_time_minutes - real_data_start_minutes  # 음수 인덱스
+                    else:
+                        data_index = current_time_minutes - real_data_start_minutes  # 0부터 시작
                 elif timeframe == "5min":
-                    # 5분봉은 연속 인덱스 사용
-                    data_index = (current_time_minutes - start_minutes) // 5  # 실제 5분봉 인덱스
-                    # 실제 데이터 범위를 벗어나지 않도록 제한
-                    if data_index >= len(data):
-                        break
+                    if current_time_minutes < real_data_start_minutes:
+                        data_index = (current_time_minutes - real_data_start_minutes) // 5  # 음수 인덱스
+                    else:
+                        data_index = (current_time_minutes - real_data_start_minutes) // 5
+                        if data_index >= len(data):
+                            break
                 else:  # 3min
-                    data_index = (current_time_minutes - start_minutes) // 3  # 3분 단위
-                    if data_index >= len(data):
-                        break
+                    if current_time_minutes < real_data_start_minutes:
+                        data_index = (current_time_minutes - real_data_start_minutes) // 3  # 음수 인덱스
+                    else:
+                        data_index = (current_time_minutes - real_data_start_minutes) // 3
+                        if data_index >= len(data):
+                            break
                 
                 time_label = f"{hour:02d}:{minute:02d}"
                 time_labels.append(time_label)
@@ -728,7 +964,7 @@ class ChartRenderer:
                 ax2.set_xticklabels([str(i) for i in x_ticks])
     
     def _set_basic_time_axis_labels(self, ax, data: pd.DataFrame):
-        """기본 차트용 X축 시간 레이블 설정 - 09:00~15:30 연속 거래시간 기준"""
+        """기본 차트용 X축 시간 레이블 설정 - 08:00~15:30 연속 거래시간 기준"""
         try:
             data_len = len(data)
             if data_len == 0:
@@ -760,12 +996,12 @@ class ChartRenderer:
             time_labels = []
             x_positions = []
             
-            # 전체 거래시간 기준 (09:00~15:30 = 6.5시간 * 60분 = 390분)
-            total_trading_minutes = 390  # 09:00~15:30 연속 거래
+            # 전체 거래시간 기준 (08:00~15:30 = 7.5시간 * 60분 = 450분)
+            total_trading_minutes = 450  # 08:00~15:30 연속 거래
             total_candles = total_trading_minutes  # 1분봉 기준 390개 캔들
             
-            # 09:00부터 15:30까지 30분 간격으로 레이블 생성
-            start_minutes = 9 * 60  # 09:00 = 540분
+            # 08:00부터 15:30까지 30분 간격으로 레이블 생성
+            start_minutes = 8 * 60  # 08:00 = 480분
             end_minutes = 15 * 60 + 30  # 15:30 = 930분
             
             current_time_minutes = start_minutes
@@ -786,8 +1022,11 @@ class ChartRenderer:
             if x_positions and time_labels:
                 ax.set_xticks(x_positions)
                 ax.set_xticklabels(time_labels, rotation=45, fontsize=10)
-                # 전체 거래시간 범위로 설정 (09:00~15:30)
-                ax.set_xlim(-0.5, total_candles - 0.5)
+                # 전체 거래시간 범위로 설정 (08:00~15:30)
+                # 08:00~09:00 구간 포함하여 X축 범위 확장
+                timeframe_minutes = int(time_labels[0].replace('분', '')) if time_labels and '분' in time_labels[0] else 3
+                no_data_positions = 60 // timeframe_minutes  # 08:00~09:00 = 60분
+                ax.set_xlim(-no_data_positions - 0.5, total_candles - 0.5)
             
         except Exception as e:
             self.logger.error(f"기본 차트 시간 축 레이블 설정 오류: {e}")
@@ -796,3 +1035,34 @@ class ChartRenderer:
                 x_ticks = range(0, len(data), max(1, len(data) // 10))
                 ax.set_xticks(x_ticks)
                 ax.set_xticklabels([str(i) for i in x_ticks])
+    
+    def _draw_no_data_background(self, ax1, ax2, data: pd.DataFrame, timeframe: str):
+        """08:00~09:00 구간에 회색 배경 표시 (데이터 없는 구간)"""
+        try:
+            if data.empty:
+                return
+                
+            # 1분 = 1위치, 3분 = 3위치 등으로 계산
+            timeframe_minutes = int(timeframe.replace('min', ''))
+            
+            # 08:00~09:00 = 60분 구간
+            no_data_minutes = 60
+            no_data_positions = no_data_minutes // timeframe_minutes
+            
+            # 실제 데이터 시작 시간 확인
+            if 'time' in data.columns:
+                first_time_str = str(data['time'].iloc[0]).zfill(6)
+                first_hour = int(first_time_str[:2])
+                if first_hour >= 9:  # 09:00 이후부터 데이터 시작
+                    # 08:00~09:00 구간 회색 배경
+                    ax1.axvspan(-no_data_positions, 0, alpha=0.2, color='lightgray', label='거래시간 외')
+                    ax2.axvspan(-no_data_positions, 0, alpha=0.2, color='lightgray')
+                    
+                    # 텍스트 표시
+                    ax1.text(-no_data_positions/2, ax1.get_ylim()[1] * 0.95, 
+                            '08:00~09:00\n거래시간 외', 
+                            ha='center', va='top', fontsize=10, alpha=0.7)
+            
+        except Exception as e:
+            self.logger.debug(f"데이터 없는 구간 배경 표시 오류: {e}")
+            # 오류 시 무시하고 계속 진행

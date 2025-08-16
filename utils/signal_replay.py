@@ -39,6 +39,10 @@ from core.indicators.pullback_candle_pattern import PullbackCandlePattern
 from core.indicators.bisector_line import BisectorLine
 # 실전 흐름 기준: 현재 리플레이는 눌림목(3분)만 사용하여 실전 규칙을 재현합니다.
 from api.kis_api_manager import KISAPIManager
+from visualization.chart_renderer import ChartRenderer
+from visualization.data_processor import DataProcessor
+from visualization.strategy_manager import StrategyManager
+from visualization.signal_calculator import SignalCalculator
 
 
 try:
@@ -77,6 +81,32 @@ def parse_times_mapping(arg_value: str) -> Dict[str, List[str]]:
         if code and times_list:
             mapping[code] = times_list
     return mapping
+
+
+def calculate_trading_signals_once(df_3min: pd.DataFrame, *, debug_logs: bool = False, 
+                                 logger: Optional[logging.Logger] = None,
+                                 log_level: int = logging.INFO) -> pd.DataFrame:
+    """3분봉 데이터에 대해 한 번만 신호를 계산하여 재사용.
+    
+    모든 함수에서 공통으로 사용하는 신호 계산 함수
+    09시 이전 데이터는 PullbackCandlePattern 내부에서 제외
+    """
+    if df_3min is None or df_3min.empty or 'datetime' not in df_3min.columns:
+        return pd.DataFrame()
+        
+    return PullbackCandlePattern.generate_trading_signals(
+        df_3min,
+        enable_candle_shrink_expand=False,
+        enable_divergence_precondition=False,
+        enable_overhead_supply_filter=True,
+        candle_expand_multiplier=1.10,
+        overhead_lookback=10,
+        overhead_threshold_hits=2,
+        debug=debug_logs,
+        logger=logger,
+        log_level=log_level,
+
+    )
 
 
 def _convert_to_3min_data(data: pd.DataFrame) -> Optional[pd.DataFrame]:
@@ -188,8 +218,10 @@ def analyze_unmet_conditions_at(
         current_close = float(row["close"]) if pd.notna(row["close"]) else None
         current_volume = float(row["volume"]) if pd.notna(row["volume"]) else None
 
-        # 이등분선 관련
-        bl = float(bisector_line.iloc[idx]) if bisector_line is not None and pd.notna(bisector_line.iloc[idx]) else None
+        # 이등분선 관련 (안전한 인덱싱)
+        bl = None
+        if bisector_line is not None and len(bisector_line) > idx and pd.notna(bisector_line.iloc[idx]):
+            bl = float(bisector_line.iloc[idx])
         above_bisector = (bl is not None) and (current_close is not None) and (current_close >= bl)
         crosses_bisector_up = (bl is not None) and (current_open is not None) and (current_close is not None) and (current_open <= bl <= current_close)
 
@@ -281,19 +313,8 @@ def evaluate_signals_at_times(
             })
         return results
 
-    # 신호 전체 계산(3분봉) - main.py와 동일한 옵션 활성화
-    signals = PullbackCandlePattern.generate_trading_signals(
-        df_3min,
-        enable_candle_shrink_expand=False,
-        enable_divergence_precondition=False,
-        enable_overhead_supply_filter=False,
-        candle_expand_multiplier=1.10,
-        overhead_lookback=10,
-        overhead_threshold_hits=2,
-        debug=debug_logs,
-        logger=logger,
-        log_level=log_level,
-    )
+    # 공통 신호 계산 함수 사용
+    signals = calculate_trading_signals_once(df_3min, debug_logs=debug_logs, logger=logger, log_level=log_level)
     for t in times:
         row_idx = locate_row_for_time(df_3min, target_date, t)
         if row_idx is None:
@@ -341,17 +362,8 @@ def list_all_buy_signals(df_3min: pd.DataFrame, *, logger: Optional[logging.Logg
     out: List[Dict[str, object]] = []
     if df_3min is None or df_3min.empty or 'datetime' not in df_3min.columns:
         return out
-    # main.py와 동일한 옵션으로 신호 계산
-    sig = PullbackCandlePattern.generate_trading_signals(
-        df_3min,
-        enable_candle_shrink_expand=False,
-        enable_divergence_precondition=False,
-        enable_overhead_supply_filter=False,
-        candle_expand_multiplier=1.10,
-        overhead_lookback=10,
-        overhead_threshold_hits=2,
-        debug=False,
-    )
+    # 공통 신호 계산 함수 사용
+    sig = calculate_trading_signals_once(df_3min, debug_logs=False)
     if sig is None or sig.empty:
         sig = pd.DataFrame(index=df_3min.index)
     has_pb = sig.get('buy_pullback_pattern', pd.Series([False]*len(df_3min)))
@@ -372,6 +384,125 @@ def list_all_buy_signals(df_3min: pd.DataFrame, *, logger: Optional[logging.Logg
     return out
 
 
+def generate_chart_for_stock(stock_code: str, target_date: str, df_3min: pd.DataFrame, 
+                           df_1min: Optional[pd.DataFrame] = None, 
+                           chart_renderer: Optional[ChartRenderer] = None,
+                           strategy_manager: Optional[StrategyManager] = None,
+                           signal_calculator: Optional[SignalCalculator] = None,
+                           logger: Optional[logging.Logger] = None) -> Optional[str]:
+    """단일 종목의 3분봉 차트를 생성 (거래량, 이등분선, 매수/매도 포인트 포함)"""
+    try:
+        # logger가 없으면 기본 로거 사용
+        if logger is None:
+            logger = setup_logger(__name__)
+            
+        if df_3min is None or df_3min.empty:
+            logger.warning(f"차트 생성 실패: {stock_code} - 3분봉 데이터 없음")
+            return None
+            
+        # 차트 렌더러 초기화
+        if chart_renderer is None:
+            chart_renderer = ChartRenderer()
+        if strategy_manager is None:
+            strategy_manager = StrategyManager()
+        if signal_calculator is None:
+            signal_calculator = SignalCalculator()
+            
+        logger.info(f"📊 차트 생성 시작: {stock_code} ({target_date})")
+        
+        # 3분봉 풀백 전략 가져오기
+        pullback_strategy = strategy_manager.get_strategy("pullback_candle_pattern")
+        
+        # 지표 데이터 계산
+        indicators_data = {}
+        
+        # 이등분선 계산
+        try:
+            from core.indicators.bisector_line import BisectorLine
+            bisector_line = BisectorLine.calculate_bisector_line(df_3min["high"], df_3min["low"])
+            if bisector_line is not None:
+                # 차트 렌더러가 기대하는 형식으로 전달
+                indicators_data['bisector_line'] = {
+                    'line_values': bisector_line
+                }
+                logger.debug(f"✅ {stock_code} 이등분선 계산 완료: {len(bisector_line)}개 값")
+        except Exception as e:
+            logger.warning(f"⚠️ {stock_code} 이등분선 계산 오류: {e}")
+            
+        # 매수/매도 신호 계산
+        try:
+            signals = calculate_trading_signals_once(df_3min, debug_logs=False)
+            
+            if signals is not None and not signals.empty:
+                # 매수 신호
+                buy_pullback = signals.get('buy_pullback_pattern', pd.Series([False]*len(df_3min)))
+                buy_bisector = signals.get('buy_bisector_recovery', pd.Series([False]*len(df_3min)))
+                indicators_data['buy_signals'] = {
+                    'buy_pullback_pattern': buy_pullback,
+                    'buy_bisector_recovery': buy_bisector
+                }
+                
+                # 매도 신호 계산 (임시 entry_low로 최근 신호의 저가 사용)
+                entry_low = None
+                latest_signal_idx = None
+                for i in range(len(df_3min)-1, -1, -1):
+                    if (bool(buy_pullback.iloc[i]) or bool(buy_bisector.iloc[i])):
+                        latest_signal_idx = i
+                        entry_low = float(df_3min['low'].iloc[i])
+                        break
+                
+                if entry_low is not None:
+                    try:
+                        sell_signals = PullbackCandlePattern.generate_sell_signals(df_3min, entry_low=entry_low)
+                        if sell_signals is not None and not sell_signals.empty:
+                            indicators_data['sell_signals'] = sell_signals
+                    except Exception as e:
+                        logger.warning(f"⚠️ {stock_code} 매도 신호 계산 오류: {e}")
+                
+                logger.debug(f"✅ {stock_code} 매수/매도 신호 계산 완료")
+            else:
+                logger.warning(f"⚠️ {stock_code} 신호 계산 결과 없음")
+                
+        except Exception as e:
+            logger.warning(f"⚠️ {stock_code} 신호 계산 오류: {e}")
+        
+        # 체결 시뮬레이션 실행
+        trades = simulate_trades(df_3min, df_1min, logger=logger) if df_3min is not None else []
+        
+        # 차트 생성
+        try:
+            # 종목명 조회 (간단하게 코드만 사용)
+            stock_name = f"종목{stock_code}"
+            
+            chart_path = chart_renderer.create_strategy_chart(
+                stock_code=stock_code,
+                stock_name=stock_name,
+                target_date=target_date,
+                strategy=pullback_strategy,
+                data=df_3min,
+                indicators_data=indicators_data,
+                selection_reason="signal_replay 차트 생성",
+                chart_suffix="signal_replay",
+                timeframe="3min",
+                trade_simulation_results=trades  # 체결 시뮬레이션 결과 전달
+            )
+            
+            if chart_path:
+                logger.info(f"✅ 차트 생성 완료: {stock_code} -> {chart_path}")
+                return chart_path
+            else:
+                logger.warning(f"⚠️ 차트 생성 실패: {stock_code}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"❌ {stock_code} 차트 생성 오류: {e}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"❌ {stock_code} 차트 생성 전체 오류: {e}")
+        return None
+
+
 def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = None, *, logger: Optional[logging.Logger] = None) -> List[Dict[str, object]]:
     """실전(_execute_trading_decision) 기준에 맞춘 눌림목(3분) 체결 시뮬레이션.
 
@@ -385,17 +516,8 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
     if df_3min is None or df_3min.empty or 'datetime' not in df_3min.columns:
         return trades
     
-    # 3분봉 매수 신호 계산 (main.py와 동일한 옵션 활성화)
-    sig = PullbackCandlePattern.generate_trading_signals(
-        df_3min,
-        enable_candle_shrink_expand=False,
-        enable_divergence_precondition=False,
-        enable_overhead_supply_filter=False,
-        candle_expand_multiplier=1.10,
-        overhead_lookback=10,
-        overhead_threshold_hits=2,
-        debug=False,
-    )
+    # 공통 신호 계산 함수 사용
+    sig = calculate_trading_signals_once(df_3min, debug_logs=False)
     if sig is None or sig.empty:
         sig = pd.DataFrame(index=df_3min.index)
 
@@ -411,9 +533,9 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
     entry_low = None
     entry_datetime = None
 
-    # 당일 손실 2회 시 신규 진입 차단
+    # 당일 손실 2회 시 신규 진입 차단 (해제됨)
     daily_loss_count = 0
-    can_enter = True
+    can_enter = True  # 항상 진입 가능
 
     # 1분봉이 있으면 1분 단위로 매도 체크, 없으면 3분봉 단위로 체크
     if df_1min is not None and not df_1min.empty and 'datetime' in df_1min.columns:
@@ -492,27 +614,44 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                     exit_reason = 'realtime_entry_low_break'
                 
                 if exit_reason is not None:
-                    profit = (current_price - entry_price) / entry_price * 100.0 if entry_price and entry_price > 0 else 0.0
-                    trades.append({
-                        'buy_time': entry_time,
-                        'buy_type': entry_type,
-                        'buy_price': entry_price,
-                        'sell_time': hhmm,
-                        'sell_reason': exit_reason,
-                        'sell_price': current_price,
-                        'profit_rate': profit,
-                    })
-                    in_pos = False
-                    entry_price = None
-                    entry_time = None
-                    entry_type = None
-                    entry_low = None
-                    entry_datetime = None
-                    # 손실 집계 및 진입 차단
-                    if profit < 0:
-                        daily_loss_count += 1
-                        if daily_loss_count >= 2:
-                            can_enter = False
+                     # 09시 이전 매수/매도는 승패 계산에서 제외
+                     buy_hour = int(entry_time.split(':')[0]) if ':' in entry_time else 0
+                     sell_hour = int(hhmm.split(':')[0]) if ':' in hhmm else 0
+                     
+                     if buy_hour >= 9 and sell_hour >= 9:  # 09시 이후만 승패 계산에 포함
+                         profit = (current_price - entry_price) / entry_price * 100.0 if entry_price and entry_price > 0 else 0.0
+                         trades.append({
+                             'buy_time': entry_time,
+                             'buy_type': entry_type,
+                             'buy_price': entry_price,
+                             'sell_time': hhmm,
+                             'sell_reason': exit_reason,
+                             'sell_price': current_price,
+                             'profit_rate': profit,
+                         })
+                     else:
+                         # 09시 이전 거래는 기록하되 승패 계산에서 제외
+                         trades.append({
+                             'buy_time': entry_time,
+                             'buy_type': entry_type,
+                             'buy_price': entry_price,
+                             'sell_time': hhmm,
+                             'sell_reason': exit_reason,
+                             'sell_price': current_price,
+                             'profit_rate': 0.0,  # 승패 계산에서 제외
+                             'excluded_from_stats': True,  # 통계에서 제외 표시
+                         })
+                     in_pos = False
+                     entry_price = None
+                     entry_time = None
+                     entry_type = None
+                     entry_low = None
+                     entry_datetime = None
+                     # 손실 집계 및 진입 차단 (해제됨)
+                     if 'profit' in locals() and profit < 0:
+                         daily_loss_count += 1
+                         # if daily_loss_count >= 2:
+                         #     can_enter = False
     else:
         # 기존 3분봉 방식 (1분봉 데이터 없는 경우)
         closes = pd.to_numeric(df_3min['close'], errors='coerce')
@@ -577,26 +716,43 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                             exit_reason = 'pattern_entry_low_break'
 
                 if exit_reason is not None:
-                    profit = (c - entry_price) / entry_price * 100.0 if entry_price and entry_price > 0 else 0.0
-                    trades.append({
-                        'buy_time': entry_time,
-                        'buy_type': entry_type,
-                        'buy_price': entry_price,
-                        'sell_time': hhmm,
-                        'sell_reason': exit_reason,
-                        'sell_price': c,
-                        'profit_rate': profit,
-                    })
+                    # 09시 이전 매수/매도는 승패 계산에서 제외
+                    buy_hour = int(entry_time.split(':')[0]) if ':' in entry_time else 0
+                    sell_hour = int(hhmm.split(':')[0]) if ':' in hhmm else 0
+                    
+                    if buy_hour >= 9 and sell_hour >= 9:  # 09시 이후만 승패 계산에 포함
+                        profit = (c - entry_price) / entry_price * 100.0 if entry_price and entry_price > 0 else 0.0
+                        trades.append({
+                            'buy_time': entry_time,
+                            'buy_type': entry_type,
+                            'buy_price': entry_price,
+                            'sell_time': hhmm,
+                            'sell_reason': exit_reason,
+                            'sell_price': c,
+                            'profit_rate': profit,
+                        })
+                    else:
+                        # 09시 이전 거래는 기록하되 승패 계산에서 제외
+                        trades.append({
+                            'buy_time': entry_time,
+                            'buy_type': entry_type,
+                            'buy_price': entry_price,
+                            'sell_time': hhmm,
+                            'sell_reason': exit_reason,
+                            'sell_price': c,
+                            'profit_rate': 0.0,  # 승패 계산에서 제외
+                            'excluded_from_stats': True,  # 통계에서 제외 표시
+                        })
                     in_pos = False
                     entry_price = None
                     entry_time = None
                     entry_type = None
                     entry_low = None
-                    # 손실 집계 및 진입 차단
+                    # 손실 집계 및 진입 차단 (해제됨)
                     if profit < 0:
                         daily_loss_count += 1
-                        if daily_loss_count >= 2:
-                            can_enter = False
+                        # if daily_loss_count >= 2:
+                        #     can_enter = False
 
     # EOD 청산
     if in_pos and entry_price is not None:
@@ -613,16 +769,32 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
         if pd.isna(last_close):
             last_close = entry_price
             
-        profit = (last_close - entry_price) / entry_price * 100.0 if entry_price and entry_price > 0 else 0.0
-        trades.append({
-            'buy_time': entry_time,
-            'buy_type': entry_type,
-            'buy_price': entry_price,
-            'sell_time': last_hhmm,
-            'sell_reason': 'EOD',
-            'sell_price': last_close,
-            'profit_rate': profit,
-        })
+        # 09시 이전 매수는 EOD 청산에서도 승패 계산 제외
+        buy_hour = int(entry_time.split(':')[0]) if ':' in entry_time else 0
+        
+        if buy_hour >= 9:  # 09시 이후 매수만 승패 계산에 포함
+            profit = (last_close - entry_price) / entry_price * 100.0 if entry_price and entry_price > 0 else 0.0
+            trades.append({
+                'buy_time': entry_time,
+                'buy_type': entry_type,
+                'buy_price': entry_price,
+                'sell_time': last_hhmm,
+                'sell_reason': 'EOD',
+                'sell_price': last_close,
+                'profit_rate': profit,
+            })
+        else:
+            # 09시 이전 매수는 기록하되 승패 계산에서 제외
+            trades.append({
+                'buy_time': entry_time,
+                'buy_type': entry_type,
+                'buy_price': entry_price,
+                'sell_time': last_hhmm,
+                'sell_reason': 'EOD',
+                'sell_price': last_close,
+                'profit_rate': 0.0,  # 승패 계산에서 제외
+                'excluded_from_stats': True,  # 통계에서 제외 표시
+            })
 
     return trades
 
@@ -661,11 +833,13 @@ async def run(
     *,
     debug_logs: bool = True,
     log_level: int = logging.INFO,
-) -> Tuple[List[Dict[str, object]], Dict[str, List[Dict[str, object]]], Dict[str, List[Dict[str, object]]], str]:
+    generate_charts: bool = False,
+) -> Tuple[List[Dict[str, object]], Dict[str, List[Dict[str, object]]], Dict[str, List[Dict[str, object]]], str, Dict[str, str]]:
     """메인 실행 코루틴."""
     all_rows: List[Dict[str, object]] = []
     all_signals: Dict[str, List[Dict[str, object]]] = {}
     all_trades: Dict[str, List[Dict[str, object]]] = {}
+    chart_paths: Dict[str, str] = {}  # 종목별 생성된 차트 파일 경로
     # 캡처 로거(메모리 버퍼, KST 포맷)
     log_buffer = io.StringIO()
     capture_logger: Optional[logging.Logger] = None
@@ -687,6 +861,21 @@ async def run(
             pass
         handler.setFormatter(formatter)
         capture_logger.addHandler(handler)
+    
+    # 차트 생성용 인스턴스 초기화 (차트 생성이 필요한 경우에만)
+    chart_renderer = None
+    strategy_manager = None
+    signal_calculator = None
+    if generate_charts:
+        try:
+            chart_renderer = ChartRenderer()
+            strategy_manager = StrategyManager()
+            signal_calculator = SignalCalculator()
+            logger.info("📊 차트 생성 모듈 초기화 완료")
+        except Exception as e:
+            logger.warning(f"⚠️ 차트 생성 모듈 초기화 실패: {e}")
+            generate_charts = False
+    
     for code in codes:
         try:
             # 1분봉과 3분봉 데이터를 모두 가져오기
@@ -707,6 +896,26 @@ async def run(
             # 체결 시뮬레이션 (1분봉 데이터도 전달)
             trades = simulate_trades(df_3min, df_1min, logger=capture_logger) if df_3min is not None else []
             all_trades[code] = trades
+            
+            # 차트 생성 (요청된 경우에만)
+            if generate_charts and df_3min is not None:
+                try:
+                    chart_path = generate_chart_for_stock(
+                        stock_code=code,
+                        target_date=date_str,
+                        df_3min=df_3min,
+                        df_1min=df_1min,
+                        chart_renderer=chart_renderer,
+                        strategy_manager=strategy_manager,
+                        signal_calculator=signal_calculator,
+                        logger=capture_logger or logger
+                    )
+                    if chart_path:
+                        chart_paths[code] = chart_path
+                        logger.info(f"📊 {code} 차트 생성 완료: {chart_path}")
+                except Exception as chart_err:
+                    logger.error(f"❌ {code} 차트 생성 오류: {chart_err}")
+                    chart_paths[code] = ""
         except Exception as e:
             logger.error(f"{code} 처리 오류: {e}")
             # 실패한 종목도 표에 기록
@@ -721,9 +930,12 @@ async def run(
                 })
             all_signals[code] = []
             all_trades[code] = []
+            # 실패한 종목의 차트 경로도 빈 문자열로 등록
+            if generate_charts:
+                chart_paths[code] = ""
     # 캡처된 로그 텍스트
     logs_text = log_buffer.getvalue() if debug_logs else ""
-    return all_rows, all_signals, all_trades, logs_text
+    return all_rows, all_signals, all_trades, logs_text, chart_paths
 
 
 def main():
@@ -734,6 +946,7 @@ def main():
     parser.add_argument("--export", choices=["csv", "txt"], default=None, help="결과를 파일로 저장 (csv|txt)")
     parser.add_argument("--csv-path", default="signal_replay.csv", help="CSV 저장 경로 (기본: signal_replay.csv)")
     parser.add_argument("--txt-path", default="signal_replay.txt", help="TXT 저장 경로 (기본: signal_replay.txt)")
+    parser.add_argument("--charts", action="store_true", help="3분봉 차트 생성 (거래량, 이등분선, 매수/매도 포인트 포함)")
 
     args = parser.parse_args()
 
@@ -741,12 +954,13 @@ def main():
         return str(code).strip().zfill(6)
 
     # 기본값 (요청하신 2025-08-08, 4개 종목/시각)
-    #DEFAULT_DATE = "20250814"
-    #DEFAULT_CODES = "086280,047770,026040,107600,214450,033340,230360,226950,336260,298380,208640,445680,073010,084370,009270,017510,095610,240810,332290,408900,077970,078520,460930"
+    DEFAULT_DATE = "20250814"
+    DEFAULT_CODES = "086280,047770,026040,107600,214450,033340,230360,226950,336260,298380,208640,445680,073010,084370,009270,017510,095610,240810,332290,408900,077970,078520,460930"
+    #DEFAULT_CODES = "336260"
 
-    DEFAULT_DATE = "20250813"
+    #DEFAULT_DATE = "20250813"
     #DEFAULT_CODES = "034220"
-    DEFAULT_CODES = "036200,026040,240810,097230,034220,213420,090460,036010,104040,087010"
+    #DEFAULT_CODES = "036200,026040,240810,097230,034220,213420,090460,036010,104040,087010"
 
     DEFAULT_TIMES = ""
 
@@ -792,13 +1006,19 @@ def main():
     }
     log_level = level_map.get(DEFAULT_LOG_LEVEL.upper(), logging.INFO)
 
-    rows, all_signals, all_trades, logs_text = asyncio.run(
+    # 차트 생성 옵션 확인
+    generate_charts = args.charts
+    if generate_charts:
+        logger.info("📊 차트 생성 모드 활성화")
+
+    rows, all_signals, all_trades, logs_text, chart_paths = asyncio.run(
         run(
             date_str,
             codes_union,
             times_map,
             debug_logs=DEFAULT_LOG_DEBUG,
             log_level=log_level,
+            generate_charts=generate_charts,
         )
     )
 
@@ -818,11 +1038,14 @@ def main():
                 code_to_rows[r.get("stock_code", "")] .append(r)
 
             lines: list[str] = []
-            # 전체 승패 요약 (profit_rate > 0 승, < 0 패, =0 제외)
+            # 전체 승패 요약 (profit_rate > 0 승, < 0 패, =0 제외, 09시 이전 거래 제외)
             total_wins = 0
             total_losses = 0
             for _code, _trades in all_trades.items():
                 for tr in _trades:
+                    # 09시 이전 거래는 승패 계산에서 제외
+                    if tr.get('excluded_from_stats', False):
+                        continue
                     try:
                         pr = float(tr.get('profit_rate', 0.0))
                     except Exception:
@@ -835,10 +1058,13 @@ def main():
             lines.append("")
             for code in codes_union:
                 lines.append(f"=== {code} - {date_str} 눌림목(3분) 신호 재현 ===")
-                # 종목별 승패 요약
+                # 종목별 승패 요약 (09시 이전 거래 제외)
                 code_wins = 0
                 code_losses = 0
                 for tr in all_trades.get(code, []):
+                    # 09시 이전 거래는 승패 계산에서 제외
+                    if tr.get('excluded_from_stats', False):
+                        continue
                     try:
                         pr = float(tr.get('profit_rate', 0.0))
                     except Exception:
@@ -898,6 +1124,20 @@ def main():
             print(f"\n📄 TXT 저장 완료: {args.txt_path}")
         except Exception as e:
             print(f"\n❌ TXT 저장 실패: {e}")
+
+    # 차트 생성 결과 출력
+    if generate_charts:
+        print(f"\n📊 차트 생성 결과:")
+        chart_success_count = sum(1 for path in chart_paths.values() if path)
+        print(f"  - 전체 종목: {len(codes_union)}개")
+        print(f"  - 차트 생성 성공: {chart_success_count}개")
+        print(f"  - 차트 생성 실패: {len(codes_union) - chart_success_count}개")
+        
+        if chart_success_count > 0:
+            print(f"\n📁 생성된 차트 파일:")
+            for code, path in chart_paths.items():
+                if path:
+                    print(f"  - {code}: {path}")
 
 
 if __name__ == "__main__":

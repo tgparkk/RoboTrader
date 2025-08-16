@@ -68,15 +68,15 @@ class TradingDecisionEngine:
             if self._is_already_holding(stock_code):
                 return False, f"이미 보유 중인 종목 (매수 제외)"
             
-            # 당일 손실 2회 이상이면 신규 매수 차단
-            try:
-                if self.db_manager and hasattr(self.db_manager, 'get_today_real_loss_count'):
-                    today_losses = self.db_manager.get_today_real_loss_count(stock_code)
-                    if today_losses >= 2:
-                        return False, "당일 손실 2회 초과(매수 제한)"
-            except Exception:
-                # 조회 실패 시 차단하지 않음
-                pass
+            # 당일 손실 2회 이상이면 신규 매수 차단 (해제됨)
+            # try:
+            #     if self.db_manager and hasattr(self.db_manager, 'get_today_real_loss_count'):
+            #         today_losses = self.db_manager.get_today_real_loss_count(stock_code)
+            #         if today_losses >= 2:
+            #             return False, "당일 손실 2회 초과(매수 제한)"
+            # except Exception:
+            #     # 조회 실패 시 차단하지 않음
+            #     pass
 
             # 전략 1: 가격박스 + 이등분선 매수 신호 (1분봉 사용)
             #signal_result, reason = self._check_price_box_bisector_buy_signal(combined_data)
@@ -755,31 +755,31 @@ class TradingDecisionEngine:
             else:
                 # datetime 인덱스가 없으면 인덱스를 생성
                 data = data.copy()
-                data.index = pd.date_range(start='09:00', periods=len(data), freq='1min')
+                data.index = pd.date_range(start='08:00', periods=len(data), freq='1min')
             
             # HTS와 동일하게 시간 기준 5분봉으로 그룹핑
             data_5min_list = []
             
-            # 시간을 분 단위로 변환 (09:00 = 0분 기준)
+            # 시간을 분 단위로 변환 (08:00 = 0분 기준, NXT 거래소 지원)
             if hasattr(data.index, 'hour'):
-                data['minutes_from_9am'] = (data.index.hour - 9) * 60 + data.index.minute
+                data['minutes_from_8am'] = (data.index.hour - 8) * 60 + data.index.minute
             else:
                 # datetime 인덱스가 아닌 경우 순차적으로 처리
-                data['minutes_from_9am'] = range(len(data))
+                data['minutes_from_8am'] = range(len(data))
             
             # 5분 단위로 그룹핑 (0-4분→그룹0, 5-9분→그룹1, ...)
             # 하지만 실제로는 5분간의 데이터를 포함해야 함
-            grouped = data.groupby(data['minutes_from_9am'] // 5)
+            grouped = data.groupby(data['minutes_from_8am'] // 5)
             
             for group_id, group in grouped:
                 if len(group) > 0:
                     # 5분봉 시간은 해당 구간의 끝 + 1분 (5분간 포함)
-                    # 예: 09:00~09:04 → 09:05, 09:05~09:09 → 09:10
+                    # 예: 08:00~08:04 → 08:05, 08:05~08:09 → 08:10
                     base_minute = group_id * 5
                     end_minute = base_minute + 5  # 5분 후가 캔들 시간
                     
-                    # 09:00 기준으로 계산한 절대 시간
-                    target_hour = 9 + (end_minute // 60)
+                    # 08:00 기준으로 계산한 절대 시간
+                    target_hour = 8 + (end_minute // 60)
                     target_min = end_minute % 60
                     
                     # 실제 5분봉 시간 생성 (구간 끝 + 1분)
