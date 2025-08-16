@@ -43,7 +43,7 @@ def get_stock_data_with_fallback(stock_code: str, input_date: str, input_hour: s
     Returns:
         Tuple[pd.DataFrame, pd.DataFrame]: (종목요약정보, 분봉데이터) 또는 None
     """
-    div_codes = ["UN", "J", "NX"]  # 통합 → KRX → NXT 순서
+    div_codes = ["NX", "J"]  # 통합 → KRX → NXT 순서
     
     for div_code in div_codes:
         try:
