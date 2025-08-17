@@ -171,8 +171,8 @@ class TradingDecisionEngine:
                 if data_3min is not None and not data_3min.empty:
                     signals_3m = PullbackCandlePattern.generate_trading_signals(
                         data_3min,
-                        enable_candle_shrink_expand=True,
-                        enable_divergence_precondition=True,
+                        enable_candle_shrink_expand=False,  # ✅ signal_replay.py와 일치
+                        enable_divergence_precondition=False,  # ✅ signal_replay.py와 일치
                         enable_overhead_supply_filter=True,
                         candle_expand_multiplier=1.10,
                         overhead_lookback=10,
@@ -888,11 +888,11 @@ class TradingDecisionEngine:
                 self.logger.warning(f"📊 3분봉 데이터 부족: {len(data_3min) if data_3min is not None else 0}개 (최소 10개 필요)")
                 return False, f"3분봉 데이터 부족 ({len(data_3min) if data_3min is not None else 0}/10)"
             
-            # 눌림목 캔들패턴 신호 계산 (3분봉 기준, 개선 옵션 활성화)
+            # 눌림목 캔들패턴 신호 계산 (3분봉 기준, signal_replay.py와 동일 설정)
             signals = PullbackCandlePattern.generate_trading_signals(
                 data_3min,
-                enable_candle_shrink_expand=True,
-                enable_divergence_precondition=True,
+                enable_candle_shrink_expand=False,  # ✅ signal_replay.py와 일치
+                enable_divergence_precondition=False,  # ✅ signal_replay.py와 일치
                 enable_overhead_supply_filter=True,
                 candle_expand_multiplier=1.10,
                 overhead_lookback=10,
@@ -967,11 +967,11 @@ class TradingDecisionEngine:
             if data_3min is None or data_3min.empty:
                 return {'error': '데이터 없음'}
             
-            # signal_replay와 동일한 방식으로 신호 계산 (개선 옵션 활성화)
+            # signal_replay와 동일한 방식으로 신호 계산
             signals = PullbackCandlePattern.generate_trading_signals(
                 data_3min,
-                enable_candle_shrink_expand=True,
-                enable_divergence_precondition=True,
+                enable_candle_shrink_expand=False,  # ✅ signal_replay.py와 일치
+                enable_divergence_precondition=False,  # ✅ signal_replay.py와 일치
                 enable_overhead_supply_filter=True,
                 candle_expand_multiplier=1.10,
                 overhead_lookback=10,
