@@ -401,7 +401,7 @@ class PullbackCandlePattern:
             return SignalStrength(
                 signal_type=SignalType.STRONG_BUY,
                 confidence=score,
-                target_profit=0.07,  # 7% 목표 (5-10% 범위)
+                target_profit=0.03,  # 3% 목표 (기존 7% → 3%)
                 reasons=reasons,
                 volume_ratio=volume_analysis.volume_ratio,
                 bisector_status=bisector_status
@@ -410,7 +410,7 @@ class PullbackCandlePattern:
             return SignalStrength(
                 signal_type=SignalType.CAUTIOUS_BUY,
                 confidence=score,
-                target_profit=0.03,  # 3% 목표 (2-3% 범위)
+                target_profit=0.02,  # 2% 목표 (기존 3% → 2%)
                 reasons=reasons,
                 volume_ratio=volume_analysis.volume_ratio,
                 bisector_status=bisector_status
@@ -1232,7 +1232,7 @@ class PullbackCandlePattern:
             # 이등분선 계산
             bisector_line = BisectorLine.calculate_bisector_line(data['high'], data['low'])
             
-            # 결과 DataFrame 초기화 (기존 형식 유지)
+            # 결과 DataFrame 초기화 (기존 형식 유지 + 신호 강도 정보 추가)
             signals = pd.DataFrame(index=data.index)
             signals['buy_pullback_pattern'] = False
             signals['buy_bisector_recovery'] = False  
@@ -1241,6 +1241,10 @@ class PullbackCandlePattern:
             signals['stop_entry_low_break'] = False
             signals['take_profit_3pct'] = False
             signals['bisector_line'] = bisector_line
+            # 신호 강도 정보 컬럼 추가
+            signals['signal_type'] = ''
+            signals['confidence'] = 0.0
+            signals['target_profit'] = 0.0
             
             # 포지션 시뮬레이션 변수
             in_position = False
@@ -1264,6 +1268,11 @@ class PullbackCandlePattern:
                             signals.iloc[i, signals.columns.get_loc('buy_pullback_pattern')] = True
                         else:  # CAUTIOUS_BUY
                             signals.iloc[i, signals.columns.get_loc('buy_bisector_recovery')] = True
+                        
+                        # 신호 강도 정보 저장
+                        signals.iloc[i, signals.columns.get_loc('signal_type')] = signal_strength.signal_type.value
+                        signals.iloc[i, signals.columns.get_loc('confidence')] = signal_strength.confidence
+                        signals.iloc[i, signals.columns.get_loc('target_profit')] = signal_strength.target_profit
                         
                         in_position = True
                         entry_price = float(current_data['close'].iloc[-1])

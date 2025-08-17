@@ -151,6 +151,7 @@ class TradingStock:
     # 메타 정보
     selection_reason: str = ""
     last_update: datetime = field(default_factory=datetime.now)
+    target_profit_rate: float = 0.015  # 목표수익률 (기본값 1.5%)
     
     def change_state(self, new_state: StockState, reason: str = ""):
         """상태 변경 및 이력 기록"""

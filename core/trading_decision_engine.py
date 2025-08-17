@@ -7,6 +7,7 @@ from datetime import datetime
 
 from utils.logger import setup_logger
 from utils.korean_time import now_kst
+from core.indicators.pullback_candle_pattern import SignalType
 
 
 class TradingDecisionEngine:
@@ -246,6 +247,16 @@ class TradingDecisionEngine:
                     trading_stock._virtual_buy_record_id = buy_record_id
                     trading_stock._virtual_buy_price = current_price
                     trading_stock._virtual_quantity = quantity
+                    
+                    # 신호 강도에 따른 목표수익률 설정
+                    if "눌림목" in buy_reason:
+                        try:
+                            target_rate = self._get_target_profit_rate(data_3min, buy_reason)
+                            trading_stock.target_profit_rate = target_rate
+                            self.logger.info(f"📊 목표수익률 설정: {target_rate*100:.0f}% ({buy_reason})")
+                        except Exception as e:
+                            self.logger.warning(f"목표수익률 설정 실패, 기본값 사용: {e}")
+                            trading_stock.target_profit_rate = 0.02
                     
                     # 포지션 상태로 변경 (가상)
                     trading_stock.set_position(quantity, current_price)
@@ -622,8 +633,51 @@ class TradingDecisionEngine:
             self.logger.error(f"❌ 다중볼린저밴드 손절 조건 확인 오류: {e}")
             return False, ""
     
+    def _get_target_profit_rate(self, data_3min: pd.DataFrame, signal_type: str) -> float:
+        """신호 강도에 따른 목표수익률 계산"""
+        try:
+            from core.indicators.pullback_candle_pattern import PullbackCandlePattern
+            
+            # 신호 강도 정보 계산
+            signals_improved = PullbackCandlePattern.generate_trading_signals(
+                data_3min,
+                enable_candle_shrink_expand=False,
+                enable_divergence_precondition=False,
+                enable_overhead_supply_filter=True,
+                use_improved_logic=True,  # 개선된 로직 사용으로 신호 강도 정보 포함
+                candle_expand_multiplier=1.10,
+                overhead_lookback=10,
+                overhead_threshold_hits=2,
+                debug=False,
+            )
+            
+            if signals_improved.empty:
+                return 0.015  # 기본값 1.5%
+            
+            # 마지막 신호의 강도 정보 확인
+            last_row = signals_improved.iloc[-1]
+            
+            if 'signal_type' in signals_improved.columns:
+                signal_type_val = last_row['signal_type']
+                if signal_type_val == SignalType.STRONG_BUY.value:
+                    return 0.03  # 3%
+                elif signal_type_val == SignalType.CAUTIOUS_BUY.value:
+                    return 0.02  # 2%
+            
+            # target_profit 컬럼이 있으면 직접 사용
+            if 'target_profit' in signals_improved.columns:
+                target = last_row['target_profit']
+                if pd.notna(target) and target > 0:
+                    return float(target)
+                    
+            return 0.015  # 기본값 1.5%
+            
+        except Exception as e:
+            self.logger.warning(f"목표수익률 계산 실패, 기본값 사용: {e}")
+            return 0.02
+    
     def _check_profit_target(self, trading_stock, current_price) -> Tuple[bool, str]:
-        """수익실현 조건 확인 (두 전략 모두)"""
+        """수익실현 조건 확인 (신뢰도별 차등 목표수익 적용)"""
         try:
             if not trading_stock.position:
                 return False, ""
@@ -631,8 +685,11 @@ class TradingDecisionEngine:
             buy_price = trading_stock.position.avg_price
             profit_rate = (current_price - buy_price) / buy_price
             
-            if profit_rate >= 0.020:
-                return True, "매수가 대비 +2.0% 수익실현"
+            # 신뢰도별 차등 목표수익률 사용
+            target_rate = getattr(trading_stock, 'target_profit_rate', 0.02)
+            
+            if profit_rate >= target_rate:
+                return True, f"매수가 대비 +{target_rate*100:.0f}% 수익실현"
             
             return False, ""
             
@@ -894,6 +951,7 @@ class TradingDecisionEngine:
                 enable_candle_shrink_expand=False,  # ✅ signal_replay.py와 일치
                 enable_divergence_precondition=False,  # ✅ signal_replay.py와 일치
                 enable_overhead_supply_filter=True,
+                use_improved_logic=True,  # ✅ 개선된 로직 사용으로 신호 강도 정보 포함
                 candle_expand_multiplier=1.10,
                 overhead_lookback=10,
                 overhead_threshold_hits=2,

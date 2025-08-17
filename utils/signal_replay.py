@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional
 import io
 import logging
@@ -34,15 +33,9 @@ import pandas as pd
 
 from utils.logger import setup_logger
 from utils.korean_time import KST
-from visualization.data_processor import DataProcessor
-from core.indicators.pullback_candle_pattern import PullbackCandlePattern
-from core.indicators.bisector_line import BisectorLine
-# 실전 흐름 기준: 현재 리플레이는 눌림목(3분)만 사용하여 실전 규칙을 재현합니다.
+from core.indicators.pullback_candle_pattern import PullbackCandlePattern, SignalType
 from api.kis_api_manager import KISAPIManager
-from visualization.chart_renderer import ChartRenderer
 from visualization.data_processor import DataProcessor
-from visualization.strategy_manager import StrategyManager
-from visualization.signal_calculator import SignalCalculator
 
 
 try:
@@ -53,12 +46,6 @@ except Exception:
     pass
 
 logger = setup_logger(__name__)
-
-
-@dataclass
-class TimeCheck:
-    stock_code: str
-    check_times: List[str]  # ["HH:MM", ...]
 
 
 def parse_times_mapping(arg_value: str) -> Dict[str, List[str]]:
@@ -83,30 +70,84 @@ def parse_times_mapping(arg_value: str) -> Dict[str, List[str]]:
     return mapping
 
 
+def get_target_profit_from_signal_strength(sig_improved: pd.DataFrame, index: int) -> float:
+    """신호 강도 정보에서 목표수익률 추출"""
+    try:
+        if sig_improved is None or sig_improved.empty or index >= len(sig_improved):
+            logger.debug(f"신호 강도 정보 없음: empty={sig_improved is None or sig_improved.empty}, index={index}, len={len(sig_improved) if sig_improved is not None else 0}")
+            return 0.015  # 기본값 1.5%
+        
+        # 컬럼 정보 출력
+        logger.debug(f"신호 강도 컬럼: {list(sig_improved.columns) if sig_improved is not None else 'None'}")
+        
+        # 신호 강도 정보에서 목표수익률 확인
+        if 'signal_type' in sig_improved.columns:
+            signal_type = sig_improved.iloc[index]['signal_type']
+            logger.debug(f"신호 타입: {signal_type}")
+            if signal_type == SignalType.STRONG_BUY.value:
+                logger.debug("STRONG_BUY 신호 → 3% 목표수익률")
+                return 0.03  # 3%
+            elif signal_type == SignalType.CAUTIOUS_BUY.value:
+                logger.debug("CAUTIOUS_BUY 신호 → 2% 목표수익률")
+                return 0.02  # 2%
+        
+        # target_profit 컬럼이 있으면 직접 사용
+        if 'target_profit' in sig_improved.columns:
+            target = sig_improved.iloc[index]['target_profit']
+            if pd.notna(target) and target > 0:
+                logger.debug(f"target_profit 컬럼에서 {target*100:.0f}% 목표수익률 추출")
+                return float(target)
+                
+        logger.debug("기본값 1.5% 목표수익률 사용")
+        return 0.015  # 기본값 1.5%
+    except Exception as e:
+        logger.debug(f"목표수익률 추출 오류: {e}")
+        return 0.015  # 기본값 1.5%
+
+
 def calculate_trading_signals_once(df_3min: pd.DataFrame, *, debug_logs: bool = False, 
                                  logger: Optional[logging.Logger] = None,
-                                 log_level: int = logging.INFO) -> pd.DataFrame:
+                                 log_level: int = logging.INFO) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """3분봉 데이터에 대해 한 번만 신호를 계산하여 재사용.
     
     모든 함수에서 공통으로 사용하는 신호 계산 함수
     09시 이전 데이터는 PullbackCandlePattern 내부에서 제외
+    
+    Returns:
+        Tuple[pd.DataFrame, pd.DataFrame]: (기본 신호, 신호 강도 정보)
     """
     if df_3min is None or df_3min.empty or 'datetime' not in df_3min.columns:
-        return pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame()
         
-    return PullbackCandlePattern.generate_trading_signals(
+    signals = PullbackCandlePattern.generate_trading_signals(
         df_3min,
         enable_candle_shrink_expand=False,
         enable_divergence_precondition=False,
         enable_overhead_supply_filter=True,
+        use_improved_logic=True,  # ✅ main.py와 일치하도록 개선된 로직 사용
         candle_expand_multiplier=1.10,
         overhead_lookback=10,
         overhead_threshold_hits=2,
         debug=debug_logs,
         logger=logger,
         log_level=log_level,
-
     )
+    
+    # 이제 signals에 신호 강도 정보가 포함되어 있음 (use_improved_logic=True)
+    if logger:
+        logger.debug(f"신호 계산 완료: {len(signals)}행, 컬럼: {list(signals.columns) if signals is not None and not signals.empty else 'empty'}")
+        
+        # 신호 강도 정보가 있는지 확인
+        if signals is not None and not signals.empty:
+            has_signal_type = 'signal_type' in signals.columns
+            has_target_profit = 'target_profit' in signals.columns
+            logger.debug(f"신호 강도 컬럼 확인: signal_type={has_signal_type}, target_profit={has_target_profit}")
+            if has_signal_type:
+                non_empty_signals = signals[signals['signal_type'] != '']
+                logger.debug(f"비어있지 않은 신호 개수: {len(non_empty_signals)}")
+    
+    # signals를 두 번 반환 (기존 코드 호환성 유지)
+    return signals, signals
 
 
 def _convert_to_3min_data(data: pd.DataFrame) -> Optional[pd.DataFrame]:
@@ -189,85 +230,6 @@ def locate_row_for_time(df_3min: pd.DataFrame, target_date: str, hhmm: str) -> O
         return None
 
 
-def analyze_unmet_conditions_at(
-    df_3min: pd.DataFrame,
-    idx: int
-) -> List[str]:
-    """해당 3분봉 인덱스에서 눌림목 매수 조건 중 무엇이 미충족인지 요약.
-    PullbackCandlePattern.generate_trading_signals 내부 주요 조건을 재현한다.
-    """
-    unmet: List[str] = []
-    try:
-        if idx is None or idx < 0 or idx >= len(df_3min):
-            return ["인덱스 범위 오류"]
-
-        required_cols = ["open", "high", "low", "close", "volume"]
-        if not all(col in df_3min.columns for col in required_cols):
-            return ["필수 컬럼 누락"]
-
-        # 이등분선 계산
-        bisector_line = BisectorLine.calculate_bisector_line(df_3min["high"], df_3min["low"]) if "high" in df_3min.columns and "low" in df_3min.columns else None
-
-        retrace_lookback = 3
-        low_vol_ratio = 0.25
-        stop_leeway = 0.002  # 사용하진 않지만 원본 파라미터 유지
-
-        # 현재 캔들
-        row = df_3min.iloc[idx]
-        current_open = float(row["open"]) if pd.notna(row["open"]) else None
-        current_close = float(row["close"]) if pd.notna(row["close"]) else None
-        current_volume = float(row["volume"]) if pd.notna(row["volume"]) else None
-
-        # 이등분선 관련 (안전한 인덱싱)
-        bl = None
-        if bisector_line is not None and len(bisector_line) > idx and pd.notna(bisector_line.iloc[idx]):
-            bl = float(bisector_line.iloc[idx])
-        above_bisector = (bl is not None) and (current_close is not None) and (current_close >= bl)
-        crosses_bisector_up = (bl is not None) and (current_open is not None) and (current_close is not None) and (current_open <= bl <= current_close)
-
-        is_bullish = (current_close is not None) and (current_open is not None) and (current_close > current_open)
-
-        # 최근 10봉 평균 거래량
-        recent_start = max(0, idx - 10)
-        avg_recent_vol = float(df_3min["volume"].iloc[recent_start:idx].mean()) if idx > 0 else 0.0
-
-        # 저거래 3봉 구간(직전 3개)
-        if idx >= retrace_lookback:
-            window = df_3min.iloc[idx - retrace_lookback:idx]
-            # rolling baseline(최근 50봉 최대)
-            baseline_now = float(df_3min["volume"].iloc[max(0, idx - 50):idx + 1].max()) if idx > 0 else float(df_3min["volume"].iloc[:1].max())
-            low_volume_all = bool((window["volume"] < baseline_now * low_vol_ratio).all()) if baseline_now > 0 else False
-            # 연속 하락
-            close_diff = window["close"].diff().fillna(0)
-            # 최근 3봉 모두 전봉 대비 하락이어야 함: 두 개의 유효 비교(-2, -1)
-            downtrend_all = bool((close_diff.iloc[1:] < 0).all()) if len(close_diff) >= 2 else False
-            is_low_volume_retrace = low_volume_all and downtrend_all
-        else:
-            is_low_volume_retrace = False
-
-        # 거래량 회복
-        max_low_vol = float(df_3min["volume"].iloc[max(0, idx - retrace_lookback):idx].max()) if idx > 0 else 0.0
-        volume_recovers = (current_volume is not None) and (
-            (current_volume > max_low_vol) or (current_volume > avg_recent_vol)
-        )
-
-        # 미충족 항목 기록
-        # 1) 저거래 조정 3봉
-        if not is_low_volume_retrace:
-            unmet.append("저거래 하락 2봉 미충족")
-        # 2) 회복 양봉
-        if not is_bullish:
-            unmet.append("회복 양봉 아님")
-        # 3) 거래량 회복
-        if not volume_recovers:
-            unmet.append("거래량 회복 미충족")
-        # 4) 이등분선 지지/회복
-        if not (above_bisector or crosses_bisector_up):
-            unmet.append("이등분선 지지/회복 미충족")
-
-        return unmet
-    except Exception as e:
-        return [f"분석 오류: {e}"]
 
 
 async def fetch_and_prepare_data(stock_code: str, target_date: str) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
@@ -314,7 +276,7 @@ def evaluate_signals_at_times(
         return results
 
     # 공통 신호 계산 함수 사용
-    signals = calculate_trading_signals_once(df_3min, debug_logs=debug_logs, logger=logger, log_level=log_level)
+    signals, signals_improved = calculate_trading_signals_once(df_3min, debug_logs=debug_logs, logger=logger, log_level=log_level)
     for t in times:
         row_idx = locate_row_for_time(df_3min, target_date, t)
         if row_idx is None:
@@ -363,7 +325,7 @@ def list_all_buy_signals(df_3min: pd.DataFrame, *, logger: Optional[logging.Logg
     if df_3min is None or df_3min.empty or 'datetime' not in df_3min.columns:
         return out
     # 공통 신호 계산 함수 사용
-    sig = calculate_trading_signals_once(df_3min, debug_logs=False)
+    sig, sig_improved = calculate_trading_signals_once(df_3min, debug_logs=False)
     if sig is None or sig.empty:
         sig = pd.DataFrame(index=df_3min.index)
     has_pb = sig.get('buy_pullback_pattern', pd.Series([False]*len(df_3min)))
@@ -386,9 +348,9 @@ def list_all_buy_signals(df_3min: pd.DataFrame, *, logger: Optional[logging.Logg
 
 def generate_chart_for_stock(stock_code: str, target_date: str, df_3min: pd.DataFrame, 
                            df_1min: Optional[pd.DataFrame] = None, 
-                           chart_renderer: Optional[ChartRenderer] = None,
-                           strategy_manager: Optional[StrategyManager] = None,
-                           signal_calculator: Optional[SignalCalculator] = None,
+                           chart_renderer = None,
+                           strategy_manager = None,
+                           signal_calculator = None,
                            logger: Optional[logging.Logger] = None) -> Optional[str]:
     """단일 종목의 3분봉 차트를 생성 (거래량, 이등분선, 매수/매도 포인트 포함)"""
     try:
@@ -402,10 +364,13 @@ def generate_chart_for_stock(stock_code: str, target_date: str, df_3min: pd.Data
             
         # 차트 렌더러 초기화
         if chart_renderer is None:
+            from visualization.chart_renderer import ChartRenderer
             chart_renderer = ChartRenderer()
         if strategy_manager is None:
+            from visualization.strategy_manager import StrategyManager
             strategy_manager = StrategyManager()
         if signal_calculator is None:
+            from visualization.signal_calculator import SignalCalculator
             signal_calculator = SignalCalculator()
             
         logger.info(f"📊 차트 생성 시작: {stock_code} ({target_date})")
@@ -431,7 +396,7 @@ def generate_chart_for_stock(stock_code: str, target_date: str, df_3min: pd.Data
             
         # 매수/매도 신호 계산
         try:
-            signals = calculate_trading_signals_once(df_3min, debug_logs=False)
+            signals, signals_improved = calculate_trading_signals_once(df_3min, debug_logs=False)
             
             if signals is not None and not signals.empty:
                 # 매수 신호
@@ -517,7 +482,7 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
         return trades
     
     # 공통 신호 계산 함수 사용
-    sig = calculate_trading_signals_once(df_3min, debug_logs=False)
+    sig, sig_improved = calculate_trading_signals_once(df_3min, debug_logs=False)
     if sig is None or sig.empty:
         sig = pd.DataFrame(index=df_3min.index)
 
@@ -532,6 +497,7 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
     entry_type = None
     entry_low = None
     entry_datetime = None
+    target_profit_rate = 0.015  # 기본 목표수익률 1.5%
 
     # 당일 손실 2회 시 신규 진입 차단 (해제됨)
     daily_loss_count = 0
@@ -598,6 +564,11 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                         entry_datetime = current_time
                         entry_low = pending_entry.get('entry_low', None)
                         entry_type = pending_entry.get('type', None)
+                        
+                        # 신호 강도 기반 목표수익률 설정
+                        target_profit_rate = get_target_profit_from_signal_strength(sig_improved, j)
+                        logger.debug(f"매수 진입 {j}: 목표수익률 {target_profit_rate*100:.0f}% 설정")
+                        
                         pending_entry = None
             else:
                 # 매도 체크 (1분마다)
@@ -606,9 +577,9 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                 # (1) 긴급 손절: -1%
                 if entry_price is not None and current_price <= entry_price * (1.0 - 0.010):
                     exit_reason = 'emergency_stop_1pct'
-                # (2) 기본 익절: +2.0%  
-                elif entry_price is not None and current_price >= entry_price * (1.0 + 0.020):
-                    exit_reason = 'basic_profit_2pct'
+                # (2) 신뢰도별 차등 익절
+                elif entry_price is not None and current_price >= entry_price * (1.0 + target_profit_rate):
+                    exit_reason = f'profit_{target_profit_rate*100:.0f}pct'
                 # (3) 진입저가 실시간 체크: -0.2%
                 elif entry_low is not None and entry_low > 0 and current_price < entry_low * 0.998:
                     exit_reason = 'realtime_entry_low_break'
@@ -680,6 +651,11 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                     entry_time = hhmm
                     entry_low = pending_entry.get('entry_low', None)
                     entry_type = pending_entry.get('type', None)
+                    
+                    # 신호 강도 기반 목표수익률 설정
+                    target_profit_rate = get_target_profit_from_signal_strength(sig_improved, j)
+                    logger.debug(f"3분봉 매수 진입 {j}: 목표수익률 {target_profit_rate*100:.0f}% 설정")
+                    
                     pending_entry = None
                 # 현재 봉이 신호 봉이면 '대기'만 등록(진입은 다음 봉에서)
                 elif bool(buy_pb.iloc[i]) or bool(buy_rc.iloc[i]):
@@ -695,9 +671,9 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                 # (1) 긴급 손절: -1%
                 if entry_price is not None and c <= entry_price * (1.0 - 0.010):
                     exit_reason = 'emergency_stop_1pct'
-                # (2) 기본 익절: +2.0%  
-                elif entry_price is not None and c >= entry_price * (1.0 + 0.020):
-                    exit_reason = 'basic_profit_2pct'
+                # (2) 신뢰도별 차등 익절
+                elif entry_price is not None and c >= entry_price * (1.0 + target_profit_rate):
+                    exit_reason = f'profit_{target_profit_rate*100:.0f}pct'
                 # (3) 진입저가 실시간 체크: -0.2%
                 elif entry_low is not None and entry_low > 0 and c < entry_low * 0.998:
                     exit_reason = 'realtime_entry_low_break'
@@ -868,6 +844,9 @@ async def run(
     signal_calculator = None
     if generate_charts:
         try:
+            from visualization.chart_renderer import ChartRenderer
+            from visualization.strategy_manager import StrategyManager
+            from visualization.signal_calculator import SignalCalculator
             chart_renderer = ChartRenderer()
             strategy_manager = StrategyManager()
             signal_calculator = SignalCalculator()
@@ -954,13 +933,13 @@ def main():
         return str(code).strip().zfill(6)
 
     # 기본값 (요청하신 2025-08-08, 4개 종목/시각)
-    DEFAULT_DATE = "20250814"
-    DEFAULT_CODES = "086280,047770,026040,107600,214450,033340,230360,226950,336260,298380,208640,445680,073010,084370,009270,017510,095610,240810,332290,408900,077970,078520,460930"
+    #DEFAULT_DATE = "20250814"
+    #DEFAULT_CODES = "086280,047770,026040,107600,214450,033340,230360,226950,336260,298380,208640,445680,073010,084370,009270,017510,095610,240810,332290,408900,077970,078520,460930"
     #DEFAULT_CODES = "336260"
 
-    #DEFAULT_DATE = "20250813"
+    DEFAULT_DATE = "20250813"
     #DEFAULT_CODES = "034220"
-    #DEFAULT_CODES = "036200,026040,240810,097230,034220,213420,090460,036010,104040,087010"
+    DEFAULT_CODES = "036200,026040,240810,097230,034220,213420,090460,036010,104040,087010"
 
     DEFAULT_TIMES = ""
 
