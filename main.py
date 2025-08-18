@@ -92,107 +92,7 @@ class DayTradingBot:
         except Exception:
             return float(int(price))
 
-    def _determine_entry_price_like_virtual(self, combined_data, buy_reason: str) -> float:
-        """가상 매수와 동일한 half-price 우선 규칙 적용, 실패 시 최신 종가"""
-        try:
-            import pandas as pd
-            from core.indicators.pullback_candle_pattern import PullbackCandlePattern
 
-            # 1분→3분 변환
-            df = combined_data
-            if df is None or len(df) < 3:
-                return float(combined_data['close'].iloc[-1])
-
-            # datetime 인덱스 보정
-            if 'datetime' in df.columns:
-                base = df.copy()
-                base['datetime'] = pd.to_datetime(base['datetime'])
-                base = base.set_index('datetime')
-            elif 'date' in df.columns and 'time' in df.columns:
-                base = df.copy()
-                base['datetime'] = pd.to_datetime(base['date'].astype(str) + ' ' + base['time'].astype(str))
-                base = base.set_index('datetime')
-            else:
-                base = df.copy()
-                base.index = pd.date_range(start='09:00', periods=len(base), freq='1min')
-
-            data_3min = base.resample('3T').agg({'open':'first','high':'max','low':'min','close':'last','volume':'sum'}).dropna().reset_index()
-            if data_3min is None or data_3min.empty:
-                return float(combined_data['close'].iloc[-1])
-
-            signals = PullbackCandlePattern.generate_trading_signals(
-                data_3min,
-                enable_candle_shrink_expand=True,
-                enable_divergence_precondition=True,
-                enable_overhead_supply_filter=True,
-                candle_expand_multiplier=1.10,
-                overhead_lookback=10,
-                overhead_threshold_hits=2,
-            )
-            if signals is None or signals.empty:
-                return float(combined_data['close'].iloc[-1])
-
-            # 최근 신호 인덱스 탐색
-            buy_cols = []
-            if 'buy_bisector_recovery' in signals.columns:
-                buy_cols.append('buy_bisector_recovery')
-            if 'buy_pullback_pattern' in signals.columns:
-                buy_cols.append('buy_pullback_pattern')
-
-            last_idx = None
-            for col in buy_cols:
-                idxs = signals.index[signals[col] == True].tolist()
-                if idxs:
-                    candidate = idxs[-1]
-                    last_idx = candidate if last_idx is None else max(last_idx, candidate)
-
-            if last_idx is None or last_idx < 0 or last_idx >= len(data_3min):
-                return float(combined_data['close'].iloc[-1])
-
-            sig_high = float(data_3min['high'].iloc[last_idx])
-            sig_low = float(data_3min['low'].iloc[last_idx])
-            if not (sig_high > 0 and sig_low > 0 and sig_high >= sig_low):
-                return float(combined_data['close'].iloc[-1])
-
-            half_price = sig_low + (sig_high - sig_low) * 0.5
-            if half_price <= 0 or half_price < sig_low or half_price > sig_high:
-                return float(combined_data['close'].iloc[-1])
-
-            return float(half_price)
-        except Exception:
-            return float(combined_data['close'].iloc[-1])
-
-    async def _calc_buy_quantity(self, stock_code: str, price: float) -> int:
-        """가용 현금 설정 비율 예산만으로 실주문 수량 계산 (KIS 매수가능수량 조회 미사용)"""
-        try:
-            acct = self.api_manager.get_account_balance_quick()
-            if not acct or acct.available_amount <= 0:
-                self.logger.info(f"ℹ️ 수량산출불가: 가용현금 없음 stock={stock_code} avail=0")
-                return 0
-            ratio = 0.20
-            try:
-                ratio = float(getattr(self.config.order_management, 'buy_budget_ratio', 0.20))
-            except Exception:
-                ratio = 0.20
-            target_budget = max(0, acct.available_amount * ratio)
-            if price <= 0:
-                self.logger.info(f"ℹ️ 수량산출불가: 유효하지 않은 매수가 stock={stock_code} price={price}")
-                return 0
-            qty_by_budget = int(target_budget // price)
-            if qty_by_budget < 1:
-                self.logger.info(
-                    f"ℹ️ 수량산출불가: 예산으로 1주 불가 stock={stock_code} avail={acct.available_amount:,.0f} ratio={ratio:.2f} "
-                    f"budget={target_budget:,.0f} price={price:,.0f}"
-                )
-                return 0
-            final_qty = qty_by_budget
-            self.logger.info(
-                f"✅ 수량산출: stock={stock_code} avail={acct.available_amount:,.0f} ratio={ratio:.2f} "
-                f"budget={target_budget:,.0f} price={price:,.0f} qty_budget={qty_by_budget} final={final_qty}"
-            )
-            return final_qty
-        except Exception:
-            return 0
     
     def _check_duplicate_process(self):
         """프로세스 중복 실행 방지"""
@@ -324,7 +224,7 @@ class DayTradingBot:
                 current_time = now_kst()
 
                 # 🆕 장중 조건검색 체크
-                if (current_time - last_condition_check).total_seconds() >= 1/2 * 60:  # 30초
+                if (current_time - last_condition_check).total_seconds() >= 1/6 * 60:  # 10초
                     await self._check_condition_search()
                     last_condition_check = current_time
                 
@@ -582,7 +482,7 @@ class DayTradingBot:
                     last_chart_reset_date = current_date
                     self.logger.info(f"📅 새로운 날 - 차트 생성 카운터 리셋 ({current_date})")
                 
-                # 🆕 장 마감 후 차트 생성 (16:00~24:00 시간대에 두 번만 실행)
+                # 🆕 장 마감 후 차트 생성 (16:00~24:00 시간대에 실행)
                 current_hour = current_time.hour
                 is_chart_time = (16 <= current_hour <= 23) and current_time.weekday() < 5  # 평일 16~24시
                 if is_chart_time and chart_generation_count < 2:  # 16~24시 시간대에만, 최대 2번
