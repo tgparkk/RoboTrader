@@ -175,6 +175,7 @@ class TradingDecisionEngine:
                         enable_candle_shrink_expand=False,  # ✅ signal_replay.py와 일치
                         enable_divergence_precondition=False,  # ✅ signal_replay.py와 일치
                         enable_overhead_supply_filter=True,
+                        use_improved_logic=True,  # ✅ signal_replay.py와 일치
                         candle_expand_multiplier=1.10,
                         overhead_lookback=10,
                         overhead_threshold_hits=2,

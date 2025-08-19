@@ -655,19 +655,107 @@ class IntradayStockManager:
             if not stock_codes:
                 return
             
+            # 데이터 품질 모니터링 초기화
+            total_stocks = len(stock_codes)
+            successful_updates = 0
+            failed_updates = 0
+            quality_issues = []
+            
             # 동시 업데이트 (배치 크기 증가로 효율성 향상)
             batch_size = 20  # 배치 크기 증가
             for i in range(0, len(stock_codes), batch_size):
                 batch = stock_codes[i:i + batch_size]
                 tasks = [self.update_realtime_data(code) for code in batch]
-                await asyncio.gather(*tasks, return_exceptions=True)
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                # 배치 결과 품질 검사
+                for j, result in enumerate(results):
+                    stock_code = batch[j]
+                    if isinstance(result, Exception):
+                        failed_updates += 1
+                        quality_issues.append(f"{stock_code}: 업데이트 실패 - {str(result)[:50]}")
+                    else:
+                        # 데이터 품질 검사
+                        quality_check = self._check_data_quality(stock_code)
+                        if quality_check['has_issues']:
+                            quality_issues.extend([f"{stock_code}: {issue}" for issue in quality_check['issues']])
+                        successful_updates += 1
                 
                 # API 호출 간격 조절 (더 빠른 업데이트)
                 if i + batch_size < len(stock_codes):
                     await asyncio.sleep(0.2)  # 간격 단축
             
+            # 데이터 품질 리포트
+            success_rate = (successful_updates / total_stocks) * 100 if total_stocks > 0 else 0
+            
+            if success_rate < 90:  # 성공률이 90% 미만이면 경고
+                self.logger.warning(f"⚠️ 실시간 데이터 품질 경고: 성공률 {success_rate:.1f}% ({successful_updates}/{total_stocks})")
+                
+            if quality_issues:
+                # 품질 문제가 5개 이상이면 상위 5개만 로깅
+                issues_to_log = quality_issues[:5]
+                self.logger.warning(f"🔍 데이터 품질 이슈 {len(quality_issues)}건: {'; '.join(issues_to_log)}")
+                if len(quality_issues) > 5:
+                    self.logger.warning(f"   (총 {len(quality_issues)}건 중 상위 5건만 표시)")
+            else:
+                self.logger.debug(f"✅ 실시간 데이터 업데이트 완료: {successful_updates}/{total_stocks} ({success_rate:.1f}%)")
+            
         except Exception as e:
             self.logger.error(f"❌ 실시간 데이터 일괄 업데이트 오류: {e}")
+    
+    def _check_data_quality(self, stock_code: str) -> dict:
+        """실시간 데이터 품질 검사"""
+        try:
+            with self._lock:
+                stock_data = self.selected_stocks.get(stock_code)
+            
+            if not stock_data or not stock_data.minute_data:
+                return {'has_issues': True, 'issues': ['데이터 없음']}
+            
+            issues = []
+            data = stock_data.minute_data
+            
+            # 1. 데이터 양 검사 (최소 10개 이상)
+            if len(data) < 10:
+                issues.append(f'데이터 부족 ({len(data)}개)')
+            
+            # 2. 시간 순서 검사 (최근 5개 데이터)
+            if len(data) >= 5:
+                recent_times = [row['time'] for row in data[-5:]]
+                if recent_times != sorted(recent_times):
+                    issues.append('시간 순서 오류')
+            
+            # 3. 가격 이상치 검사 (최근 데이터 기준)
+            if len(data) >= 2:
+                current_price = data[-1].get('close', 0)
+                prev_price = data[-2].get('close', 0)
+                
+                if current_price > 0 and prev_price > 0:
+                    price_change = abs(current_price - prev_price) / prev_price
+                    if price_change > 0.3:  # 30% 이상 변동시 이상치로 판단
+                        issues.append(f'가격 급변동 ({price_change*100:.1f}%)')
+            
+            # 4. 데이터 지연 검사 (최신 데이터가 5분 이상 오래된 경우)
+            if data:
+                from utils.korean_time import now_kst
+                latest_time_str = str(data[-1].get('time', '000000')).zfill(6)
+                current_time = now_kst()
+                
+                try:
+                    latest_hour = int(latest_time_str[:2])
+                    latest_minute = int(latest_time_str[2:4])
+                    latest_time = current_time.replace(hour=latest_hour, minute=latest_minute, second=0, microsecond=0)
+                    
+                    time_diff = (current_time - latest_time).total_seconds()
+                    if time_diff > 300:  # 5분 이상 지연
+                        issues.append(f'데이터 지연 ({time_diff/60:.1f}분)')
+                except Exception:
+                    issues.append('시간 파싱 오류')
+            
+            return {'has_issues': bool(issues), 'issues': issues}
+            
+        except Exception as e:
+            return {'has_issues': True, 'issues': [f'품질검사 오류: {str(e)[:30]}']}
     
     async def _collect_daily_data_for_price_box(self, stock_code: str) -> Optional[pd.DataFrame]:
         """

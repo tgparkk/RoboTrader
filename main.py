@@ -215,6 +215,7 @@ class DayTradingBot:
             self.logger.info("🤖 매매 의사결정 태스크 시작")
             
             last_condition_check = datetime(2000, 1, 1, tzinfo=KST)  # 초기값
+            last_candle_check = datetime(2000, 1, 1, tzinfo=KST)  # 3분봉 확정 시점 체크용
             
             while self.is_running:
                 if not is_market_open():
@@ -222,15 +223,26 @@ class DayTradingBot:
                     continue
                 
                 current_time = now_kst()
-
+                current_minute = current_time.minute
+                
+                # 3분봉 확정 시점 감지 (X0, X3, X6, X9분의 처음 30초)
+                is_candle_completion_time = (current_minute % 3 == 0) and current_time.second <= 30
+                candle_time_changed = (current_time - last_candle_check).total_seconds() >= 180  # 3분 경과
+                
                 # 🆕 장중 조건검색 체크
                 if (current_time - last_condition_check).total_seconds() >= 1/6 * 60:  # 10초
                     await self._check_condition_search()
                     last_condition_check = current_time
                 
-                # 매매 판단 시스템 실행
-                await self._execute_trading_decision()
-                await asyncio.sleep(30)  # 30초마다 체크
+                # 매매 판단 시스템 실행 (3분봉 확정 시점 우선)
+                if is_candle_completion_time and candle_time_changed:
+                    self.logger.debug(f"🕐 3분봉 확정 시점 감지: {current_time.strftime('%H:%M:%S')} - 우선 매매 판단")
+                    await self._execute_trading_decision()
+                    last_candle_check = current_time
+                    await asyncio.sleep(5)  # 3분봉 확정 시점 후 짧은 대기
+                else:
+                    await self._execute_trading_decision()
+                    await asyncio.sleep(15)  # 일반적인 15초 주기
                 
         except Exception as e:
             self.logger.error(f"❌ 매매 의사결정 태스크 오류: {e}")
