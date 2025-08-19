@@ -741,8 +741,10 @@ class IntradayStockManager:
             
             # datetime 컬럼이 있는 경우
             if 'datetime' in chart_data.columns:
+                # pandas timestamp로 변환하여 타입 일치
+                current_minute_start_pd = pd.Timestamp(current_minute_start)
                 # 현재 진행 중인 1분봉 제외 (완성되지 않았으므로)
-                completed_data = chart_data[chart_data['datetime'] < current_minute_start].copy()
+                completed_data = chart_data[chart_data['datetime'] < current_minute_start_pd].copy()
                 
                 excluded_count = len(chart_data) - len(completed_data)
                 if excluded_count > 0:
