@@ -86,10 +86,10 @@ def get_target_profit_from_signal_strength(sig_improved: pd.DataFrame, index: in
             logger.debug(f"신호 타입: {signal_type}")
             if signal_type == SignalType.STRONG_BUY.value:
                 logger.debug("STRONG_BUY 신호 → 3% 목표수익률")
-                return 0.03  # 3%
+                return 0.03  # 최고신호: 3%
             elif signal_type == SignalType.CAUTIOUS_BUY.value:
-                logger.debug("CAUTIOUS_BUY 신호 → 2% 목표수익률")
-                return 0.02  # 2%
+                logger.debug("CAUTIOUS_BUY 신호 → 2.5% 목표수익률")
+                return 0.025  # 중간신호: 2.5%
         
         # target_profit 컬럼이 있으면 직접 사용
         if 'target_profit' in sig_improved.columns:
@@ -98,11 +98,11 @@ def get_target_profit_from_signal_strength(sig_improved: pd.DataFrame, index: in
                 logger.debug(f"target_profit 컬럼에서 {target*100:.0f}% 목표수익률 추출")
                 return float(target)
                 
-        logger.debug("기본값 1.5% 목표수익률 사용")
-        return 0.015  # 기본값 1.5%
+        logger.debug("기본값 2% 목표수익률 사용")
+        return 0.02  # 기본신호: 2%
     except Exception as e:
         logger.debug(f"목표수익률 추출 오류: {e}")
-        return 0.015  # 기본값 1.5%
+        return 0.02  # 기본값 2%
 
 
 def calculate_trading_signals_once(df_3min: pd.DataFrame, *, debug_logs: bool = False, 
@@ -188,6 +188,10 @@ def _convert_to_3min_data(data: pd.DataFrame) -> Optional[pd.DataFrame]:
         
         # NaN 제거 후 인덱스 리셋 (main.py와 동일)
         resampled = resampled.dropna().reset_index()
+
+        # 확정 봉만 사용: 마지막 행은 진행 중일 수 있으므로 제외 (main.py와 동일)
+        if resampled is not None and len(resampled) >= 1:
+            resampled = resampled.iloc[:-1] if len(resampled) > 0 else resampled
         
         logger.debug(f"📊 3분봉 변환: {len(data)}개 → {len(resampled)}개 (main.py 방식)")
         
@@ -473,7 +477,7 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
 
     규칙(실전 근사):
     - 매수: buy_pullback_pattern 또는 buy_bisector_recovery가 True일 때 진입 (3분봉 기준)
-      • 체결가: 신호 캔들의 절반가(half: low + (high-low)*0.5), 실패 시 해당 캔들 종가
+      • 체결가: 신호 캔들의 3/5가(low + (high-low)*0.6), 실패 시 해당 캔들 종가
     - 매도 우선순위: (1) 실시간 가격 기준 손절/익절 (1분마다 체크) → (2) 3분봉 기술적 분석 → (3) EOD 청산
     - 종가 체결 가정, 복수 매매 허용, 끝까지 보유 시 EOD 청산
     """
@@ -497,7 +501,7 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
     entry_type = None
     entry_low = None
     entry_datetime = None
-    target_profit_rate = 0.015  # 기본 목표수익률 1.5%
+    target_profit_rate = 0.02  # 기본 목표수익률 2%
 
     # 당일 손실 2회 시 신규 진입 차단 (해제됨)
     daily_loss_count = 0
@@ -552,12 +556,12 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                     ts_close = pd.Timestamp(df_3min['datetime'].iloc[j]) + pd.Timedelta(minutes=3)
                     if pd.Timestamp(current_time) >= ts_close:
                         in_pos = True
-                        # 절반가 우선, 실패 시 현재가
+                        # 3/5가 우선, 실패 시 현재가
                         try:
                             hi = float(df_3min['high'].iloc[j])
                             lo = float(df_3min['low'].iloc[j])
-                            half = lo + (hi - lo) * 0.5
-                            entry_price = half if (half > 0 and lo <= half <= hi) else current_price
+                            three_fifth_price = lo + (hi - lo) * 0.6
+                            entry_price = three_fifth_price if (three_fifth_price > 0 and lo <= three_fifth_price <= hi) else current_price
                         except Exception:
                             entry_price = current_price
                         entry_time = hhmm
@@ -574,12 +578,15 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                 # 매도 체크 (1분마다)
                 exit_reason = None
                 
-                # (1) 긴급 손절: -1%
-                if entry_price is not None and current_price <= entry_price * (1.0 - 0.010):
-                    exit_reason = 'emergency_stop_1pct'
-                # (2) 신뢰도별 차등 익절
+                # 신호강도별 손절/익절 (손익비 2:1)
+                stop_loss_rate = target_profit_rate / 2.0  # 손익비 2:1
+                
+                # (1) 신호강도별 손절
+                if entry_price is not None and current_price <= entry_price * (1.0 - stop_loss_rate):
+                    exit_reason = f'stop_loss_{stop_loss_rate*100:.1f}pct'
+                # (2) 신호강도별 익절
                 elif entry_price is not None and current_price >= entry_price * (1.0 + target_profit_rate):
-                    exit_reason = f'profit_{target_profit_rate*100:.0f}pct'
+                    exit_reason = f'profit_{target_profit_rate*100:.1f}pct'
                 # (3) 진입저가 실시간 체크: -0.2%
                 elif entry_low is not None and entry_low > 0 and current_price < entry_low * 0.998:
                     exit_reason = 'realtime_entry_low_break'
@@ -644,8 +651,8 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                     try:
                         hi = float(df_3min['high'].iloc[j])
                         lo = float(df_3min['low'].iloc[j])
-                        half = lo + (hi - lo) * 0.5
-                        entry_price = half if (half > 0 and lo <= half <= hi) else c
+                        three_fifth_price = lo + (hi - lo) * 0.6
+                        entry_price = three_fifth_price if (three_fifth_price > 0 and lo <= three_fifth_price <= hi) else c
                     except Exception:
                         entry_price = c
                     entry_time = hhmm
@@ -668,12 +675,15 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                 exit_reason = None
                 
                 # 실시간과 동일한 매도 로직 적용
-                # (1) 긴급 손절: -1%
-                if entry_price is not None and c <= entry_price * (1.0 - 0.010):
-                    exit_reason = 'emergency_stop_1pct'
-                # (2) 신뢰도별 차등 익절
+                # 신호강도별 손절/익절 (손익비 2:1)
+                stop_loss_rate = target_profit_rate / 2.0  # 손익비 2:1
+                
+                # (1) 신호강도별 손절
+                if entry_price is not None and c <= entry_price * (1.0 - stop_loss_rate):
+                    exit_reason = f'stop_loss_{stop_loss_rate*100:.1f}pct'
+                # (2) 신호강도별 익절
                 elif entry_price is not None and c >= entry_price * (1.0 + target_profit_rate):
-                    exit_reason = f'profit_{target_profit_rate*100:.0f}pct'
+                    exit_reason = f'profit_{target_profit_rate*100:.1f}pct'
                 # (3) 진입저가 실시간 체크: -0.2%
                 elif entry_low is not None and entry_low > 0 and c < entry_low * 0.998:
                     exit_reason = 'realtime_entry_low_break'
@@ -945,7 +955,7 @@ def main():
     #DEFAULT_CODES = "078520,104040,298380"
 
     DEFAULT_DATE = "20250819"
-    DEFAULT_CODES = "019180,107600,207760,240810,333430,332290,007980,473980,475960"
+    DEFAULT_CODES = "019180,107600,207760,240810,333430,332290,007980,473980,475960,187660"
 
 
     DEFAULT_TIMES = ""

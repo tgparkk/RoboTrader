@@ -164,8 +164,8 @@ class TradingDecisionEngine:
             stock_name = trading_stock.stock_name
             current_price = combined_data['close'].iloc[-1]
 
-            # 매수가격 규칙 적용: "신호가 발생한 양봉 캔들의 1/2 구간 가격"으로 매수
-            # 눌림목(3분) 신호를 기준으로 최근 신호 캔들의 고저를 찾아 1/2 지점을 계산
+            # 매수가격 규칙 적용: "신호가 발생한 양봉 캔들의 3/5 구간 가격"으로 매수
+            # 눌림목(3분) 신호를 기준으로 최근 신호 캔들의 고저를 찾아 3/5 지점을 계산
             try:
                 from core.indicators.pullback_candle_pattern import PullbackCandlePattern
                 data_3min = self._convert_to_3min_data(combined_data)
@@ -197,10 +197,10 @@ class TradingDecisionEngine:
                         if last_idx is not None and 0 <= last_idx < len(data_3min):
                             sig_high = float(data_3min['high'].iloc[last_idx])
                             sig_low = float(data_3min['low'].iloc[last_idx])
-                            # 1/2 구간 가격
-                            half_price = sig_low + (sig_high - sig_low) * 0.5
-                            if half_price > 0:
-                                current_price = half_price
+                            # 3/5 구간 가격 (60% 지점)
+                            buy_price = sig_low + (sig_high - sig_low) * 0.6
+                            if buy_price > 0:
+                                current_price = buy_price
                             # 진입 양봉 저가를 보조 저장 (실전 손절: 진입저가 0.2% 이탈 검사용)
                             try:
                                 setattr(trading_stock, '_entry_low', sig_low)
@@ -660,9 +660,9 @@ class TradingDecisionEngine:
             if 'signal_type' in signals_improved.columns:
                 signal_type_val = last_row['signal_type']
                 if signal_type_val == SignalType.STRONG_BUY.value:
-                    return 0.03  # 3%
+                    return 0.03  # 최고신호: 3%
                 elif signal_type_val == SignalType.CAUTIOUS_BUY.value:
-                    return 0.02  # 2%
+                    return 0.025  # 중간신호: 2.5%
             
             # target_profit 컬럼이 있으면 직접 사용
             if 'target_profit' in signals_improved.columns:
@@ -670,7 +670,7 @@ class TradingDecisionEngine:
                 if pd.notna(target) and target > 0:
                     return float(target)
                     
-            return 0.015  # 기본값 1.5%
+            return 0.02  # 기본신호: 2%
             
         except Exception as e:
             self.logger.warning(f"목표수익률 계산 실패, 기본값 사용: {e}")
@@ -1158,17 +1158,21 @@ class TradingDecisionEngine:
         try:
             from core.indicators.pullback_candle_pattern import PullbackCandlePattern
             
-            # 1단계: 실시간 가격 기반 긴급 손절/익절 체크 (30초마다 체크용)
+            # 1단계: 실시간 가격 기반 신호강도별 손절/익절 체크 (30초마다 체크용)
             if buy_price and buy_price > 0:
                 profit_rate = (current_price - buy_price) / buy_price
                 
-                # 긴급 손절: -2%
-                if profit_rate <= -0.02:
-                    return True, f"⚡긴급손절 {profit_rate*100:.1f}%"
+                # 신호강도별 목표수익률 및 손절기준 가져오기 (손익비 2:1)
+                target_profit_rate = getattr(trading_stock, 'target_profit_rate', 0.02)  # 기본값 2%
+                stop_loss_rate = target_profit_rate / 2.0  # 손익비 2:1
                 
-                # 기본 익절: +2.0% (기존 +1.5%에서 조정)  
-                if profit_rate >= 0.020:
-                    return True, f"⚡기본익절 {profit_rate*100:.1f}%"
+                # 신호강도별 손절
+                if profit_rate <= -stop_loss_rate:
+                    return True, f"⚡신호강도별손절 {profit_rate*100:.1f}% (기준: -{stop_loss_rate*100:.1f}%)"
+                
+                # 신호강도별 익절
+                if profit_rate >= target_profit_rate:
+                    return True, f"⚡신호강도별익절 {profit_rate*100:.1f}% (기준: +{target_profit_rate*100:.1f}%)"
                 
                 # 진입저가 실시간 체크
                 entry_low_value = getattr(trading_stock, '_entry_low', None)
