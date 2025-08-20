@@ -120,7 +120,17 @@ class TradingDecisionEngine:
             if combined_data is None or len(combined_data) < 30:
                 return False, "데이터 부족"
             
-            current_price = combined_data['close'].iloc[-1]
+            # 🆕 캐시된 실시간 현재가 사용 (매도 판단용)
+            stock_code = trading_stock.stock_code
+            current_price_info = self.intraday_manager.get_cached_current_price(stock_code)
+            
+            if current_price_info is not None:
+                current_price = current_price_info['current_price']
+                self.logger.debug(f"📈 {stock_code} 캐시된 실시간 현재가 사용: {current_price:,.0f}원")
+            else:
+                # 현재가 정보 없으면 분봉 데이터의 마지막 가격 사용 (폴백)
+                current_price = combined_data['close'].iloc[-1]
+                self.logger.debug(f"📊 {stock_code} 분봉 데이터 현재가 사용: {current_price:,.0f}원 (캐시 없음)")
             
             # 가상 포지션 정보 복원 (DB에서 미체결 포지션 조회)
             if not trading_stock.position and self.db_manager:
@@ -283,7 +293,17 @@ class TradingDecisionEngine:
         try:
             stock_code = trading_stock.stock_code
             stock_name = trading_stock.stock_name
-            current_price = combined_data['close'].iloc[-1]
+            
+            # 🆕 캐시된 실시간 현재가 사용 (매도 실행용)
+            current_price_info = self.intraday_manager.get_cached_current_price(stock_code)
+            
+            if current_price_info is not None:
+                current_price = current_price_info['current_price']
+                self.logger.debug(f"📈 {stock_code} 실시간 현재가로 매도 실행: {current_price:,.0f}원")
+            else:
+                # 현재가 정보 없으면 분봉 데이터의 마지막 가격 사용 (폴백)
+                current_price = combined_data['close'].iloc[-1]
+                self.logger.warning(f"📊 {stock_code} 분봉 데이터로 매도 실행: {current_price:,.0f}원 (실시간 현재가 없음)")
             
             # 가상 매수 기록 정보 가져오기
             buy_record_id = getattr(trading_stock, '_virtual_buy_record_id', None)

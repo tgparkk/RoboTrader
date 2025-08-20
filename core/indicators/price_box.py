@@ -5,6 +5,7 @@ import matplotlib.dates as mdates
 from typing import Tuple, Optional, Dict, Any
 from datetime import datetime, timedelta
 import math
+from typing import Optional
 
 
 class PriceBox:
@@ -923,3 +924,56 @@ class PriceBox:
         """인스턴스 메서드 (Static Method 호출)"""
         return PriceBox.generate_trading_signals(
             prices, timestamps, self.period, self.std_multiplier, self.stop_loss_minutes)
+    
+    @staticmethod
+    async def collect_daily_data_for_price_box(stock_code: str, logger) -> Optional[pd.DataFrame]:
+        """
+        가격박스 계산을 위한 과거 29일 일봉 데이터 수집
+        
+        Args:
+            stock_code: 종목코드
+            logger: 로거 인스턴스
+            
+        Returns:
+            pd.DataFrame: 29일 일봉 데이터 (None: 실패)
+        """
+        try:
+            from api.kis_market_api import get_inquire_daily_itemchartprice
+            from utils.korean_time import now_kst
+            
+            # 29일 전 날짜 계산 (영업일 기준으로 여유있게 40일 전부터)
+            end_date = now_kst().strftime("%Y%m%d")
+            start_date = (now_kst() - timedelta(days=40)).strftime("%Y%m%d")
+            
+            logger.info(f"📊 {stock_code} 일봉 데이터 수집 시작 ({start_date} ~ {end_date})")
+            
+            # 일봉 데이터 조회
+            daily_data = get_inquire_daily_itemchartprice(
+                output_dv="2",  # 상세 데이터
+                div_code="J",   # 주식
+                itm_no=stock_code,
+                inqr_strt_dt=start_date,
+                inqr_end_dt=end_date,
+                period_code="D",  # 일봉
+                adj_prc="1"     # 원주가
+            )
+            
+            if daily_data is None or daily_data.empty:
+                logger.warning(f"⚠️ {stock_code} 일봉 데이터 조회 실패 또는 빈 데이터")
+                return None
+            
+            # 최근 29일 데이터만 선택 (오늘 제외)
+            if len(daily_data) > 29:
+                daily_data = daily_data.head(29)
+            
+            # 데이터 정렬 (오래된 날짜부터)
+            if 'stck_bsop_date' in daily_data.columns:
+                daily_data = daily_data.sort_values('stck_bsop_date', ascending=True)
+            
+            logger.info(f"✅ {stock_code} 일봉 데이터 수집 성공! ({len(daily_data)}일)")
+            
+            return daily_data
+            
+        except Exception as e:
+            logger.error(f"❌ {stock_code} 일봉 데이터 수집 오류: {e}")
+            return None

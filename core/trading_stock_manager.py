@@ -67,10 +67,10 @@ class TradingStockManager:
         except Exception:
             pass
     
-    def add_selected_stock(self, stock_code: str, stock_name: str, 
-                          selection_reason: str = "") -> bool:
+    async def add_selected_stock(self, stock_code: str, stock_name: str, 
+                                selection_reason: str = "") -> bool:
         """
-        조건검색으로 선정된 종목 추가
+        조건검색으로 선정된 종목 추가 (비동기)
         
         Args:
             stock_code: 종목코드
@@ -97,8 +97,8 @@ class TradingStockManager:
                         trading_stock.clear_current_order()
                         self._change_stock_state(stock_code, StockState.SELECTED, f"재선정: {selection_reason}")
                         
-                        # IntradayStockManager에 다시 추가 (데이터 수집 재시작)
-                        success = self.intraday_manager.add_selected_stock(
+                        # 🆕 IntradayStockManager에 다시 추가 (비동기 대기)
+                        success = await self.intraday_manager.add_selected_stock(
                             stock_code, stock_name, selection_reason
                         )
                         if success:
@@ -125,20 +125,21 @@ class TradingStockManager:
                 
                 # 등록
                 self._register_stock(trading_stock)
-                
-                # IntradayStockManager에 추가
-                success = self.intraday_manager.add_selected_stock(
-                    stock_code, stock_name, selection_reason
-                )
-                
-                if success:
-                    self.logger.info(f"✅ {stock_code}({stock_name}) 선정 완료 - "
-                                   f"시간: {current_time.strftime('%H:%M:%S')}")
-                    return True
-                else:
-                    # 실패 시 제거
+            
+            # 🆕 IntradayStockManager에 추가 (비동기 대기)
+            success = await self.intraday_manager.add_selected_stock(
+                stock_code, stock_name, selection_reason
+            )
+            
+            if success:
+                self.logger.info(f"✅ {stock_code}({stock_name}) 선정 완료 - "
+                               f"시간: {current_time.strftime('%H:%M:%S')}")
+                return True
+            else:
+                # 실패 시 제거
+                with self._lock:
                     self._unregister_stock(stock_code)
-                    return False
+                return False
                 
         except Exception as e:
             self.logger.error(f"❌ {stock_code} 종목 추가 오류: {e}")

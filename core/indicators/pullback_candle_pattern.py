@@ -653,430 +653,9 @@ class PullbackCandlePattern:
                     df, debug, logger, log_level
                 )
 
-
-
-            # 이등분선(누적 고/저가 기반)
-            bisector_line = BisectorLine.calculate_bisector_line(df['high'], df['low'])
-
-            signals = pd.DataFrame(index=df.index)
-            signals['buy_pullback_pattern'] = False
-            signals['buy_bisector_recovery'] = False
-            signals['sell_bisector_break'] = False
-            signals['sell_support_break'] = False
-            signals['stop_entry_low_break'] = False
-            signals['take_profit_3pct'] = False
-            signals['bisector_line'] = bisector_line
-
-            # 파라미터 (완화 적용)
-            retrace_lookback = 3      # 저거래 조정 창 길이(3봉)
-            low_vol_ratio = 0.25      # 기준 거래량의 25%
-            # 비율 판정 임계값(최근 3봉 중 몇 개가 조건 충족인지)
-            min_low_vol_fraction = 2.0 / 3.0   # 저거래 비중 ≥ 2/3
-            min_down_fraction = 0.5            # 하락 비중 ≥ 1/2
-            min_small_fraction = 0.5           # 캔들 축소 비중 ≥ 1/2
-            stop_leeway = 0.002       # 0.2%
-            take_profit = 0.02        # +2%
-
-            # 기준 거래량(Option A): 당일 현재 시점까지의 최대 거래량(cummax by day)
-            try:
-                if 'datetime' in df.columns:
-                    day_key = pd.to_datetime(df['datetime']).dt.normalize()
-                else:
-                    day_key = pd.to_datetime(df.index).normalize()
-            except Exception:
-                day_key = pd.to_datetime(df.index).normalize()
-            baseline_volume = df['volume'].groupby(day_key).cummax()
-
-            # 포지션 추적(차트 표시용 시뮬레이션)
-            in_position = False
-            entry_price = None
-            entry_low = None
-            
-            # 신호 품질 관리
-            recent_losses = 0  # 최근 연속 손실 횟수
-            last_signal_time = None  # 마지막 신호 시간
-            signal_cooldown = 5  # 신호 간 최소 간격 (봉 수)
-
-            # 캔들 크기(고-저) 사전 계산
-            candle_sizes = (df['high'] - df['low']).astype(float)
-            closes = df['close'].astype(float)
-            volumes = df['volume'].astype(float)
-
-            # 디버그 수집용 컨테이너
-            if debug:
-                if logger is None:
-                    try:
-                        logger = setup_logger('PullbackCandlePattern')
-                    except Exception:
-                        logger = None
-                dbg_is_bullish = [False] * len(df)
-                dbg_volume_recovers = [False] * len(df)
-                dbg_above_bisector = [False] * len(df)
-                dbg_crosses_up = [False] * len(df)
-                dbg_is_low_vol_retrace = [False] * len(df)
-                dbg_baseline_now = [np.nan] * len(df)
-                dbg_max_low_vol = [np.nan] * len(df)
-                dbg_avg_recent_vol = [np.nan] * len(df)
-
-            prev_low_retrace = False
-            for i in range(len(df)):
-                current = df.iloc[i]
-                bl = bisector_line.iloc[i] if not pd.isna(bisector_line.iloc[i]) else None
-                # 위/아래 판단 (pullback 용도): 종가가 이등분선 '위'면 강세로 간주(엄격: >)
-                above_bisector = (bl is not None) and (current['close'] > bl)
-                # 이등분선 회복(매수) 엄격 조건: 종가가 이등분선을 '넘어야' 함(>)
-                crosses_bisector_up = (bl is not None) and (current['open'] <= bl and current['close'] > bl)
-                # 하드 가드: 이등분선 아래에서는 매수 금지
-                below_bisector = (bl is not None) and (current['close'] < bl)
-
-                # 윈도우/기준값 (초기 구간도 안전 계산)
-                w_start = max(0, i - retrace_lookback)
-                w_end = i
-                window = df.iloc[w_start:w_end]
-                baseline_now = baseline_volume.iloc[i]
-                # 저거래 비중
-                if len(window) > 0:
-                    base_w = baseline_volume.iloc[w_start:w_end]
-                    vols_w = df['volume'].iloc[w_start:w_end]
-                    low_vol_fraction = float((vols_w <= base_w * low_vol_ratio).mean()) if base_w.size == vols_w.size else 0.0
-                else:
-                    low_vol_fraction = 0.0
-                # 하락 비중(이전 종가 포함하여 diff)
-                if w_start >= 1:
-                    closes_w = df['close'].iloc[w_start-1:w_end]
-                    down_fraction = float((closes_w.diff().iloc[1:] < 0).mean()) if len(closes_w) >= 2 else 0.0
-                else:
-                    down_fraction = 0.0
-                # 캔들 축소 비중(최근 10봉 평균 대비)
-                recent_avg_size = float((df['high'] - df['low']).iloc[max(0, i-10):i].mean()) if i > 0 else 0.0
-                if len(window) > 0 and recent_avg_size > 0:
-                    sizes_w = (df['high'] - df['low']).iloc[w_start:w_end]
-                    small_fraction = float((sizes_w <= recent_avg_size * 0.8).mean())
-                else:
-                    small_fraction = 0.0
-                is_low_volume_retrace = (
-                    (low_vol_fraction >= min_low_vol_fraction) and
-                    (down_fraction >= min_down_fraction) and
-                    (small_fraction >= min_small_fraction)
-                )
-
-                # 회복 양봉 + 거래량 회복 (초기 구간도 계산)
-                is_bullish = current['close'] > current['open']
-                max_low_vol = float(window['volume'].max()) if len(window) > 0 else 0.0
-                avg_recent_vol = float(df['volume'].iloc[max(0, i-10):i].mean()) if i > 0 else 0.0
-                # 급감 상회 + 최근 평균 상회(AND)
-                volume_recovers = (current['volume'] > max_low_vol) and (current['volume'] > avg_recent_vol)
-
-                # 디버그 기록: 모든 캔들에 대해 시간 표시
-                if debug:
-                    dbg_is_bullish[i] = bool(is_bullish)
-                    dbg_volume_recovers[i] = bool(volume_recovers)
-                    dbg_above_bisector[i] = bool(above_bisector)
-                    dbg_crosses_up[i] = bool(crosses_bisector_up)
-                    dbg_is_low_vol_retrace[i] = bool(is_low_volume_retrace)
-                    dbg_baseline_now[i] = float(baseline_now) if baseline_now == baseline_now else np.nan
-                    dbg_max_low_vol[i] = float(max_low_vol)
-                    dbg_avg_recent_vol[i] = float(avg_recent_vol)
-                    if logger is not None:
-                        try:
-                            def _fmt_hhmm(idx: int) -> str:
-                                try:
-                                    if 'datetime' in df.columns:
-                                        ts_val = pd.to_datetime(df['datetime'].iloc[idx])
-                                    else:
-                                        ts_val = pd.to_datetime(df.index[idx])
-                                    return pd.Timestamp(ts_val).strftime('%H:%M')
-                                except Exception:
-                                    return str(df.index[idx])
-                            hhmm = _fmt_hhmm(i)
-                            logger.log(log_level,
-                                f"time={hhmm} vol={int(current['volume'])} base={int(baseline_now)} "
-                                f"low_thr={int(baseline_now*0.25)} low_retrace={is_low_volume_retrace} "
-                                f"bullish={is_bullish} vol_recov={volume_recovers} "
-                                f"above_bis={above_bisector} cross_up={crosses_bisector_up}")
-                        except Exception:
-                            pass
-
-                # 초기 구간은 신호 계산만 건너뛰되, 로그는 남김
-                if i < retrace_lookback + 2:
-                    prev_low_retrace = is_low_volume_retrace
-                    continue
-
-                # 최근 저점(최근 5봉 저가 최저)
-                recent_low = float(df['low'].iloc[max(0, i-5):i+1].min())
-
-                # 옵션: 가격↑·거래량↓ 발산(배경) 조건
-                divergence_ok = True
-                if enable_divergence_precondition and i >= 20:
-                    try:
-                        x = np.arange(20)
-                        price_window = closes.iloc[i-19:i+1].values
-                        vol_window = volumes.iloc[i-19:i+1].values
-                        price_slope = np.polyfit(x, price_window, 1)[0]
-                        vol_slope = np.polyfit(x, vol_window, 1)[0]
-                        divergence_ok = (price_slope > 0) and (vol_slope < 0)
-                    except Exception:
-                        divergence_ok = False
-
-                # 옵션: 캔들 축소→확대 패턴
-                shrink_expand_ok = True
-                if enable_candle_shrink_expand and i >= max(retrace_lookback + 2, 10):
-                    recent_avg_size = float(candle_sizes.iloc[max(0, i-10):i].mean()) if i > 0 else 0.0
-                    # 조정 구간의 작은 캔들(축소) 확인
-                    shrink_ok = True
-                    try:
-                        shrink_window = candle_sizes.iloc[i - retrace_lookback:i]
-                        shrink_ok = bool((shrink_window < recent_avg_size * 0.9).all()) if recent_avg_size > 0 else False
-                    except Exception:
-                        shrink_ok = False
-                    # 현재 봉의 확대 + 최근 3봉 크기 증가 추세
-                    try:
-                        expand_now = candle_sizes.iloc[i] > recent_avg_size * candle_expand_multiplier
-                        inc_trend = True
-                        if i >= 2:
-                            inc_trend = bool(candle_sizes.iloc[i-2] <= candle_sizes.iloc[i-1] <= candle_sizes.iloc[i])
-                        shrink_expand_ok = shrink_ok and expand_now and inc_trend
-                    except Exception:
-                        shrink_expand_ok = False
-
-                # 옵션: 오버헤드 서플라이(하락봉에서 기준의 1/2 이상 거래량 반복) 필터
-                allow_signal = True
-                
-                # 품질 필터 1: 연속 손실 후 신호 억제
-                if recent_losses >= 2:
-                    allow_signal = False
-                    
-                # 품질 필터 2: 신호 간 최소 간격 확보
-                if last_signal_time is not None and (i - last_signal_time) < signal_cooldown:
-                    allow_signal = False
-                
-                if enable_overhead_supply_filter and i >= 1:
-                    try:
-                        lb = max(0, i - overhead_lookback)
-                        down_mask = (closes.diff().iloc[lb:i] < 0)
-                        baseline_now = float(baseline_volume.iloc[i]) if not pd.isna(baseline_volume.iloc[i]) else 0.0
-                        vol_mask = (volumes.iloc[lb:i] >= baseline_now * 0.5) if baseline_now > 0 else (volumes.iloc[lb:i] > 0)
-                        hits = int((down_mask & vol_mask).sum())
-                        if hits >= overhead_threshold_hits:
-                            allow_signal = False
-                    except Exception:
-                        allow_signal = True
-
-                # 대안 진입 조건: "직전 강한 양봉의 1/2 구간 되돌림" 확인
-                # 최근 6개의 봉에서 강한 양봉(몸통이 최근 평균 대비 크고, 거래량이 평균 이상)을 찾음
-                recent_start = max(0, i-12)
-                recent_range = df.iloc[recent_start:i]
-                half_retrace_ok = False
-                if len(recent_range) > 0:
-                    recent_candle_size = (recent_range['high'] - recent_range['low']).mean()
-                    recent_vol_mean = recent_range['volume'].mean()
-                    impulse_idx = None
-                    for j in range(i-1, recent_start-1, -1):
-                        if j < 0:
-                            break
-                        open_j = float(df['open'].iloc[j])
-                        close_j = float(df['close'].iloc[j])
-                        high_j = float(df['high'].iloc[j])
-                        low_j = float(df['low'].iloc[j])
-                        vol_j = float(df['volume'].iloc[j])
-                        body = abs(close_j - open_j)
-                        size = high_j - low_j
-                        # 완화: 최근 평균 대비 0.8배 이상 몸통, 거래량 0.8배 이상
-                        if close_j > open_j and size > 0 and body >= recent_candle_size * 0.8 and vol_j >= recent_vol_mean * 0.8:
-                            impulse_idx = j
-                            break
-                    if impulse_idx is not None:
-                        ih = float(df['high'].iloc[impulse_idx])
-                        il = float(df['low'].iloc[impulse_idx])
-                        half_point = il + (ih - il) * 0.5
-                        # 현재 캔들이 절반값 근처이거나, 저가가 하회 후 회복해 종가가 절반 이상
-                        eps = max(half_point * 0.01, 1.0)  # 1.0% 또는 1원 허용 (완화)
-                        cur_low = float(current['low'])
-                        cur_close = float(current['close'])
-                        if (abs(cur_close - half_point) <= eps) or (cur_low <= half_point <= cur_close):
-                            half_retrace_ok = True
-
-                if not in_position:
-                    # 매수 신호 1: 저거래 조정 후 회복 양봉(+이등분선 지지/회복)
-                    # 또는 강한 양봉의 1/2 되돌림 + 회복 양봉(+이등분선 지지/회복)
-                    # 완화: 1/2 되돌림 케이스에서는 거래량 회복(volume_recovers)을 필수에서 제외
-                    base_buy_pb = (not below_bisector) and (
-                        (prev_low_retrace and is_bullish and volume_recovers and (above_bisector or crosses_bisector_up))
-                        or
-                        (half_retrace_ok and is_bullish and (above_bisector or crosses_bisector_up))
-                    )
-                    if (
-                        allow_signal and base_buy_pb and
-                        (not enable_divergence_precondition or divergence_ok) and
-                        (not enable_candle_shrink_expand or shrink_expand_ok)
-                    ):
-                        signals.iloc[i, signals.columns.get_loc('buy_pullback_pattern')] = True
-                        in_position = True
-                        entry_price = float(current['close'])
-                        entry_low = float(current['low'])
-                        last_signal_time = i  # 신호 시간 기록
-                        if debug and logger is not None:
-                            try:
-                                def _fmt_hhmm(idx: int) -> str:
-                                    try:
-                                        if 'datetime' in df.columns:
-                                            ts_val = pd.to_datetime(df['datetime'].iloc[idx])
-                                        else:
-                                            ts_val = pd.to_datetime(df.index[idx])
-                                        return pd.Timestamp(ts_val).strftime('%H:%M')
-                                    except Exception:
-                                        return str(df.index[idx])
-                                hhmm = _fmt_hhmm(i)
-                                logger.log(log_level, f"BUY_PULLBACK time={hhmm} price={current['close']} vol={int(current['volume'])}")
-                            except Exception:
-                                pass
-                        prev_low_retrace = is_low_volume_retrace
-                        continue
-
-                    # 매수 신호 2: 이등분선 회복 양봉(종가가 이등분선을 넘어야 함) + 거래량 회복
-                    if (
-                        allow_signal and is_bullish and crosses_bisector_up and volume_recovers and
-                        (not enable_divergence_precondition or divergence_ok) and
-                        (not enable_candle_shrink_expand or shrink_expand_ok)
-                    ):
-                        signals.iloc[i, signals.columns.get_loc('buy_bisector_recovery')] = True
-                        in_position = True
-                        entry_price = float(current['close'])
-                        entry_low = float(current['low'])
-                        last_signal_time = i  # 신호 시간 기록
-                        if debug and logger is not None:
-                            try:
-                                def _fmt_hhmm(idx: int) -> str:
-                                    try:
-                                        if 'datetime' in df.columns:
-                                            ts_val = pd.to_datetime(df['datetime'].iloc[idx])
-                                        else:
-                                            ts_val = pd.to_datetime(df.index[idx])
-                                        return pd.Timestamp(ts_val).strftime('%H:%M')
-                                    except Exception:
-                                        return str(df.index[idx])
-                                hhmm = _fmt_hhmm(i)
-                                logger.log(log_level, f"BUY_BISECTOR time={hhmm} price={current['close']} vol={int(current['volume'])}")
-                            except Exception:
-                                pass
-                        prev_low_retrace = is_low_volume_retrace
-                        continue
-                else:
-                    # 손절/익절 신호
-                    # 이등분선 이탈: 이등분선 기준 아래로 0.2% 이탈 시 매도
-                    if bl is not None and current['close'] < bl * (1.0 - 0.002):
-                        signals.iloc[i, signals.columns.get_loc('sell_bisector_break')] = True
-                        
-                        # 손실 여부 체크
-                        if entry_price is not None and current['close'] < entry_price:
-                            recent_losses += 1
-                        else:
-                            recent_losses = 0  # 수익 시 손실 카운트 리셋
-                            
-                        in_position = False
-                        entry_price = None
-                        entry_low = None
-                        if debug and logger is not None:
-                            try:
-                                def _fmt_hhmm(idx: int) -> str:
-                                    try:
-                                        if 'datetime' in df.columns:
-                                            ts_val = pd.to_datetime(df['datetime'].iloc[idx])
-                                        else:
-                                            ts_val = pd.to_datetime(df.index[idx])
-                                        return pd.Timestamp(ts_val).strftime('%H:%M')
-                                    except Exception:
-                                        return str(df.index[idx])
-                                hhmm = _fmt_hhmm(i)
-                                logger.log(log_level, f"SELL_BISECTOR time={hhmm} close={current['close']} bl={bl}")
-                            except Exception:
-                                pass
-                        prev_low_retrace = is_low_volume_retrace
-                        continue
-
-                    if current['close'] < recent_low:
-                        signals.iloc[i, signals.columns.get_loc('sell_support_break')] = True
-                        in_position = False
-                        entry_price = None
-                        entry_low = None
-                        if debug and logger is not None:
-                            try:
-                                def _fmt_hhmm(idx: int) -> str:
-                                    try:
-                                        if 'datetime' in df.columns:
-                                            ts_val = pd.to_datetime(df['datetime'].iloc[idx])
-                                        else:
-                                            ts_val = pd.to_datetime(df.index[idx])
-                                        return pd.Timestamp(ts_val).strftime('%H:%M')
-                                    except Exception:
-                                        return str(df.index[idx])
-                                hhmm = _fmt_hhmm(i)
-                                logger.log(log_level, f"SELL_SUPPORT time={hhmm} close={current['close']} recent_low={recent_low}")
-                            except Exception:
-                                pass
-                        prev_low_retrace = is_low_volume_retrace
-                        continue
-
-                    if entry_low is not None and current['close'] <= entry_low * (1.0 - stop_leeway):
-                        signals.iloc[i, signals.columns.get_loc('stop_entry_low_break')] = True
-                        in_position = False
-                        entry_price = None
-                        entry_low = None
-                        if debug and logger is not None:
-                            try:
-                                def _fmt_hhmm(idx: int) -> str:
-                                    try:
-                                        if 'datetime' in df.columns:
-                                            ts_val = pd.to_datetime(df['datetime'].iloc[idx])
-                                        else:
-                                            ts_val = pd.to_datetime(df.index[idx])
-                                        return pd.Timestamp(ts_val).strftime('%H:%M')
-                                    except Exception:
-                                        return str(df.index[idx])
-                                hhmm = _fmt_hhmm(i)
-                                logger.log(log_level, f"STOP_ENTRY_LOW time={hhmm} close={current['close']} entry_low={entry_low}")
-                            except Exception:
-                                pass
-                        prev_low_retrace = is_low_volume_retrace
-                        continue
-
-                    if entry_price is not None and current['close'] >= entry_price * (1.0 + take_profit):
-                        signals.iloc[i, signals.columns.get_loc('take_profit_3pct')] = True
-                        in_position = False
-                        entry_price = None
-                        entry_low = None
-                        if debug and logger is not None:
-                            try:
-                                def _fmt_hhmm(idx: int) -> str:
-                                    try:
-                                        if 'datetime' in df.columns:
-                                            ts_val = pd.to_datetime(df['datetime'].iloc[idx])
-                                        else:
-                                            ts_val = pd.to_datetime(df.index[idx])
-                                        return pd.Timestamp(ts_val).strftime('%H:%M')
-                                    except Exception:
-                                        return str(df.index[idx])
-                                hhmm = _fmt_hhmm(i)
-                                logger.log(log_level, f"TAKE_PROFIT time={hhmm} close={current['close']} entry={entry_price}")
-                            except Exception:
-                                pass
-                        prev_low_retrace = is_low_volume_retrace
-                        continue
-
-            # 디버그 컬럼 추가
-            if debug:
-                signals['debug_is_bullish'] = dbg_is_bullish
-                signals['debug_volume_recovers'] = dbg_volume_recovers
-                signals['debug_above_bisector'] = dbg_above_bisector
-                signals['debug_crosses_bisector_up'] = dbg_crosses_up
-                signals['debug_is_low_volume_retrace'] = dbg_is_low_vol_retrace
-                signals['debug_baseline_now'] = dbg_baseline_now
-                signals['debug_max_low_vol'] = dbg_max_low_vol
-                signals['debug_avg_recent_vol'] = dbg_avg_recent_vol
-
-
-
-            return signals
+            # 기존 로직은 더 이상 사용되지 않음 (use_improved_logic=True가 기본값)
+            # 하위 호환성을 위해 빈 DataFrame 반환
+            return pd.DataFrame(index=df.index)
 
         except Exception as e:
             print(f"눌림목 캔들패턴 신호 생성 오류: {e}")
@@ -1113,13 +692,13 @@ class PullbackCandlePattern:
             # 최근 저점(현재 캔들 제외: 직전 N봉 기준)
             recent_low_prev = df['low'].shift(1).rolling(window=max(1, support_lookback), min_periods=1).min()
 
-            closes = df['close']
+            # 매도 신호 계산
+            sell_bisector_break = (df['close'] < bl * (1 - bisector_leeway)).fillna(False)
+            sell_support_break = (df['close'] < recent_low_prev).fillna(False)
 
-            sell_bisector_break = (closes < (bl * (1.0 - bisector_leeway)))
-            sell_support_break = (closes < recent_low_prev)
-
-            if entry_low is not None and entry_low > 0:
-                stop_entry_low_break = (closes <= entry_low * (1.0 - bisector_leeway))
+            # 진입 저가 기반 손절 (entry_low 제공 시)
+            if entry_low is not None:
+                stop_entry_low_break = (df['close'] < entry_low * (1 - bisector_leeway)).fillna(False)
             else:
                 stop_entry_low_break = pd.Series(False, index=df.index)
 
@@ -1136,89 +715,136 @@ class PullbackCandlePattern:
             return pd.DataFrame(index=(data.index if data is not None else None))
     
     @staticmethod
-    def get_pattern_info(data: pd.DataFrame) -> Dict:
-        """현재 패턴 정보 반환"""
+    def _generate_signals_with_improved_logic(
+        data: pd.DataFrame, 
+        debug: bool = False, 
+        logger: Optional[logging.Logger] = None,
+        log_level: int = logging.INFO
+    ) -> pd.DataFrame:
+        """개선된 로직을 기존 DataFrame 형식으로 변환"""
         try:
-            if len(data) < 20:
-                return {}
+            # 이등분선 계산
+            bisector_line = BisectorLine.calculate_bisector_line(data['high'], data['low'])
             
-            volume_analysis = PullbackCandlePattern.analyze_volume(data)
-            candle_analysis = PullbackCandlePattern.analyze_candle(data)
-            price_trend = PullbackCandlePattern.check_price_trend(data)
-            above_bisector = PullbackCandlePattern.check_price_above_bisector(data)
+            # 결과 DataFrame 초기화 (기존 형식 유지 + 신호 강도 정보 추가)
+            signals = pd.DataFrame(index=data.index)
+            signals['buy_pullback_pattern'] = False
+            signals['buy_bisector_recovery'] = False  
+            signals['sell_bisector_break'] = False
+            signals['sell_support_break'] = False
+            signals['stop_entry_low_break'] = False
+            signals['take_profit_3pct'] = False
+            signals['bisector_line'] = bisector_line
+            # 신호 강도 정보 컬럼 추가
+            signals['signal_type'] = ''
+            signals['confidence'] = 0.0
+            signals['target_profit'] = 0.0
             
-            return {
-                'price_trend': price_trend,
-                'above_bisector': above_bisector,
-                'volume_trend': volume_analysis.volume_trend,
-                'candle_trend': candle_analysis.candle_trend,
-                'baseline_volume': volume_analysis.baseline_volume,
-                'current_volume': volume_analysis.current_volume,
-                'volume_ratio': volume_analysis.current_volume / volume_analysis.baseline_volume if volume_analysis.baseline_volume > 0 else 0,
-                'is_low_volume': volume_analysis.is_low_volume,
-                'is_high_volume': volume_analysis.is_high_volume,
-                'current_candle_size': candle_analysis.current_candle_size,
-                'avg_candle_size': candle_analysis.avg_recent_candle_size,
-                'is_small_candle': candle_analysis.is_small_candle,
-                'is_large_candle': candle_analysis.is_large_candle
-            }
+            # 포지션 시뮬레이션 변수
+            in_position = False
+            entry_price = None
+            entry_low = None
+            
+            # 각 시점에서 신호 계산
+            for i in range(10, len(data)):  # 최소 10개 데이터 필요
+                current_data = data.iloc[:i+1]
+                
+                # 개선된 신호 생성
+                signal_strength, risk_signals = PullbackCandlePattern.generate_improved_signals(
+                    current_data, entry_price, entry_low, debug, logger
+                )
+                
+                if not in_position:
+                    # 매수 신호 확인
+                    if signal_strength.signal_type in [SignalType.STRONG_BUY, SignalType.CAUTIOUS_BUY]:
+                        # 신뢰도에 따라 다른 신호 생성
+                        if signal_strength.signal_type == SignalType.STRONG_BUY:
+                            signals.iloc[i, signals.columns.get_loc('buy_pullback_pattern')] = True
+                        else:  # CAUTIOUS_BUY
+                            signals.iloc[i, signals.columns.get_loc('buy_bisector_recovery')] = True
+                        
+                        # 신호 강도 정보 저장
+                        signals.iloc[i, signals.columns.get_loc('signal_type')] = signal_strength.signal_type.value
+                        signals.iloc[i, signals.columns.get_loc('confidence')] = signal_strength.confidence
+                        signals.iloc[i, signals.columns.get_loc('target_profit')] = signal_strength.target_profit
+                        
+                        # 포지션 진입
+                        in_position = True
+                        entry_price = data.iloc[i]['close']
+                        entry_low = signal_strength.entry_low
+                        
+                        if debug and logger:
+                            logger.log(log_level, f"매수 신호: {signal_strength.signal_type.value}, 신뢰도: {signal_strength.confidence:.1f}%")
+                else:
+                    # 매도 신호 확인
+                    if RiskSignal.BISECTOR_BREAK in risk_signals:
+                        signals.iloc[i, signals.columns.get_loc('sell_bisector_break')] = True
+                        in_position = False
+                        entry_price = None
+                        entry_low = None
+                        
+                        if debug and logger:
+                            logger.log(log_level, f"매도 신호: {[r.value for r in risk_signals]}")
+            
+            return signals
             
         except Exception as e:
-            print(f"패턴 정보 분석 오류: {e}")
-            return {}
-    
+            if logger:
+                logger.error(f"개선된 로직 변환 오류: {e}")
+            return pd.DataFrame()
+
     @staticmethod
-    def get_improved_pattern_info(data: pd.DataFrame, entry_price: Optional[float] = None, 
-                                 entry_low: Optional[float] = None) -> Dict:
-        """개선된 패턴 정보 반환 (제시된 로직 적용)"""
+    def generate_sell_signals(
+        data: pd.DataFrame,
+        entry_low: Optional[float] = None,
+        support_lookback: int = 5,
+        bisector_leeway: float = 0.002,
+    ) -> pd.DataFrame:
+        """눌림목 캔들패턴 - 매도 신호 전용 계산 (현재 상태 기반, in_position 비의존)
+
+        반환 컬럼:
+        - sell_bisector_break: 종가가 이등분선 대비 0.2% 하회
+        - sell_support_break: 종가가 직전 구간의 최근 저점(lookback) 하회(현재 캔들 제외)
+        - stop_entry_low_break: 종가가 진입 양봉의 저가 대비 0.2% 하회 (entry_low 제공 시)
+        - bisector_line: 이등분선 값(보조)
+        """
         try:
-            if len(data) < 20:
-                return {'error': '데이터 부족'}
-            
-            # 개선된 신호 생성
-            signal_strength, risk_signals = PullbackCandlePattern.generate_improved_signals(
-                data, entry_price, entry_low, debug=True
-            )
-            
-            # 추가 분석 정보
-            volume_analysis = PullbackCandlePattern.analyze_volume(data)
-            candle_analysis = PullbackCandlePattern.analyze_candle(data)
-            prior_uptrend = PullbackCandlePattern.check_prior_uptrend(data)
-            
-            baseline_volumes = PullbackCandlePattern.calculate_daily_baseline_volume(data)
-            good_pullback = PullbackCandlePattern.analyze_pullback_quality(data, baseline_volumes)
-            
-            return {
-                # 신호 정보
-                'signal_type': signal_strength.signal_type.value,
-                'confidence': signal_strength.confidence,
-                'target_profit': signal_strength.target_profit,
-                'reasons': signal_strength.reasons,
-                'bisector_status': signal_strength.bisector_status.value,
-                'risk_signals': [r.value for r in risk_signals],
-                
-                # 상세 분석
-                'volume_ratio': volume_analysis.volume_ratio,
-                'is_low_volume': volume_analysis.is_low_volume,
-                'is_moderate_volume': volume_analysis.is_moderate_volume,
-                'is_high_volume': volume_analysis.is_high_volume,
-                'baseline_volume': volume_analysis.baseline_volume,
-                'current_volume': volume_analysis.current_volume,
-                
-                'is_bullish': candle_analysis.is_bullish,
-                'body_pct': candle_analysis.body_pct,
-                'is_meaningful_body': candle_analysis.is_meaningful_body,
-                
-                'prior_uptrend': prior_uptrend,
-                'good_pullback': good_pullback,
-                
-                # 추가 정보
-                'current_price': data['close'].iloc[-1],
-                'recent_low': PullbackCandlePattern.find_recent_low(data)
-            }
-            
+            if data is None or data.empty:
+                return pd.DataFrame()
+
+            required_cols = ['open', 'high', 'low', 'close']
+            if not all(col in data.columns for col in required_cols):
+                return pd.DataFrame(index=data.index)
+
+            df = data.copy()
+
+            # 이등분선 계산
+            bl = BisectorLine.calculate_bisector_line(df['high'], df['low'])
+
+            # 최근 저점(현재 캔들 제외: 직전 N봉 기준)
+            recent_low_prev = df['low'].shift(1).rolling(window=max(1, support_lookback), min_periods=1).min()
+
+            # 매도 신호 계산
+            sell_bisector_break = (df['close'] < bl * (1 - bisector_leeway)).fillna(False)
+            sell_support_break = (df['close'] < recent_low_prev).fillna(False)
+
+            # 진입 저가 기반 손절 (entry_low 제공 시)
+            if entry_low is not None:
+                stop_entry_low_break = (df['close'] < entry_low * (1 - bisector_leeway)).fillna(False)
+            else:
+                stop_entry_low_break = pd.Series(False, index=df.index)
+
+            out = pd.DataFrame(index=df.index)
+            out['sell_bisector_break'] = sell_bisector_break.fillna(False)
+            out['sell_support_break'] = sell_support_break.fillna(False)
+            out['stop_entry_low_break'] = stop_entry_low_break.fillna(False)
+            out['bisector_line'] = bl
+
+            return out
+
         except Exception as e:
-            return {'error': f'분석 오류: {str(e)}'}
+            print(f"눌림목 캔들패턴 매도 신호 계산 오류: {e}")
+            return pd.DataFrame(index=(data.index if data is not None else None))
     
     @staticmethod
     def _generate_signals_with_improved_logic(

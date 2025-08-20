@@ -26,7 +26,8 @@ def get_div_code_for_stock(stock_code: str) -> str:
         str: 시장 구분 코드 (J: KRX, NX: NXT, UN: 통합)
     """
     # 우선 통합 조회 시도 (NXT + KRX 모두 포함)
-    return "UN"  # 통합 (KRX + NXT)
+    #return "UN"  # 통합 (KRX + NXT)
+    return "J"
 
 
 def get_stock_data_with_fallback(stock_code: str, input_date: str, input_hour: str, past_data_yn: str = "Y") -> Optional[Tuple[pd.DataFrame, pd.DataFrame]]:
@@ -43,7 +44,7 @@ def get_stock_data_with_fallback(stock_code: str, input_date: str, input_hour: s
     Returns:
         Tuple[pd.DataFrame, pd.DataFrame]: (종목요약정보, 분봉데이터) 또는 None
     """
-    div_codes = ["NX", "J"]  # 통합 → KRX → NXT 순서
+    div_codes = ["J","NX"]  # 통합 → KRX → NXT 순서
     
     for div_code in div_codes:
         try:

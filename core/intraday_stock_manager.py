@@ -17,7 +17,8 @@ from api.kis_chart_api import (
     get_full_trading_day_data_async,
     get_div_code_for_stock
 )
-from api.kis_market_api import get_inquire_daily_itemchartprice
+from api.kis_market_api import get_inquire_daily_itemchartprice, get_inquire_price
+from core.indicators.price_box import PriceBox
 
 
 logger = setup_logger(__name__)
@@ -32,6 +33,7 @@ class StockMinuteData:
     historical_data: pd.DataFrame = field(default_factory=pd.DataFrame)  # 오늘 분봉 데이터
     realtime_data: pd.DataFrame = field(default_factory=pd.DataFrame)    # 실시간 분봉 데이터
     daily_data: pd.DataFrame = field(default_factory=pd.DataFrame)       # 과거 29일 일봉 데이터 (가격박스용)
+    current_price_info: Optional[Dict[str, Any]] = None                  # 매도용 실시간 현재가 정보
     last_update: Optional[datetime] = None
     data_complete: bool = False
     
@@ -75,10 +77,10 @@ class IntradayStockManager:
         
         self.logger.info("🎯 장중 종목 관리자 초기화 완료")
     
-    def add_selected_stock(self, stock_code: str, stock_name: str, 
-                          selection_reason: str = "") -> bool:
+    async def add_selected_stock(self, stock_code: str, stock_name: str, 
+                                selection_reason: str = "") -> bool:
         """
-        조건검색으로 선정된 종목 추가
+        조건검색으로 선정된 종목 추가 (비동기)
         
         Args:
             stock_code: 종목코드
@@ -128,13 +130,27 @@ class IntradayStockManager:
                 
                 self.logger.info(f"✅ {stock_code}({stock_name}) 장중 선정 완료 - "
                                f"시간: {current_time.strftime('%H:%M:%S')}")
-                
-                # 비동기로 과거 데이터 수집 시작
-                asyncio.create_task(self._collect_historical_data(stock_code))
-                
+            
+            # 🆕 과거 데이터 수집 완료까지 대기
+            self.logger.info(f"📈 {stock_code} 과거 데이터 수집 시작...")
+            success = await self._collect_historical_data(stock_code)
+            
+            if success:
+                self.logger.info(f"✅ {stock_code} 과거 데이터 수집 완료 및 종목 추가 성공")
                 return True
+            else:
+                # 데이터 수집 실패 시 종목 제거
+                with self._lock:
+                    if stock_code in self.selected_stocks:
+                        del self.selected_stocks[stock_code]
+                self.logger.error(f"❌ {stock_code} 과거 데이터 수집 실패로 종목 추가 취소")
+                return False
                 
         except Exception as e:
+            # 오류 시 종목 제거
+            with self._lock:
+                if stock_code in self.selected_stocks:
+                    del self.selected_stocks[stock_code]
             self.logger.error(f"❌ {stock_code} 종목 추가 오류: {e}")
             return False
     
@@ -163,7 +179,7 @@ class IntradayStockManager:
             self.logger.info(f"📈 {stock_code} 전체 거래시간 분봉 데이터 수집 시작")
             self.logger.info(f"   선정 시간: {selected_time.strftime('%H:%M:%S')}")
             
-            # 당일 09:00부터 선정시점까지의 전체 거래시간 데이터 수집
+            # 당일 08:00부터 선정시점까지의 전체 거래시간 데이터 수집
             target_date = selected_time.strftime("%Y%m%d")
             target_hour = selected_time.strftime("%H%M%S")
             
@@ -200,7 +216,7 @@ class IntradayStockManager:
                 filtered_data = historical_data.copy()
             
             # 과거 29일 일봉 데이터 수집 (가격박스 계산용)
-            daily_data = await self._collect_daily_data_for_price_box(stock_code)
+            daily_data = await PriceBox.collect_daily_data_for_price_box(stock_code, self.logger)
             
             # 메모리에 저장
             with self._lock:
@@ -241,7 +257,7 @@ class IntradayStockManager:
                     self.logger.warning(f"   ⚠️ 3분봉 데이터 부족 위험: {expected_3min_count}/10")
                 
                 # 09:00부터 데이터가 시작되는지 확인
-                if start_time and start_time <= "090100":
+                if start_time and  start_time < "090000":
                     self.logger.info(f"   📊 프리마켓 데이터 포함: {start_time}부터")
                 elif start_time and start_time >= "090000":
                     self.logger.info(f"   📊 정규장 데이터: {start_time}부터")
@@ -374,7 +390,10 @@ class IntradayStockManager:
     
     async def update_realtime_data(self, stock_code: str) -> bool:
         """
-        실시간 분봉 데이터 업데이트
+        실시간 분봉 데이터 업데이트 (매수 판단용)
+        
+        1. 08-09시부터 분봉 데이터가 충분한지 체크
+        2. 데이터가 충분하면 최신 분봉 1개만 수집하여 추가
         
         Args:
             stock_code: 종목코드
@@ -388,51 +407,213 @@ class IntradayStockManager:
                     return False
                     
                 stock_data = self.selected_stocks[stock_code]
-                selected_time = stock_data.selected_time
             
-            # 현재 시간까지의 당일 분봉 데이터 조회
+            # 1. 현재 보유한 전체 데이터 확인 (historical + realtime)
+            combined_data = self.get_combined_chart_data(stock_code)
+            
+            # 2. 08-09시부터 데이터가 충분한지 체크
+            if not self._check_sufficient_base_data(combined_data, stock_code):
+                # 기본 데이터가 부족하면 전체 재수집
+                self.logger.warning(f"⚠️ {stock_code} 기본 데이터 부족, 전체 재수집 시도")
+                return await self._collect_historical_data(stock_code)
+            
+            # 3. 최신 분봉 1개만 수집
             current_time = now_kst()
+            latest_minute_data = await self._get_latest_minute_bar(stock_code, current_time)
+            
+            if latest_minute_data is None:
+                # 최신 데이터 수집 실패 - 기존 데이터 유지
+                self.logger.debug(f"📊 {stock_code} 최신 분봉 수집 실패, 기존 데이터 유지")
+                return True
+            
+            # 4. 기존 realtime_data에 최신 데이터 추가/업데이트
+            with self._lock:
+                if stock_code in self.selected_stocks:
+                    current_realtime = self.selected_stocks[stock_code].realtime_data.copy()
+                    
+                    # 새로운 데이터를 realtime_data에 추가
+                    if current_realtime.empty:
+                        updated_realtime = latest_minute_data
+                    else:
+                        # 중복 제거하면서 병합
+                        updated_realtime = pd.concat([current_realtime, latest_minute_data], ignore_index=True)
+                        if 'datetime' in updated_realtime.columns:
+                            updated_realtime = updated_realtime.drop_duplicates(subset=['datetime']).sort_values('datetime').reset_index(drop=True)
+                        elif 'time' in updated_realtime.columns:
+                            updated_realtime = updated_realtime.drop_duplicates(subset=['time']).sort_values('time').reset_index(drop=True)
+                    
+                    self.selected_stocks[stock_code].realtime_data = updated_realtime
+                    self.selected_stocks[stock_code].last_update = current_time
+            
+            self.logger.debug(f"✅ {stock_code} 최신 분봉 1건 업데이트 완료")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"❌ {stock_code} 실시간 분봉 업데이트 오류: {e}")
+            return False
+    
+    def _check_sufficient_base_data(self, combined_data: Optional[pd.DataFrame], stock_code: str) -> bool:
+        """
+        08-09시부터 분봉 데이터가 충분한지 간단 체크
+        
+        Args:
+            combined_data: 결합된 차트 데이터
+            stock_code: 종목코드 (로깅용)
+            
+        Returns:
+            bool: 기본 데이터 충분 여부
+        """
+        try:
+            if combined_data is None or combined_data.empty:
+                self.logger.debug(f"❌ {stock_code} 데이터 없음")
+                return False
+            
+            data_count = len(combined_data)
+            
+            # 최소 데이터 개수 체크 (3분봉 최소 10개 = 30분봉 필요)
+            if data_count < 30:
+                self.logger.debug(f"❌ {stock_code} 데이터 부족: {data_count}/30")
+                return False
+            
+            # 시작 시간 체크 (08:00 또는 09:00대 시작 확인)
+            if 'time' in combined_data.columns:
+                start_time_str = str(combined_data.iloc[0]['time']).zfill(6)
+                start_hour = int(start_time_str[:2])
+                
+                if start_hour not in [8, 9]:  # 08시 또는 09시
+                    self.logger.debug(f"❌ {stock_code} 시작 시간 문제: {start_time_str} (08/09시 아님)")
+                    return False
+                    
+            elif 'datetime' in combined_data.columns:
+                start_dt = combined_data.iloc[0]['datetime']
+                if hasattr(start_dt, 'hour'):
+                    start_hour = start_dt.hour
+                    if start_hour not in [8, 9]:
+                        self.logger.debug(f"❌ {stock_code} 시작 시간 문제: {start_hour}시 (08/09시 아님)")
+                        return False
+            
+            self.logger.debug(f"✅ {stock_code} 기본 데이터 충분: {data_count}개")
+            return True
+            
+        except Exception as e:
+            self.logger.warning(f"⚠️ {stock_code} 기본 데이터 체크 오류: {e}")
+            return False
+    
+    async def _get_latest_minute_bar(self, stock_code: str, current_time: datetime) -> Optional[pd.DataFrame]:
+        """
+        최신 분봉 1개 수집
+        
+        Args:
+            stock_code: 종목코드
+            current_time: 현재 시간
+            
+        Returns:
+            pd.DataFrame: 최신 분봉 1개 또는 None
+        """
+        try:
             target_hour = current_time.strftime("%H%M%S")
             
-            # 종목별 적절한 시장 구분 코드 사용
+            # 분봉 API로 현재까지 데이터 조회
             div_code = get_div_code_for_stock(stock_code)
             
             result = get_inquire_time_itemchartprice(
                 div_code=div_code,
                 stock_code=stock_code,
                 input_hour=target_hour,
-                past_data_yn="Y"
+                past_data_yn="N"  # 최신 데이터만
             )
             
             if result is None:
-                return False
+                return None
             
             summary_df, chart_df = result
             
             if chart_df.empty:
-                return True
+                return None
             
-            # 선정 시점 이후 데이터만 추출 (실시간 데이터)
-            if 'datetime' in chart_df.columns:
-                # 선정 시간을 timezone-naive로 변환하여 pandas datetime64[ns]와 비교
-                selected_time_naive = selected_time.replace(tzinfo=None)
-                realtime_data = chart_df[chart_df['datetime'] > selected_time_naive].copy()
-            else:
-                # datetime 컬럼이 없으면 시간 비교로 대체
-                realtime_data = chart_df.copy()
+            # 최신 1개 데이터만 선택 (매수판단용으로 최신 분봉 데이터 사용)
+            latest_data = chart_df.tail(1).copy()
             
-            # 메모리에 업데이트
-            with self._lock:
-                if stock_code in self.selected_stocks:
-                    self.selected_stocks[stock_code].realtime_data = realtime_data
-                    self.selected_stocks[stock_code].last_update = current_time
-            
-            self.logger.debug(f"📊 {stock_code} 실시간 분봉 업데이트: {len(realtime_data)}건")
-            return True
+            return latest_data
             
         except Exception as e:
-            self.logger.error(f"❌ {stock_code} 실시간 분봉 업데이트 오류: {e}")
-            return False
+            self.logger.error(f"❌ {stock_code} 최신 분봉 수집 오류: {e}")
+            return None
+    
+    def get_current_price_for_sell(self, stock_code: str) -> Optional[Dict[str, Any]]:
+        """
+        매도 판단용 실시간 현재가 조회
+        
+        기존 가격 조회 API (/uapi/domestic-stock/v1/quotations/inquire-price)를 사용하여
+        매도 판단에 필요한 실시간 현재가 정보를 제공합니다.
+        
+        Args:
+            stock_code: 종목코드
+            
+        Returns:
+            Dict: 현재가 정보 또는 None
+                - current_price: 현재가
+                - change_rate: 전일대비율
+                - volume: 거래량
+                - high: 고가
+                - low: 저가 등
+        """
+        try:
+            # J (KRX) 시장으로 현재가 조회
+            price_data = get_inquire_price(div_code="J", itm_no=stock_code)
+            
+            if price_data is None or price_data.empty:
+                self.logger.debug(f"❌ {stock_code} 현재가 조회 실패 (매도용)")
+                return None
+            
+            # 첫 번째 행의 데이터 추출
+            row = price_data.iloc[0]
+            
+            # 주요 현재가 정보 추출 (필드명은 실제 API 응답에 따라 조정 필요)
+            current_price_info = {
+                'stock_code': stock_code,
+                'current_price': float(row.get('stck_prpr', 0)),  # 현재가
+                'change_rate': float(row.get('prdy_ctrt', 0)),   # 전일대비율
+                'change_price': float(row.get('prdy_vrss', 0)),  # 전일대비
+                'volume': int(row.get('acml_vol', 0)),           # 누적거래량
+                'high_price': float(row.get('stck_hgpr', 0)),    # 고가
+                'low_price': float(row.get('stck_lwpr', 0)),     # 저가
+                'open_price': float(row.get('stck_oprc', 0)),    # 시가
+                'prev_close': float(row.get('stck_sdpr', 0)),    # 전일종가
+                'market_cap': int(row.get('hts_avls', 0)),       # 시가총액
+                'update_time': now_kst()
+            }
+            
+            self.logger.debug(f"📈 {stock_code} 현재가 조회 완료 (매도용): {current_price_info['current_price']:,.0f}원 "
+                            f"({current_price_info['change_rate']:+.2f}%)")
+            
+            return current_price_info
+            
+        except Exception as e:
+            self.logger.error(f"❌ {stock_code} 매도용 현재가 조회 오류: {e}")
+            return None
+    
+    def get_cached_current_price(self, stock_code: str) -> Optional[Dict[str, Any]]:
+        """
+        캐시된 현재가 정보 조회 (매도 판단에서 사용)
+        
+        Args:
+            stock_code: 종목코드
+            
+        Returns:
+            Dict: 캐시된 현재가 정보 또는 None
+        """
+        try:
+            with self._lock:
+                if stock_code not in self.selected_stocks:
+                    return None
+                    
+                stock_data = self.selected_stocks[stock_code]
+                return stock_data.current_price_info
+                
+        except Exception as e:
+            self.logger.error(f"❌ {stock_code} 캐시된 현재가 조회 오류: {e}")
+            return None
     
     def get_stock_data(self, stock_code: str) -> Optional[StockMinuteData]:
         """
@@ -651,7 +832,7 @@ class IntradayStockManager:
     
     async def batch_update_realtime_data(self):
         """
-        모든 관리 종목의 실시간 데이터 일괄 업데이트 (1분마다)
+        모든 관리 종목의 실시간 데이터 일괄 업데이트 (분봉 + 현재가)
         """
         try:
             with self._lock:
@@ -662,7 +843,8 @@ class IntradayStockManager:
             
             # 데이터 품질 모니터링 초기화
             total_stocks = len(stock_codes)
-            successful_updates = 0
+            successful_minute_updates = 0
+            successful_price_updates = 0
             failed_updates = 0
             quality_issues = []
             
@@ -670,31 +852,49 @@ class IntradayStockManager:
             batch_size = 20  # 배치 크기 증가
             for i in range(0, len(stock_codes), batch_size):
                 batch = stock_codes[i:i + batch_size]
-                tasks = [self.update_realtime_data(code) for code in batch]
-                results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                # 🆕 분봉 데이터와 현재가 정보를 동시에 업데이트
+                minute_tasks = [self.update_realtime_data(code) for code in batch]
+                price_tasks = [self._update_current_price_data(code) for code in batch]
+                
+                # 분봉 데이터 업데이트
+                minute_results = await asyncio.gather(*minute_tasks, return_exceptions=True)
+                
+                # 현재가 데이터 업데이트 (분봉 업데이트와 독립적으로)
+                price_results = await asyncio.gather(*price_tasks, return_exceptions=True)
                 
                 # 배치 결과 품질 검사
-                for j, result in enumerate(results):
+                for j, (minute_result, price_result) in enumerate(zip(minute_results, price_results)):
                     stock_code = batch[j]
-                    if isinstance(result, Exception):
+                    
+                    # 분봉 데이터 결과 처리
+                    if isinstance(minute_result, Exception):
                         failed_updates += 1
-                        quality_issues.append(f"{stock_code}: 업데이트 실패 - {str(result)[:50]}")
+                        quality_issues.append(f"{stock_code}: 분봉 업데이트 실패 - {str(minute_result)[:50]}")
                     else:
+                        successful_minute_updates += 1
                         # 데이터 품질 검사
                         quality_check = self._check_data_quality(stock_code)
                         if quality_check['has_issues']:
                             quality_issues.extend([f"{stock_code}: {issue}" for issue in quality_check['issues']])
-                        successful_updates += 1
+                    
+                    # 현재가 데이터 결과 처리
+                    if isinstance(price_result, Exception):
+                        quality_issues.append(f"{stock_code}: 현재가 업데이트 실패 - {str(price_result)[:30]}")
+                    else:
+                        successful_price_updates += 1
                 
                 # API 호출 간격 조절 (더 빠른 업데이트)
                 if i + batch_size < len(stock_codes):
                     await asyncio.sleep(0.2)  # 간격 단축
             
             # 데이터 품질 리포트
-            success_rate = (successful_updates / total_stocks) * 100 if total_stocks > 0 else 0
+            minute_success_rate = (successful_minute_updates / total_stocks) * 100 if total_stocks > 0 else 0
+            price_success_rate = (successful_price_updates / total_stocks) * 100 if total_stocks > 0 else 0
             
-            if success_rate < 90:  # 성공률이 90% 미만이면 경고
-                self.logger.warning(f"⚠️ 실시간 데이터 품질 경고: 성공률 {success_rate:.1f}% ({successful_updates}/{total_stocks})")
+            if minute_success_rate < 90 or price_success_rate < 80:  # 성공률 기준
+                self.logger.warning(f"⚠️ 실시간 데이터 품질 경고: 분봉 {minute_success_rate:.1f}% ({successful_minute_updates}/{total_stocks}), "
+                                  f"현재가 {price_success_rate:.1f}% ({successful_price_updates}/{total_stocks})")
                 
             if quality_issues:
                 # 품질 문제가 5개 이상이면 상위 5개만 로깅
@@ -703,10 +903,38 @@ class IntradayStockManager:
                 if len(quality_issues) > 5:
                     self.logger.warning(f"   (총 {len(quality_issues)}건 중 상위 5건만 표시)")
             else:
-                self.logger.debug(f"✅ 실시간 데이터 업데이트 완료: {successful_updates}/{total_stocks} ({success_rate:.1f}%)")
+                self.logger.debug(f"✅ 실시간 데이터 업데이트 완료: 분봉 {successful_minute_updates}/{total_stocks} ({minute_success_rate:.1f}%), "
+                                f"현재가 {successful_price_updates}/{total_stocks} ({price_success_rate:.1f}%)")
             
         except Exception as e:
             self.logger.error(f"❌ 실시간 데이터 일괄 업데이트 오류: {e}")
+    
+    async def _update_current_price_data(self, stock_code: str) -> bool:
+        """
+        종목별 현재가 정보 업데이트 (매도 판단용)
+        
+        Args:
+            stock_code: 종목코드
+            
+        Returns:
+            bool: 업데이트 성공 여부
+        """
+        try:
+            current_price_info = self.get_current_price_for_sell(stock_code)
+            
+            if current_price_info is None:
+                return False
+            
+            # 메모리에 현재가 정보 저장
+            with self._lock:
+                if stock_code in self.selected_stocks:
+                    self.selected_stocks[stock_code].current_price_info = current_price_info
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"❌ {stock_code} 현재가 정보 업데이트 오류: {e}")
+            return False
     
     def _check_data_quality(self, stock_code: str) -> dict:
         """실시간 데이터 품질 검사"""
@@ -768,54 +996,6 @@ class IntradayStockManager:
         except Exception as e:
             return {'has_issues': True, 'issues': [f'품질검사 오류: {str(e)[:30]}']}
     
-    async def _collect_daily_data_for_price_box(self, stock_code: str) -> Optional[pd.DataFrame]:
-        """
-        가격박스 계산을 위한 과거 29일 일봉 데이터 수집
-        
-        Args:
-            stock_code: 종목코드
-            
-        Returns:
-            pd.DataFrame: 29일 일봉 데이터 (None: 실패)
-        """
-        try:
-            # 29일 전 날짜 계산 (영업일 기준으로 여유있게 40일 전부터)
-            from datetime import timedelta
-            end_date = now_kst().strftime("%Y%m%d")
-            start_date = (now_kst() - timedelta(days=40)).strftime("%Y%m%d")
-            
-            self.logger.info(f"📊 {stock_code} 일봉 데이터 수집 시작 ({start_date} ~ {end_date})")
-            
-            # 일봉 데이터 조회
-            daily_data = get_inquire_daily_itemchartprice(
-                output_dv="2",  # 상세 데이터
-                div_code="J",   # 주식
-                itm_no=stock_code,
-                inqr_strt_dt=start_date,
-                inqr_end_dt=end_date,
-                period_code="D",  # 일봉
-                adj_prc="1"     # 원주가
-            )
-            
-            if daily_data is None or daily_data.empty:
-                self.logger.warning(f"⚠️ {stock_code} 일봉 데이터 조회 실패 또는 빈 데이터")
-                return None
-            
-            # 최근 29일 데이터만 선택 (오늘 제외)
-            if len(daily_data) > 29:
-                daily_data = daily_data.head(29)
-            
-            # 데이터 정렬 (오래된 날짜부터)
-            if 'stck_bsop_date' in daily_data.columns:
-                daily_data = daily_data.sort_values('stck_bsop_date', ascending=True)
-            
-            self.logger.info(f"✅ {stock_code} 일봉 데이터 수집 성공! ({len(daily_data)}일)")
-            
-            return daily_data
-            
-        except Exception as e:
-            self.logger.error(f"❌ {stock_code} 일봉 데이터 수집 오류: {e}")
-            return None
     
     def _filter_completed_candles_only(self, chart_data: pd.DataFrame, current_time: datetime) -> pd.DataFrame:
         """
