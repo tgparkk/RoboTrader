@@ -262,12 +262,20 @@ class DayTradingBot:
             )
             
             # 매수 판단: 선정된 종목들
-            for trading_stock in selected_stocks:
-                await self._analyze_buy_decision(trading_stock)
+            if selected_stocks:
+                self.logger.debug(f"🔍 매수 판단 대상 {len(selected_stocks)}개 종목: {[f'{s.stock_code}({s.stock_name})' for s in selected_stocks]}")
+                for trading_stock in selected_stocks:
+                    await self._analyze_buy_decision(trading_stock)
+            else:
+                self.logger.debug("📊 매수 판단 대상 종목 없음 (SELECTED 상태 종목 없음)")
             
             # 매도 판단: 포지션 보유 종목들  
-            for trading_stock in positioned_stocks:
-                await self._analyze_sell_decision(trading_stock)
+            if positioned_stocks:
+                self.logger.debug(f"💰 매도 판단 대상 {len(positioned_stocks)}개 종목: {[f'{s.stock_code}({s.stock_name})' for s in positioned_stocks]}")
+                for trading_stock in positioned_stocks:
+                    await self._analyze_sell_decision(trading_stock)
+            else:
+                self.logger.debug("📊 매도 판단 대상 종목 없음 (POSITIONED 상태 종목 없음)")
             
             # 실거래 전환: 가상 포지션 매도 판단 비활성화
             # if hasattr(self, 'db_manager') and self.db_manager:
@@ -282,6 +290,8 @@ class DayTradingBot:
             stock_code = trading_stock.stock_code
             stock_name = trading_stock.stock_name
             
+            self.logger.debug(f"🔍 매수 판단 시작: {stock_code}({stock_name})")
+            
             # 추가 안전 검증: 현재 보유 중인 종목인지 다시 한번 확인
             positioned_stocks = self.trading_manager.get_stocks_by_state(StockState.POSITIONED)
             if any(pos_stock.stock_code == stock_code for pos_stock in positioned_stocks):
@@ -290,11 +300,19 @@ class DayTradingBot:
             
             # 분봉 데이터 가져오기
             combined_data = self.intraday_manager.get_combined_chart_data(stock_code)
-            if combined_data is None or len(combined_data) < 30:
+            if combined_data is None:
+                self.logger.debug(f"❌ {stock_code} 분봉 데이터 없음 (None)")
                 return
+            if len(combined_data) < 30:
+                self.logger.debug(f"❌ {stock_code} 분봉 데이터 부족: {len(combined_data)}개 (최소 30개 필요)")
+                return
+            
+            self.logger.debug(f"✅ {stock_code} 분봉 데이터 확인: {len(combined_data)}개")
             
             # 매매 판단 엔진으로 매수 신호 확인
             buy_signal, buy_reason = await self.decision_engine.analyze_buy_decision(trading_stock, combined_data)
+            
+            self.logger.debug(f"💡 {stock_code} 매수 판단 결과: signal={buy_signal}, reason='{buy_reason}'")
             
             # 🆕 signal_replay와 일관성 검증 (디버깅용)
             if hasattr(self.decision_engine, 'verify_signal_consistency'):
@@ -321,6 +339,8 @@ class DayTradingBot:
                     self.logger.debug(f"신호 일관성 검증 오류: {e}")
             
             if buy_signal:
+                self.logger.info(f"🚀 {stock_code}({stock_name}) 매수 신호 발생: {buy_reason}")
+                
                 # 🆕 매수 전 종목 상태 확인
                 current_stock = self.trading_manager.get_trading_stock(stock_code)
                 if current_stock:
@@ -328,6 +348,12 @@ class DayTradingBot:
                 
                 # 매수 후보로 변경
                 success = self.trading_manager.move_to_buy_candidate(stock_code, buy_reason)
+                if success:
+                    self.logger.debug(f"✅ {stock_code} 매수 후보로 변경 성공")
+                else:
+                    self.logger.warning(f"❌ {stock_code} 매수 후보로 변경 실패")
+                    return
+                
                 if success:
                     # 임시: 실주문 대신 가상 매수로 대체
                     try:
@@ -340,9 +366,13 @@ class DayTradingBot:
                         self.logger.info(f"🔥 가상 매수 완료 처리: {stock_code}({stock_name}) - {buy_reason}")
                     except Exception as e:
                         self.logger.error(f"❌ 가상 매수 처리 오류: {e}")
+            else:
+                self.logger.debug(f"📊 {stock_code}({stock_name}) 매수 신호 없음")
                         
         except Exception as e:
             self.logger.error(f"❌ {trading_stock.stock_code} 매수 판단 오류: {e}")
+            import traceback
+            self.logger.error(f"상세 오류 정보: {traceback.format_exc()}")
     
     async def _analyze_sell_decision(self, trading_stock):
         """매도 판단 분석"""

@@ -449,10 +449,10 @@ class IntradayStockManager:
     
     def get_combined_chart_data(self, stock_code: str) -> Optional[pd.DataFrame]:
         """
-        종목의 당일 전체 차트 데이터 조회 (09:00~현재, 완성된 봉만)
+        종목의 당일 전체 차트 데이터 조회 (08:00~현재, 완성된 봉만)
         
-        실시간 신호 생성을 위해 선정 시점과 관계없이 당일 전체 데이터를 반환합니다.
-        시뮬레이션과의 일관성을 위해 완성된 1분봉만 사용합니다.
+        종목 선정 시 수집한 historical_data와 실시간으로 업데이트되는 realtime_data를 결합하여
+        당일 전체 분봉 데이터를 반환합니다. API 30건 제한을 우회하여 전체 거래시간 데이터 제공.
         
         Args:
             stock_code: 종목코드
@@ -461,41 +461,46 @@ class IntradayStockManager:
             pd.DataFrame: 당일 전체 차트 데이터 (완성된 봉만)
         """
         try:
-            from api.kis_chart_api import get_inquire_time_itemchartprice
             from utils.korean_time import now_kst
             
-            # 현재 시간까지의 당일 전체 분봉 데이터 조회
-            current_time = now_kst()
-            target_hour = current_time.strftime("%H%M%S")
+            with self._lock:
+                if stock_code not in self.selected_stocks:
+                    self.logger.debug(f"❌ {stock_code} 선정된 종목 아님")
+                    return None
+                
+                stock_data = self.selected_stocks[stock_code]
+                historical_data = stock_data.historical_data.copy() if not stock_data.historical_data.empty else pd.DataFrame()
+                realtime_data = stock_data.realtime_data.copy() if not stock_data.realtime_data.empty else pd.DataFrame()
             
-            # 종목별 적절한 시장 구분 코드 사용
-            div_code = get_div_code_for_stock(stock_code)
+            # historical_data와 realtime_data 결합
+            if historical_data.empty and realtime_data.empty:
+                self.logger.debug(f"❌ {stock_code} 과거 및 실시간 데이터 모두 없음")
+                return None
+            elif historical_data.empty:
+                combined_data = realtime_data.copy()
+                self.logger.debug(f"📊 {stock_code} 실시간 데이터만 사용: {len(combined_data)}건")
+            elif realtime_data.empty:
+                combined_data = historical_data.copy()
+                self.logger.debug(f"📊 {stock_code} 과거 데이터만 사용: {len(combined_data)}건")
+            else:
+                combined_data = pd.concat([historical_data, realtime_data], ignore_index=True)
+                self.logger.debug(f"📊 {stock_code} 과거+실시간 데이터 결합: {len(historical_data)}+{len(realtime_data)}={len(combined_data)}건")
             
-            result = get_inquire_time_itemchartprice(
-                div_code=div_code,
-                stock_code=stock_code,
-                input_hour=target_hour,
-                past_data_yn="Y"
-            )
-            
-            if result is None:
+            if combined_data.empty:
                 return None
             
-            summary_df, chart_df = result
+            # 중복 제거 (같은 시간대 데이터가 있을 수 있음)
+            before_count = len(combined_data)
+            if 'datetime' in combined_data.columns:
+                combined_data = combined_data.drop_duplicates(subset=['datetime']).sort_values('datetime').reset_index(drop=True)
+            elif 'time' in combined_data.columns:
+                combined_data = combined_data.drop_duplicates(subset=['time']).sort_values('time').reset_index(drop=True)
             
-            if chart_df.empty:
-                return pd.DataFrame()
-            
-            # 당일 09:00 이후 데이터만 필터링 (정규장 데이터)
-            if 'time' in chart_df.columns:
-                chart_df['time_str'] = chart_df['time'].astype(str).str.zfill(6)
-                combined_data = chart_df[chart_df['time_str'] >= '090000'].copy()
-                if 'time_str' in combined_data.columns:
-                    combined_data = combined_data.drop('time_str', axis=1)
-            else:
-                combined_data = chart_df.copy()
+            if before_count != len(combined_data):
+                self.logger.debug(f"📊 {stock_code} 중복 제거: {before_count} → {len(combined_data)}건")
             
             # 완성된 봉만 사용 (현재 진행 중인 1분봉 제외)
+            current_time = now_kst()
             combined_data = self._filter_completed_candles_only(combined_data, current_time)
             
             # 시간순 정렬
@@ -709,11 +714,17 @@ class IntradayStockManager:
             with self._lock:
                 stock_data = self.selected_stocks.get(stock_code)
             
-            if not stock_data or not stock_data.minute_data:
+            if not stock_data:
+                return {'has_issues': True, 'issues': ['데이터 없음']}
+            
+            # historical_data와 realtime_data를 합쳐서 전체 분봉 데이터 생성
+            all_data = pd.concat([stock_data.historical_data, stock_data.realtime_data], ignore_index=True)
+            if all_data.empty:
                 return {'has_issues': True, 'issues': ['데이터 없음']}
             
             issues = []
-            data = stock_data.minute_data
+            # DataFrame을 dict 형태로 변환하여 기존 로직과 호환
+            data = all_data.to_dict('records')
             
             # 1. 데이터 양 검사 (최소 10개 이상)
             if len(data) < 10:
@@ -829,10 +840,40 @@ class IntradayStockManager:
             
             # datetime 컬럼이 있는 경우
             if 'datetime' in chart_data.columns:
-                # pandas timestamp로 변환하여 타입 일치
-                current_minute_start_pd = pd.Timestamp(current_minute_start)
+                # 한국시간(KST) 유지하면서 안전한 타입 변환
+                chart_data_copy = chart_data.copy()
+                
+                # 현재 시간이 KST이므로 같은 타임존으로 맞춤
+                if hasattr(current_time, 'tzinfo') and current_time.tzinfo is not None:
+                    # current_time이 KST를 가지고 있으면 그대로 사용
+                    current_minute_start_pd = pd.Timestamp(current_minute_start).tz_convert(current_time.tzinfo)
+                else:
+                    # KST 타임존이 없으면 naive로 처리
+                    current_minute_start_pd = pd.Timestamp(current_minute_start)
+                
+                # datetime 컬럼을 pandas Timestamp로 변환 (기존 타임존 정보 보존)
+                try:
+                    chart_data_copy['datetime'] = pd.to_datetime(chart_data_copy['datetime'])
+                    
+                    # 타임존 정보가 있는 경우 일치시키기
+                    if hasattr(current_minute_start_pd, 'tz') and current_minute_start_pd.tz is not None:
+                        if chart_data_copy['datetime'].dt.tz is None:
+                            # 차트 데이터가 naive이면 KST로 가정
+                            from utils.korean_time import KST
+                            chart_data_copy['datetime'] = chart_data_copy['datetime'].dt.tz_localize(KST)
+                    else:
+                        # 비교 기준이 naive이면 차트 데이터도 naive로 변환
+                        if chart_data_copy['datetime'].dt.tz is not None:
+                            chart_data_copy['datetime'] = chart_data_copy['datetime'].dt.tz_localize(None)
+                            current_minute_start_pd = pd.Timestamp(current_minute_start.replace(tzinfo=None))
+                            
+                except Exception as e:
+                    # 변환 실패시 문자열 비교로 대체
+                    self.logger.warning(f"datetime 타입 변환 실패, 문자열 비교 사용: {e}")
+                    return chart_data
+                
                 # 현재 진행 중인 1분봉 제외 (완성되지 않았으므로)
-                completed_data = chart_data[chart_data['datetime'] < current_minute_start_pd].copy()
+                completed_data = chart_data_copy[chart_data_copy['datetime'] < current_minute_start_pd].copy()
                 
                 excluded_count = len(chart_data) - len(completed_data)
                 if excluded_count > 0:

@@ -222,7 +222,7 @@ class PullbackCandlePattern:
     @staticmethod
     def get_bisector_status(current_price: float, bisector_line: float) -> BisectorStatus:
         """지지선 상태 판단 (제시된 로직 적용)"""
-        if bisector_line is None or pd.isna(bisector_line):
+        if bisector_line is None or pd.isna(bisector_line) or bisector_line == 0:
             return BisectorStatus.BROKEN
         
         diff_pct = (current_price - bisector_line) / bisector_line

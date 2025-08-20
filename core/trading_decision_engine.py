@@ -99,7 +99,7 @@ class TradingDecisionEngine:
             if signal_result:
                 return True, f"눌림목캔들패턴: {reason}"
             
-            return False, ""
+            return False, f"매수 조건 미충족 (눌림목패턴: {reason})" if reason else "매수 조건 미충족"
             
         except Exception as e:
             self.logger.error(f"❌ {trading_stock.stock_code} 매수 판단 오류: {e}")
