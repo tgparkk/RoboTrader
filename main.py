@@ -265,9 +265,9 @@ class DayTradingBot:
             else:
                 self.logger.debug("📊 매도 판단 대상 종목 없음 (POSITIONED 상태 종목 없음)")
             
-            # 실거래 전환: 가상 포지션 매도 판단 비활성화
-            # if hasattr(self, 'db_manager') and self.db_manager:
-            #     await self._analyze_virtual_positions_for_sell()
+            # 가상 포지션 매도 판단 활성화
+            if hasattr(self, 'db_manager') and self.db_manager:
+                await self._analyze_virtual_positions_for_sell()
                 
         except Exception as e:
             self.logger.error(f"❌ 매매 판단 시스템 오류: {e}")
@@ -396,7 +396,7 @@ class DayTradingBot:
             self.logger.error(f"❌ {trading_stock.stock_code} 매도 판단 오류: {e}")
     
     async def _analyze_virtual_positions_for_sell(self):
-        """DB에서 미체결 가상 포지션을 조회하여 매도 판단"""
+        """DB에서 미체결 가상 포지션을 조회하여 매도 판단 (signal_replay 방식)"""
         try:
             # DB에서 미체결 가상 포지션 조회
             open_positions = self.db_manager.get_virtual_open_positions()
@@ -409,15 +409,75 @@ class DayTradingBot:
             for _, position in open_positions.iterrows():
                 stock_code = position['stock_code']
                 stock_name = position['stock_name']
+                buy_price = position['buy_price']
+                buy_reason = position.get('reason', '')
                 
                 try:
-                    # 차트 데이터 조회
+                    # 실시간 현재가 조회
+                    current_price_info = self.intraday_manager.get_cached_current_price(stock_code)
+                    if current_price_info is None:
+                        continue
+                    
+                    current_price = current_price_info['current_price']
+                    profit_rate = (current_price - buy_price) / buy_price
+                    
+                    # 신호 강도별 목표수익률 설정 (signal_replay 로직과 동일)
+                    target_profit_rate = 0.015  # 기본값 1.5%
+                    if 'strong' in buy_reason.lower():
+                        target_profit_rate = 0.025  # 최고신호: 2.5%
+                    elif 'cautious' in buy_reason.lower():
+                        target_profit_rate = 0.02   # 중간신호: 2.0%
+                    
+                    # 손익비 2:1 적용
+                    stop_loss_rate = target_profit_rate / 2.0
+                    
+                    sell_reason = None
+                    
+                    # (1) 신호강도별 손절
+                    if current_price <= buy_price * (1.0 - stop_loss_rate):
+                        sell_reason = f'stop_loss_{stop_loss_rate*100:.1f}pct'
+                    # (2) 신호강도별 익절
+                    elif current_price >= buy_price * (1.0 + target_profit_rate):
+                        sell_reason = f'profit_{target_profit_rate*100:.1f}pct'
+                    
+                    # 매도 조건 충족시 실행
+                    if sell_reason:
+                        self.logger.info(f"📉 실시간 손익률 매도: {stock_code}({stock_name}) "
+                                       f"@{current_price:,.0f}원 ({profit_rate:+.2%}) - {sell_reason}")
+                        
+                        # 임시 TradingStock 객체 생성
+                        from core.models import TradingStock, StockState
+                        from utils.korean_time import now_kst
+                        trading_stock = TradingStock(
+                            stock_code=stock_code,
+                            stock_name=stock_name,
+                            state=StockState.POSITIONED,
+                            selected_time=now_kst(),
+                            selection_reason="가상매수"
+                        )
+                        
+                        # 가상 포지션 정보 설정
+                        trading_stock._virtual_buy_record_id = position['id']
+                        trading_stock._virtual_buy_price = buy_price
+                        trading_stock._virtual_quantity = position['quantity']
+                        trading_stock.set_position(position['quantity'], buy_price)
+                        
+                        # 차트 데이터는 간단히 처리 (현재가만 사용하므로)
+                        combined_data = self.intraday_manager.get_combined_chart_data(stock_code)
+                        if combined_data is None:
+                            continue
+                            
+                        # 가상 매도 실행
+                        await self.decision_engine.execute_virtual_sell(trading_stock, combined_data, sell_reason)
+                        continue
+                    
+                    # 실시간 손익률 매도 조건 없으면 기존 전략 매도 판단 실행
                     combined_data = self.intraday_manager.get_combined_chart_data(stock_code)
                     if combined_data is None or len(combined_data) < 30:
                         continue
                     
                     # 임시 TradingStock 객체 생성
-                    from core.models import TradingStock, Position, StockState
+                    from core.models import TradingStock, StockState
                     from utils.korean_time import now_kst
                     trading_stock = TradingStock(
                         stock_code=stock_code,
@@ -429,17 +489,15 @@ class DayTradingBot:
                     
                     # 가상 포지션 정보 설정
                     trading_stock._virtual_buy_record_id = position['id']
-                    trading_stock._virtual_buy_price = position['buy_price']
+                    trading_stock._virtual_buy_price = buy_price
                     trading_stock._virtual_quantity = position['quantity']
-                    trading_stock.set_position(position['quantity'], position['buy_price'])
+                    trading_stock.set_position(position['quantity'], buy_price)
                     
-                    # 매도 판단 실행
+                    # 전략별 매도 판단 실행
                     sell_signal, sell_reason = await self.decision_engine.analyze_sell_decision(trading_stock, combined_data)
                     
                     if sell_signal:
-                        self.logger.info(f"📉 가상 포지션 매도 신호: {stock_code}({stock_name}) - {sell_reason}")
-                        
-                        # 가상 매도 실행
+                        self.logger.info(f"📉 전략 기반 매도 신호: {stock_code}({stock_name}) - {sell_reason}")
                         await self.decision_engine.execute_virtual_sell(trading_stock, combined_data, sell_reason)
                         
                 except Exception as e:
@@ -488,7 +546,7 @@ class DayTradingBot:
                     last_api_refresh = current_time
 
                 # 🆕 장중 종목 실시간 데이터 업데이트
-                if (current_time - last_intraday_update).total_seconds() >= 15:  # 15초
+                if (current_time - last_intraday_update).total_seconds() >= 10:  # 10초
                     if is_market_open():
                         await self._update_intraday_data()
                     last_intraday_update = current_time
@@ -763,22 +821,6 @@ class DayTradingBot:
         try:
             # 모든 선정 종목의 실시간 데이터 업데이트
             await self.intraday_manager.batch_update_realtime_data()
-            
-            # 업데이트 후 요약 정보 확인
-            summary = self.intraday_manager.get_all_stocks_summary()
-            if summary['total_stocks'] > 0:
-                # 주요 종목들의 수익률 정보 (3% 이상 상승 시에만 로깅)
-                profitable_stocks = [
-                    stock for stock in summary['stocks'] 
-                    if stock.get('price_change_rate', 0) > 3.0  # 3% 이상 상승
-                ]
-                
-                if profitable_stocks:
-                    profit_info = ", ".join([
-                        f"{stock['stock_code']}({stock['price_change_rate']:+.1f}%)" 
-                        for stock in profitable_stocks[:3]  # 상위 3개만
-                    ])
-                    self.logger.info(f"🚀 주요 상승 종목: {profit_info}")
             
         except Exception as e:
             self.logger.error(f"❌ 장중 종목 실시간 데이터 업데이트 오류: {e}")

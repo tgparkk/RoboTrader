@@ -85,11 +85,11 @@ def get_target_profit_from_signal_strength(sig_improved: pd.DataFrame, index: in
             signal_type = sig_improved.iloc[index]['signal_type']
             logger.debug(f"신호 타입: {signal_type}")
             if signal_type == SignalType.STRONG_BUY.value:
-                logger.debug("STRONG_BUY 신호 → 3% 목표수익률")
-                return 0.03  # 최고신호: 3%
+                logger.debug("STRONG_BUY 신호 → 2.5% 목표수익률")
+                return 0.025  # 최고신호: 2.5%
             elif signal_type == SignalType.CAUTIOUS_BUY.value:
-                logger.debug("CAUTIOUS_BUY 신호 → 2.5% 목표수익률")
-                return 0.025  # 중간신호: 2.5%
+                logger.debug("CAUTIOUS_BUY 신호 → 2.0% 목표수익률")
+                return 0.02  # 중간신호: 2.0%
         
         # target_profit 컬럼이 있으면 직접 사용
         if 'target_profit' in sig_improved.columns:
@@ -98,11 +98,11 @@ def get_target_profit_from_signal_strength(sig_improved: pd.DataFrame, index: in
                 logger.debug(f"target_profit 컬럼에서 {target*100:.0f}% 목표수익률 추출")
                 return float(target)
                 
-        logger.debug("기본값 2% 목표수익률 사용")
-        return 0.02  # 기본신호: 2%
+        logger.debug("기본값 1.5% 목표수익률 사용")
+        return 0.015  # 기본신호: 1.5%
     except Exception as e:
         logger.debug(f"목표수익률 추출 오류: {e}")
-        return 0.02  # 기본값 2%
+        return 0.015  # 기본값 1.5%
 
 
 def calculate_trading_signals_once(df_3min: pd.DataFrame, *, debug_logs: bool = False, 
@@ -501,7 +501,7 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
     entry_type = None
     entry_low = None
     entry_datetime = None
-    target_profit_rate = 0.02  # 기본 목표수익률 2%
+    target_profit_rate = 0.015  # 기본 목표수익률 1.5%
 
     # 당일 손실 2회 시 신규 진입 차단 (해제됨)
     daily_loss_count = 0
@@ -957,8 +957,11 @@ def main():
     #DEFAULT_DATE = "20250819"
     #DEFAULT_CODES = "019180,107600,207760,240810,333430,332290,007980,473980,475960,187660"
 
-    DEFAULT_DATE = "20250820"
-    DEFAULT_CODES = "013310,103840,114450,180400,192250,007980,019180,408900"
+    #DEFAULT_DATE = "20250820"
+    #DEFAULT_CODES = "013310,103840,114450,180400,192250,007980,019180,408900"
+
+    DEFAULT_DATE = "20250821"
+    DEFAULT_CODES = "180400,318160,019180,134580,049470,160550,310200,207760,007980,006910,017510,138040,114190,005670,464580,475960"
 
     DEFAULT_TIMES = ""
 

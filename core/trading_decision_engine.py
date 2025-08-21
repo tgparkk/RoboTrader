@@ -681,9 +681,9 @@ class TradingDecisionEngine:
             if 'signal_type' in signals_improved.columns:
                 signal_type_val = last_row['signal_type']
                 if signal_type_val == SignalType.STRONG_BUY.value:
-                    return 0.03  # 최고신호: 3%
+                    return 0.025  # 최고신호: 2.5%
                 elif signal_type_val == SignalType.CAUTIOUS_BUY.value:
-                    return 0.025  # 중간신호: 2.5%
+                    return 0.02  # 중간신호: 2.0%
             
             # target_profit 컬럼이 있으면 직접 사용
             if 'target_profit' in signals_improved.columns:
@@ -691,11 +691,11 @@ class TradingDecisionEngine:
                 if pd.notna(target) and target > 0:
                     return float(target)
                     
-            return 0.02  # 기본신호: 2%
+            return 0.015  # 기본신호: 1.5%
             
         except Exception as e:
             self.logger.warning(f"목표수익률 계산 실패, 기본값 사용: {e}")
-            return 0.02
+            return 0.015
     
     def _check_profit_target(self, trading_stock, current_price) -> Tuple[bool, str]:
         """수익실현 조건 확인 (신뢰도별 차등 목표수익 적용)"""

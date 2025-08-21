@@ -401,7 +401,7 @@ class PullbackCandlePattern:
             return SignalStrength(
                 signal_type=SignalType.STRONG_BUY,
                 confidence=score,
-                target_profit=0.03,  # 3% 목표 (기존 7% → 3%)
+                target_profit=0.025,  # 2.5% 목표 (기존 3% → 2.5%)
                 reasons=reasons,
                 volume_ratio=volume_analysis.volume_ratio,
                 bisector_status=bisector_status
@@ -410,7 +410,7 @@ class PullbackCandlePattern:
             return SignalStrength(
                 signal_type=SignalType.CAUTIOUS_BUY,
                 confidence=score,
-                target_profit=0.02,  # 2% 목표 (기존 3% → 2%)
+                target_profit=0.02,  # 2.0% 목표 (기존 2% → 2.0%)
                 reasons=reasons,
                 volume_ratio=volume_analysis.volume_ratio,
                 bisector_status=bisector_status
@@ -768,17 +768,26 @@ class PullbackCandlePattern:
                         signals.iloc[i, signals.columns.get_loc('confidence')] = signal_strength.confidence
                         signals.iloc[i, signals.columns.get_loc('target_profit')] = signal_strength.target_profit
                         
-                        # 포지션 진입
                         in_position = True
-                        entry_price = data.iloc[i]['close']
-                        entry_low = signal_strength.entry_low
+                        entry_price = float(current_data['close'].iloc[-1])
+                        entry_low = float(current_data['low'].iloc[-1])
                         
                         if debug and logger:
-                            logger.log(log_level, f"매수 신호: {signal_strength.signal_type.value}, 신뢰도: {signal_strength.confidence:.1f}%")
+                            logger.log(log_level, f"매수 신호: {signal_strength.signal_type.value} "
+                                     f"신뢰도: {signal_strength.confidence:.1f}% 가격: {entry_price}")
                 else:
                     # 매도 신호 확인
-                    if RiskSignal.BISECTOR_BREAK in risk_signals:
-                        signals.iloc[i, signals.columns.get_loc('sell_bisector_break')] = True
+                    if risk_signals:
+                        for risk in risk_signals:
+                            if risk == RiskSignal.BISECTOR_BREAK:
+                                signals.iloc[i, signals.columns.get_loc('sell_bisector_break')] = True
+                            elif risk == RiskSignal.SUPPORT_BREAK:
+                                signals.iloc[i, signals.columns.get_loc('sell_support_break')] = True
+                            elif risk == RiskSignal.ENTRY_LOW_BREAK:
+                                signals.iloc[i, signals.columns.get_loc('stop_entry_low_break')] = True
+                            elif risk == RiskSignal.TARGET_REACHED:
+                                signals.iloc[i, signals.columns.get_loc('take_profit_3pct')] = True
+                        
                         in_position = False
                         entry_price = None
                         entry_low = None
@@ -846,90 +855,3 @@ class PullbackCandlePattern:
             print(f"눌림목 캔들패턴 매도 신호 계산 오류: {e}")
             return pd.DataFrame(index=(data.index if data is not None else None))
     
-    @staticmethod
-    def _generate_signals_with_improved_logic(
-        data: pd.DataFrame, 
-        debug: bool = False, 
-        logger: Optional[logging.Logger] = None,
-        log_level: int = logging.INFO
-    ) -> pd.DataFrame:
-        """개선된 로직을 기존 DataFrame 형식으로 변환"""
-        try:
-            # 이등분선 계산
-            bisector_line = BisectorLine.calculate_bisector_line(data['high'], data['low'])
-            
-            # 결과 DataFrame 초기화 (기존 형식 유지 + 신호 강도 정보 추가)
-            signals = pd.DataFrame(index=data.index)
-            signals['buy_pullback_pattern'] = False
-            signals['buy_bisector_recovery'] = False  
-            signals['sell_bisector_break'] = False
-            signals['sell_support_break'] = False
-            signals['stop_entry_low_break'] = False
-            signals['take_profit_3pct'] = False
-            signals['bisector_line'] = bisector_line
-            # 신호 강도 정보 컬럼 추가
-            signals['signal_type'] = ''
-            signals['confidence'] = 0.0
-            signals['target_profit'] = 0.0
-            
-            # 포지션 시뮬레이션 변수
-            in_position = False
-            entry_price = None
-            entry_low = None
-            
-            # 각 시점에서 신호 계산
-            for i in range(10, len(data)):  # 최소 10개 데이터 필요
-                current_data = data.iloc[:i+1]
-                
-                # 개선된 신호 생성
-                signal_strength, risk_signals = PullbackCandlePattern.generate_improved_signals(
-                    current_data, entry_price, entry_low, debug, logger
-                )
-                
-                if not in_position:
-                    # 매수 신호 확인
-                    if signal_strength.signal_type in [SignalType.STRONG_BUY, SignalType.CAUTIOUS_BUY]:
-                        # 신뢰도에 따라 다른 신호 생성
-                        if signal_strength.signal_type == SignalType.STRONG_BUY:
-                            signals.iloc[i, signals.columns.get_loc('buy_pullback_pattern')] = True
-                        else:  # CAUTIOUS_BUY
-                            signals.iloc[i, signals.columns.get_loc('buy_bisector_recovery')] = True
-                        
-                        # 신호 강도 정보 저장
-                        signals.iloc[i, signals.columns.get_loc('signal_type')] = signal_strength.signal_type.value
-                        signals.iloc[i, signals.columns.get_loc('confidence')] = signal_strength.confidence
-                        signals.iloc[i, signals.columns.get_loc('target_profit')] = signal_strength.target_profit
-                        
-                        in_position = True
-                        entry_price = float(current_data['close'].iloc[-1])
-                        entry_low = float(current_data['low'].iloc[-1])
-                        
-                        if debug and logger:
-                            logger.log(log_level, f"매수 신호: {signal_strength.signal_type.value} "
-                                     f"신뢰도: {signal_strength.confidence:.1f}% 가격: {entry_price}")
-                else:
-                    # 매도 신호 확인
-                    if risk_signals:
-                        for risk in risk_signals:
-                            if risk == RiskSignal.BISECTOR_BREAK:
-                                signals.iloc[i, signals.columns.get_loc('sell_bisector_break')] = True
-                            elif risk == RiskSignal.SUPPORT_BREAK:
-                                signals.iloc[i, signals.columns.get_loc('sell_support_break')] = True
-                            elif risk == RiskSignal.ENTRY_LOW_BREAK:
-                                signals.iloc[i, signals.columns.get_loc('stop_entry_low_break')] = True
-                            elif risk == RiskSignal.TARGET_REACHED:
-                                signals.iloc[i, signals.columns.get_loc('take_profit_3pct')] = True
-                        
-                        in_position = False
-                        entry_price = None
-                        entry_low = None
-                        
-                        if debug and logger:
-                            logger.log(log_level, f"매도 신호: {[r.value for r in risk_signals]}")
-            
-            return signals
-            
-        except Exception as e:
-            if logger:
-                logger.error(f"개선된 로직 변환 오류: {e}")
-            return pd.DataFrame()
