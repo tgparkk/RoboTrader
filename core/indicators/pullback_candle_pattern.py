@@ -660,59 +660,6 @@ class PullbackCandlePattern:
         except Exception as e:
             print(f"눌림목 캔들패턴 신호 생성 오류: {e}")
             return pd.DataFrame()
-
-    @staticmethod
-    def generate_sell_signals(
-        data: pd.DataFrame,
-        entry_low: Optional[float] = None,
-        support_lookback: int = 5,
-        bisector_leeway: float = 0.002,
-    ) -> pd.DataFrame:
-        """눌림목 캔들패턴 - 매도 신호 전용 계산 (현재 상태 기반, in_position 비의존)
-
-        반환 컬럼:
-        - sell_bisector_break: 종가가 이등분선 대비 0.2% 하회
-        - sell_support_break: 종가가 직전 구간의 최근 저점(lookback) 하회(현재 캔들 제외)
-        - stop_entry_low_break: 종가가 진입 양봉의 저가 대비 0.2% 하회 (entry_low 제공 시)
-        - bisector_line: 이등분선 값(보조)
-        """
-        try:
-            if data is None or data.empty:
-                return pd.DataFrame()
-
-            required_cols = ['open', 'high', 'low', 'close']
-            if not all(col in data.columns for col in required_cols):
-                return pd.DataFrame(index=data.index)
-
-            df = data.copy()
-
-            # 이등분선 계산
-            bl = BisectorLine.calculate_bisector_line(df['high'], df['low'])
-
-            # 최근 저점(현재 캔들 제외: 직전 N봉 기준)
-            recent_low_prev = df['low'].shift(1).rolling(window=max(1, support_lookback), min_periods=1).min()
-
-            # 매도 신호 계산
-            sell_bisector_break = (df['close'] < bl * (1 - bisector_leeway)).fillna(False)
-            sell_support_break = (df['close'] < recent_low_prev).fillna(False)
-
-            # 진입 저가 기반 손절 (entry_low 제공 시)
-            if entry_low is not None:
-                stop_entry_low_break = (df['close'] < entry_low * (1 - bisector_leeway)).fillna(False)
-            else:
-                stop_entry_low_break = pd.Series(False, index=df.index)
-
-            out = pd.DataFrame(index=df.index)
-            out['sell_bisector_break'] = sell_bisector_break.fillna(False)
-            out['sell_support_break'] = sell_support_break.fillna(False)
-            out['stop_entry_low_break'] = stop_entry_low_break.fillna(False)
-            out['bisector_line'] = bl
-
-            return out
-
-        except Exception as e:
-            print(f"눌림목 캔들패턴 매도 신호 계산 오류: {e}")
-            return pd.DataFrame(index=(data.index if data is not None else None))
     
     @staticmethod
     def _generate_signals_with_improved_logic(
