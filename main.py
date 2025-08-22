@@ -7,6 +7,7 @@ import sys
 import os
 from datetime import datetime
 from pathlib import Path
+import pandas as pd
 
 # 프로젝트 경로 추가
 sys.path.append(str(Path(__file__).parent))
@@ -229,9 +230,9 @@ class DayTradingBot:
                     await self._check_condition_search()
                     last_condition_check = current_time
                 
-                # 매매 판단 시스템 실행 (15초 주기)
+                # 매매 판단 시스템 실행 (5초 주기)
                 await self._execute_trading_decision()
-                await asyncio.sleep(15)  # 15초 주기
+                await asyncio.sleep(5)  # 5초 주기
                 
         except Exception as e:
             self.logger.error(f"❌ 매매 의사결정 태스크 오류: {e}")
@@ -249,6 +250,8 @@ class DayTradingBot:
             self.logger.debug(
                 f"📦 상태요약: SELECTED={len(selected_stocks)} BUY_CANDIDATE={len(buy_candidates)} POSITIONED={len(positioned_stocks)}"
             )
+            
+            # 대기 중인 매수 신호 처리 (전략별 내부에서 처리하므로 제거)
             
             # 매수 판단: 선정된 종목들
             if selected_stocks:
@@ -345,7 +348,7 @@ class DayTradingBot:
                     return
                 
                 if success:
-                    # 임시: 실주문 대신 가상 매수로 대체
+                    # 가상 매수 실행 (전략에서 이미 3분봉 확정을 확인했음)
                     try:
                         await self.decision_engine.execute_virtual_buy(trading_stock, combined_data, buy_reason)
                         # 상태를 POSITIONED로 반영하여 이후 매도 판단 루프에 포함
@@ -356,6 +359,7 @@ class DayTradingBot:
                         self.logger.info(f"🔥 가상 매수 완료 처리: {stock_code}({stock_name}) - {buy_reason}")
                     except Exception as e:
                         self.logger.error(f"❌ 가상 매수 처리 오류: {e}")
+                    
             else:
                 self.logger.debug(f"📊 {stock_code}({stock_name}) 매수 신호 없음")
                         

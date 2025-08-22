@@ -155,59 +155,43 @@ class TradingDecisionEngine:
             self.logger.error(f"❌ {trading_stock.stock_code} 매도 판단 오류: {e}")
             return False, f"오류: {e}"
     
-    async def execute_virtual_buy(self, trading_stock, combined_data, buy_reason):
+    async def execute_virtual_buy(self, trading_stock, combined_data, buy_reason, buy_price=None):
         """가상 매수 실행"""
         try:
             stock_code = trading_stock.stock_code
             stock_name = trading_stock.stock_name
-            current_price = combined_data['close'].iloc[-1]
-
-            # 매수가격 규칙 적용: "신호가 발생한 양봉 캔들의 3/5 구간 가격"으로 매수
-            # 눌림목(3분) 신호를 기준으로 최근 신호 캔들의 고저를 찾아 3/5 지점을 계산
-            try:
-                from core.indicators.pullback_candle_pattern import PullbackCandlePattern
-                data_3min = self._convert_to_3min_data(combined_data)
-                if data_3min is not None and not data_3min.empty:
-                    signals_3m = PullbackCandlePattern.generate_trading_signals(
-                        data_3min,
-                        enable_candle_shrink_expand=False,  # ✅ signal_replay.py와 일치
-                        enable_divergence_precondition=False,  # ✅ signal_replay.py와 일치
-                        enable_overhead_supply_filter=True,
-                        use_improved_logic=True,  # ✅ signal_replay.py와 일치
-                        candle_expand_multiplier=1.10,
-                        overhead_lookback=10,
-                        overhead_threshold_hits=2,
-                    )
-                    if signals_3m is not None and not signals_3m.empty:
-                        buy_cols = []
-                        # 이등분선 회복 신호
-                        if 'buy_bisector_recovery' in signals_3m.columns:
-                            buy_cols.append('buy_bisector_recovery')
-                        # 눌림목 패턴 신호
-                        if 'buy_pullback_pattern' in signals_3m.columns:
-                            buy_cols.append('buy_pullback_pattern')
-
-                        last_idx = None
-                        for col in buy_cols:
-                            true_indices = signals_3m.index[signals_3m[col] == True].tolist()
-                            if true_indices:
-                                candidate = true_indices[-1]
-                                last_idx = candidate if last_idx is None else max(last_idx, candidate)
-                        if last_idx is not None and 0 <= last_idx < len(data_3min):
-                            sig_high = float(data_3min['high'].iloc[last_idx])
-                            sig_low = float(data_3min['low'].iloc[last_idx])
-                            # 3/5 구간 가격 (60% 지점)
-                            buy_price = sig_low + (sig_high - sig_low) * 0.6
-                            if buy_price > 0:
-                                current_price = buy_price
-                            # 진입 양봉 저가를 보조 저장 (실전 손절: 진입저가 0.2% 이탈 검사용)
+            
+            # buy_price가 지정된 경우 사용, 아니면 3/5가 계산 로직 사용
+            if buy_price is not None:
+                current_price = buy_price
+                self.logger.debug(f"📊 {stock_code} 지정된 매수가로 매수: {current_price:,.0f}원")
+            else:
+                current_price = combined_data['close'].iloc[-1]
+                self.logger.debug(f"📊 {stock_code} 현재가로 매수 (기본값): {current_price:,.0f}원")
+                
+                # 3/5가 계산 (별도 클래스 사용)
+                try:
+                    from core.price_calculator import PriceCalculator
+                    data_3min = self._convert_to_3min_data(combined_data)
+                    
+                    three_fifths_price, entry_low = PriceCalculator.calculate_three_fifths_price(data_3min, self.logger)
+                    
+                    if three_fifths_price is not None:
+                        current_price = three_fifths_price
+                        self.logger.debug(f"🎯 3/5가로 매수: {stock_code} @{current_price:,.0f}원")
+                        
+                        # 진입 저가 저장
+                        if entry_low is not None:
                             try:
-                                setattr(trading_stock, '_entry_low', sig_low)
+                                setattr(trading_stock, '_entry_low', entry_low)
                             except Exception:
                                 pass
-            except Exception as _:
-                # 계산 실패 시 기존 가격 유지
-                pass
+                    else:
+                        self.logger.debug(f"⚠️ 3/5가 계산 실패 → 현재가 사용: {current_price:,.0f}원")
+                        
+                except Exception as e:
+                    self.logger.debug(f"3/5가 계산 오류: {e} → 현재가 사용")
+                    # 계산 실패 시 현재가 유지
             
             # 가상 매수 수량 설정 (가상 잔고 확인)
             if self.virtual_balance < self.virtual_investment_amount:
@@ -841,6 +825,11 @@ class TradingDecisionEngine:
             # 🆕 신호 상태 디버깅 (signal_replay와 비교용)
             self._log_signal_debug_info(data_3min, signals)
             
+            # 🆕 3분봉 확정 확인 (signal_replay 방식)
+            # 현재 시간과 마지막 3분봉 시간을 비교하여 확정 여부 확인
+            if not self._is_candle_confirmed(data_3min):
+                return False, "3분봉 미확정"
+            
             # 매수 조건 1: 눌림목 캔들패턴 매수 신호
             if signals['buy_pullback_pattern'].iloc[-1]:
                 return True, "눌림목 패턴 (거래량증가+캔들확대)"
@@ -854,6 +843,32 @@ class TradingDecisionEngine:
         except Exception as e:
             self.logger.error(f"❌ 눌림목 캔들패턴 매수 신호 확인 오류: {e}")
             return False, ""
+    
+    def _is_candle_confirmed(self, data_3min) -> bool:
+        """3분봉 확정 여부 확인 (signal_replay 방식)"""
+        try:
+            if data_3min is None or data_3min.empty or 'datetime' not in data_3min.columns:
+                return False
+            
+            from utils.korean_time import now_kst
+            import pandas as pd
+            
+            current_time = now_kst()
+            last_candle_time = pd.to_datetime(data_3min['datetime'].iloc[-1])
+            
+            # 3분봉 확정 조건: 현재 시간이 마지막 캔들 시간 + 3분 이후
+            candle_end_time = last_candle_time + pd.Timedelta(minutes=3)
+            is_confirmed = current_time >= candle_end_time
+            
+            self.logger.debug(f"📊 3분봉 확정 체크: 마지막캔들={last_candle_time.strftime('%H:%M')}, "
+                             f"확정시간={candle_end_time.strftime('%H:%M')}, 현재={current_time.strftime('%H:%M')}, "
+                             f"확정여부={is_confirmed}")
+            
+            return is_confirmed
+            
+        except Exception as e:
+            self.logger.debug(f"3분봉 확정 확인 오류: {e}")
+            return False
     
     def _log_signal_debug_info(self, data_3min: pd.DataFrame, signals: pd.DataFrame):
         """신호 상태 디버깅 정보 로깅 (signal_replay와 비교용)"""
