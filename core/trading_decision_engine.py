@@ -8,6 +8,7 @@ from datetime import datetime
 from utils.logger import setup_logger
 from utils.korean_time import now_kst
 from core.indicators.pullback_candle_pattern import SignalType
+from core.timeframe_converter import TimeFrameConverter
 
 
 class TradingDecisionEngine:
@@ -42,12 +43,10 @@ class TradingDecisionEngine:
         
         # 가상 매매 설정
         self.is_virtual_mode = True  # 🆕 가상매매 모드 여부 (현재는 가상매매만 지원)
-        self.virtual_investment_amount = 10000  # 기본값 (실제 계좌 조회 실패시 사용)
-        self.virtual_balance = 0  # 가상 잔고 (실제 계좌 잔고로 초기화됨)
-        self.initial_balance = 0  # 시작 잔고 (수익률 계산용)
         
-        # 장 시작 전에 실제 계좌 잔고로 가상 잔고 초기화
-        self._initialize_virtual_balance()
+        # 🆕 가상매매 관리자 초기화
+        from core.virtual_trading_manager import VirtualTradingManager
+        self.virtual_trading = VirtualTradingManager(db_manager=db_manager, api_manager=api_manager)
         
         self.logger.info("🧠 매매 판단 엔진 초기화 완료")
     
@@ -193,14 +192,11 @@ class TradingDecisionEngine:
                     self.logger.debug(f"3/5가 계산 오류: {e} → 현재가 사용")
                     # 계산 실패 시 현재가 유지
             
-            # 가상 매수 수량 설정 (가상 잔고 확인)
-            if self.virtual_balance < self.virtual_investment_amount:
-                self.logger.warning(f"⚠️ 가상 잔고 부족: {self.virtual_balance:,.0f}원 < {self.virtual_investment_amount:,.0f}원")
+            # 가상 매수 수량 설정 (VirtualTradingManager 사용)
+            quantity = self.virtual_trading.get_max_quantity(current_price)
+            if quantity <= 0:
+                self.logger.warning(f"⚠️ 매수 불가: 잔고 부족 또는 가격 오류")
                 return
-            
-            quantity = max(1, int(self.virtual_investment_amount / current_price))
-            total_cost = quantity * current_price
-            
             # 전략명 추출
             if "가격박스" in buy_reason:
                 strategy = "가격박스+이등분선"
@@ -211,20 +207,17 @@ class TradingDecisionEngine:
             else:
                 strategy = "볼린저밴드+이등분선"
             
-            # DB에 가상 매수 기록 저장
-            if self.db_manager:
-                buy_record_id = self.db_manager.save_virtual_buy(
-                    stock_code=stock_code,
-                    stock_name=stock_name,
-                    price=current_price,
-                    quantity=quantity,
-                    strategy=strategy,
-                    reason=buy_reason
-                )
-                
-                if buy_record_id:
-                    # 가상 잔고에서 매수 금액 차감
-                    self._update_virtual_balance(-total_cost, "매수")
+            # 가상 매수 실행 (VirtualTradingManager 사용)
+            buy_record_id = self.virtual_trading.execute_virtual_buy(
+                stock_code=stock_code,
+                stock_name=stock_name,
+                price=current_price,
+                quantity=quantity,
+                strategy=strategy,
+                reason=buy_reason
+            )
+            
+            if buy_record_id:
                     
                     # 가상 포지션 정보를 trading_stock에 저장
                     trading_stock._virtual_buy_record_id = buy_record_id
@@ -296,24 +289,6 @@ class TradingDecisionEngine:
                     self.logger.warning(f"⚠️ {stock_code} 가상 매수 기록을 찾을 수 없음")
                     return
             
-            # 🆕 중복 매도 방지: 해당 매수 기록이 이미 매도되었는지 확인
-            if self.db_manager and buy_record_id:
-                try:
-                    import sqlite3
-                    with sqlite3.connect(self.db_manager.db_path) as conn:
-                        cursor = conn.cursor()
-                        cursor.execute('''
-                            SELECT COUNT(*) FROM virtual_trading_records 
-                            WHERE buy_record_id = ? AND action = 'SELL'
-                        ''', (buy_record_id,))
-                        
-                        sell_count = cursor.fetchone()[0]
-                        if sell_count > 0:
-                            self.logger.warning(f"⚠️ 중복 매도 방지: {stock_code} 매수기록 ID {buy_record_id}는 이미 {sell_count}번 매도됨")
-                            return
-                except Exception as check_error:
-                    self.logger.error(f"❌ 중복 매도 검사 오류: {check_error}")
-                    return
             
             # 전략명 추출
             if "가격박스" in sell_reason:
@@ -325,9 +300,9 @@ class TradingDecisionEngine:
             else:
                 strategy = "볼린저밴드+이등분선"
             
-            # DB에 가상 매도 기록 저장
-            if self.db_manager and buy_record_id:
-                success = self.db_manager.save_virtual_sell(
+            # 가상 매도 실행 (VirtualTradingManager 사용)
+            if buy_record_id:
+                success = self.virtual_trading.execute_virtual_sell(
                     stock_code=stock_code,
                     stock_name=stock_name,
                     price=current_price,
@@ -338,9 +313,6 @@ class TradingDecisionEngine:
                 )
                 
                 if success:
-                    # 가상 잔고에 매도 금액 추가
-                    total_received = quantity * current_price
-                    self._update_virtual_balance(total_received, "매도")
                     
                     # 가상 포지션 정보 정리
                     for attr in ['_virtual_buy_record_id', '_virtual_buy_price', '_virtual_quantity']:
@@ -350,14 +322,10 @@ class TradingDecisionEngine:
                     # 포지션 정리
                     trading_stock.clear_position()
                     
-                    # 손익 계산 및 로깅
-                    profit_loss = (current_price - buy_price) * quantity
-                    profit_rate = ((current_price - buy_price) / buy_price) * 100
+                    # 손익 계산 (로깅용)
+                    profit_loss = (current_price - buy_price) * quantity if buy_price and buy_price > 0 else 0
+                    profit_rate = ((current_price - buy_price) / buy_price) * 100 if buy_price and buy_price > 0 else 0
                     profit_sign = "+" if profit_loss >= 0 else ""
-                    
-                    self.logger.info(f"🎯 가상 매도 완료: {stock_code}({stock_name}) "
-                                   f"{quantity}주 @{current_price:,.0f}원 "
-                                   f"손익: {profit_sign}{profit_loss:,.0f}원 ({profit_rate:+.2f}%)")
                     
                     # 텔레그램 알림
                     if self.telegram:
@@ -471,7 +439,7 @@ class TradingDecisionEngine:
             from core.indicators.multi_bollinger_bands import MultiBollingerBands
             
             # 1분봉 데이터를 5분봉으로 변환
-            data_5min = self._convert_to_5min_data(data)
+            data_5min = TimeFrameConverter.convert_to_5min_data_hts_style(data)
             if data_5min is None or len(data_5min) < 20:
                 return False, "5분봉 데이터 부족"
             
@@ -591,205 +559,8 @@ class TradingDecisionEngine:
             # 오류 발생시 안전하게 False 반환 (매수 허용)
             return False
     
-    def _initialize_virtual_balance(self):
-        """실제 계좌 잔고로 가상 잔고 초기화"""
-        try:
-            if not self.api_manager:
-                self.logger.warning("⚠️ API 관리자가 없어 가상 잔고를 기본값으로 설정")
-                self.virtual_balance = 1000000  # 100만원 기본값
-                self.initial_balance = self.virtual_balance
-                return
-            
-            # 실제 계좌 잔고 조회
-            account_info = self.api_manager.get_account_balance_quick()
-            
-            if account_info and account_info.available_amount > 0:
-                self.virtual_balance = account_info.available_amount
-                self.initial_balance = self.virtual_balance
-                self.virtual_investment_amount = self.virtual_balance * 0.20  # 잔고의 20%
-                
-                self.logger.info(f"💰 가상 잔고 초기화: {self.virtual_balance:,.0f}원 (실제 계좌 기준)")
-                self.logger.info(f"💵 건당 투자금액: {self.virtual_investment_amount:,.0f}원")
-            else:
-                # 계좌 조회 실패시 기본값 사용
-                self.virtual_balance = 1000000  # 100만원 기본값
-                self.initial_balance = self.virtual_balance
-                self.logger.warning(f"⚠️ 계좌 조회 실패로 가상 잔고를 기본값으로 설정: {self.virtual_balance:,.0f}원")
-                
-        except Exception as e:
-            # 오류 발생시 기본값 사용
-            self.virtual_balance = 1000000  # 100만원 기본값
-            self.initial_balance = self.virtual_balance
-            self.logger.error(f"❌ 가상 잔고 초기화 오류: {e}")
-            self.logger.info(f"💰 가상 잔고를 기본값으로 설정: {self.virtual_balance:,.0f}원")
     
-    def _update_virtual_balance(self, amount: float, transaction_type: str):
-        """가상 잔고 업데이트"""
-        try:
-            old_balance = self.virtual_balance
-            self.virtual_balance += amount
-            
-            # 수익률 계산
-            profit_rate = ((self.virtual_balance - self.initial_balance) / self.initial_balance) * 100 if self.initial_balance > 0 else 0
-            
-            self.logger.info(f"💰 가상 잔고 업데이트 ({transaction_type}): {old_balance:,.0f}원 → {self.virtual_balance:,.0f}원 "
-                           f"(변동: {amount:+,.0f}원, 총수익률: {profit_rate:+.2f}%)")
-            
-        except Exception as e:
-            self.logger.error(f"❌ 가상 잔고 업데이트 오류: {e}")
     
-    def get_virtual_balance_info(self) -> dict:
-        """가상 잔고 정보 반환"""
-        try:
-            profit_amount = self.virtual_balance - self.initial_balance
-            profit_rate = (profit_amount / self.initial_balance) * 100 if self.initial_balance > 0 else 0
-            
-            return {
-                'current_balance': self.virtual_balance,
-                'initial_balance': self.initial_balance,
-                'profit_amount': profit_amount,
-                'profit_rate': profit_rate,
-                'investment_per_trade': self.virtual_investment_amount
-            }
-        except Exception as e:
-            self.logger.error(f"❌ 가상 잔고 정보 조회 오류: {e}")
-            return {}
-    
-    def _convert_to_5min_data(self, data: pd.DataFrame) -> Optional[pd.DataFrame]:
-        """1분봉 데이터를 5분봉으로 변환"""
-        try:
-            if data is None or len(data) < 5:
-                return None
-            
-            # 시간 컬럼 확인 및 변환
-            if 'datetime' in data.columns:
-                data = data.copy()
-                data['datetime'] = pd.to_datetime(data['datetime'])
-                data = data.set_index('datetime')
-            elif 'date' in data.columns and 'time' in data.columns:
-                data = data.copy()
-                # date와 time을 datetime으로 결합
-                data['datetime'] = pd.to_datetime(data['date'].astype(str) + ' ' + data['time'].astype(str))
-                data = data.set_index('datetime')
-            else:
-                # datetime 인덱스가 없으면 인덱스를 생성
-                data = data.copy()
-                data.index = pd.date_range(start='08:00', periods=len(data), freq='1min')
-            
-            # HTS와 동일하게 시간 기준 5분봉으로 그룹핑
-            data_5min_list = []
-            
-            # 시간을 분 단위로 변환 (08:00 = 0분 기준, NXT 거래소 지원)
-            if hasattr(data.index, 'hour'):
-                data['minutes_from_8am'] = (data.index.hour - 8) * 60 + data.index.minute
-            else:
-                # datetime 인덱스가 아닌 경우 순차적으로 처리
-                data['minutes_from_8am'] = range(len(data))
-            
-            # 5분 단위로 그룹핑 (0-4분→그룹0, 5-9분→그룹1, ...)
-            # 하지만 실제로는 5분간의 데이터를 포함해야 함
-            grouped = data.groupby(data['minutes_from_8am'] // 5)
-            
-            for group_id, group in grouped:
-                if len(group) > 0:
-                    # 5분봉 시간은 해당 구간의 끝 + 1분 (5분간 포함)
-                    # 예: 08:00~08:04 → 08:05, 08:05~08:09 → 08:10
-                    base_minute = group_id * 5
-                    end_minute = base_minute + 5  # 5분 후가 캔들 시간
-                    
-                    # 08:00 기준으로 계산한 절대 시간
-                    target_hour = 8 + (end_minute // 60)
-                    target_min = end_minute % 60
-                    
-                    # 실제 5분봉 시간 생성 (구간 끝 + 1분)
-                    if hasattr(data.index, 'date') and len(data.index) > 0:
-                        base_date = data.index[0].date()
-                        from datetime import time
-                        end_time = pd.Timestamp.combine(base_date, time(hour=target_hour, minute=target_min, second=0))
-                    else:
-                        # 인덱스가 datetime이 아닌 경우 기본값 사용
-                        end_time = pd.Timestamp(f'2023-01-01 {target_hour:02d}:{target_min:02d}:00')
-                    
-                    # 15:30을 넘지 않도록 제한
-                    if target_hour > 15 or (target_hour == 15 and target_min > 30):
-                        if hasattr(data.index, 'date') and len(data.index) > 0:
-                            base_date = data.index[0].date()
-                            from datetime import time
-                            end_time = pd.Timestamp.combine(base_date, time(hour=15, minute=30, second=0))
-                        else:
-                            end_time = pd.Timestamp('2023-01-01 15:30:00')
-                    
-                    data_5min_list.append({
-                        'datetime': end_time,
-                        'open': group['open'].iloc[0],
-                        'high': group['high'].max(),
-                        'low': group['low'].min(), 
-                        'close': group['close'].iloc[-1],
-                        'volume': group['volume'].sum()
-                    })
-            
-            data_5min = pd.DataFrame(data_5min_list)
-            
-            self.logger.debug(f"📊 HTS 방식 5분봉 변환: {len(data)}개 → {len(data_5min)}개 완료")
-            if not data_5min.empty:
-                self.logger.debug(f"시간 범위: {data_5min['datetime'].iloc[0]} ~ {data_5min['datetime'].iloc[-1]}")
-            
-            return data_5min
-            
-        except Exception as e:
-            self.logger.error(f"❌ 5분봉 변환 오류: {e}")
-            return None
-    
-    def _convert_to_3min_data(self, data: pd.DataFrame) -> Optional[pd.DataFrame]:
-        """1분봉 데이터를 3분봉으로 변환 (DataProcessor와 동일한 방식)"""
-        try:
-            if data is None or len(data) < 3:
-                return None
-            
-            df = data.copy()
-            
-            # datetime 컬럼 확인 및 변환 (DataProcessor 방식과 동일)
-            if 'datetime' not in df.columns:
-                if 'date' in df.columns and 'time' in df.columns:
-                    df['datetime'] = pd.to_datetime(df['date'].astype(str) + ' ' + df['time'].astype(str))
-                elif 'time' in df.columns:
-                    # time 컬럼만 있는 경우 임시 날짜 추가
-                    time_str = df['time'].astype(str).str.zfill(6)
-                    df['datetime'] = pd.to_datetime('2024-01-01 ' + 
-                                                  time_str.str[:2] + ':' + 
-                                                  time_str.str[2:4] + ':' + 
-                                                  time_str.str[4:6])
-                else:
-                    # datetime 컬럼이 없으면 순차적으로 생성 (09:00부터)
-                    df['datetime'] = pd.date_range(start='09:00', periods=len(df), freq='1min')
-            
-            # datetime을 인덱스로 설정
-            df['datetime'] = pd.to_datetime(df['datetime'])
-            df = df.set_index('datetime')
-            
-            # 3분봉으로 리샘플링 (DataProcessor와 완전히 동일)
-            resampled = df.resample('3T').agg({
-                'open': 'first',
-                'high': 'max',
-                'low': 'min',
-                'close': 'last',
-                'volume': 'sum'
-            })
-            
-            # NaN 제거 후 인덱스 리셋 (DataProcessor와 동일)
-            resampled = resampled.dropna().reset_index()
-
-            # 확정 봉만 사용: 마지막 행은 진행 중일 수 있으므로 제외
-            if resampled is not None and len(resampled) >= 1:
-                resampled = resampled.iloc[:-1] if len(resampled) > 0 else resampled
-            
-            self.logger.debug(f"📊 3분봉 변환: {len(data)}개 → {len(resampled)}개 (DataProcessor 방식)")
-            
-            return resampled
-            
-        except Exception as e:
-            self.logger.error(f"❌ 3분봉 변환 오류: {e}")
-            return None
 
     def _check_pullback_candle_buy_signal(self, data) -> Tuple[bool, str]:
         """전략 4: 눌림목 캔들패턴 매수 신호 확인 (3분봉 기준)"""
@@ -802,7 +573,7 @@ class TradingDecisionEngine:
                 return False, "필요한 데이터 컬럼 부족"
             
             # 1분봉 데이터를 3분봉으로 변환
-            data_3min = self._convert_to_3min_data(data)
+            data_3min = TimeFrameConverter.convert_to_3min_data(data)
             if data_3min is None or len(data_3min) < 10:  # 20개 → 10개로 완화
                 self.logger.warning(f"📊 3분봉 데이터 부족: {len(data_3min) if data_3min is not None else 0}개 (최소 10개 필요)")
                 return False, f"3분봉 데이터 부족 ({len(data_3min) if data_3min is not None else 0}/10)"
@@ -1075,7 +846,7 @@ class TradingDecisionEngine:
             
             # 2단계: 3분봉 기반 정밀 분석 (기존 로직 유지)
             # 1분봉 데이터를 3분봉으로 변환
-            data_3min = self._convert_to_3min_data(data)
+            data_3min = TimeFrameConverter.convert_to_3min_data(data)
             if data_3min is None or len(data_3min) < 15:
                 return False, ""
             
