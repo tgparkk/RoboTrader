@@ -152,8 +152,7 @@ class DatabaseManager:
                         profit_loss REAL DEFAULT 0,  -- 손익 (매도시에만)
                         profit_rate REAL DEFAULT 0,  -- 수익률 (매도시에만)
                         buy_record_id INTEGER,  -- 대응되는 매수 기록 ID (매도시에만)
-                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                        FOREIGN KEY (buy_record_id) REFERENCES virtual_trading_records (id)
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                     )
                 ''')
                 

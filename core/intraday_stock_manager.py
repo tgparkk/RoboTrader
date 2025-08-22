@@ -471,7 +471,7 @@ class IntradayStockManager:
             data_count = len(combined_data)
             
             # 최소 데이터 개수 체크 (3분봉 최소 10개 = 30분봉 필요)
-            if data_count < 30:
+            if data_count < 10:
                 self.logger.debug(f"❌ {stock_code} 데이터 부족: {data_count}/30")
                 return False
             

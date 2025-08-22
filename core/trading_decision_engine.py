@@ -22,7 +22,7 @@ class TradingDecisionEngine:
     5. 가상 매매 실행
     """
     
-    def __init__(self, db_manager=None, telegram_integration=None, trading_manager=None, api_manager=None):
+    def __init__(self, db_manager=None, telegram_integration=None, trading_manager=None, api_manager=None, intraday_manager=None):
         """
         초기화
         
@@ -31,12 +31,14 @@ class TradingDecisionEngine:
             telegram_integration: 텔레그램 연동
             trading_manager: 거래 종목 관리자
             api_manager: API 관리자 (계좌 정보 조회용)
+            intraday_manager: 장중 종목 관리자
         """
         self.logger = setup_logger(__name__)
         self.db_manager = db_manager
         self.telegram = telegram_integration
         self.trading_manager = trading_manager
         self.api_manager = api_manager
+        self.intraday_manager = intraday_manager
         
         # 가상 매매 설정
         self.virtual_investment_amount = 10000  # 기본값 (실제 계좌 조회 실패시 사용)
@@ -78,23 +80,8 @@ class TradingDecisionEngine:
             # except Exception:
             #     # 조회 실패 시 차단하지 않음
             #     pass
-
-            # 전략 1: 가격박스 + 이등분선 매수 신호 (1분봉 사용)
-            #signal_result, reason = self._check_price_box_bisector_buy_signal(combined_data)
-            #if signal_result:
-            #    return True, f"가격박스+이등분선: {reason}"
             
-            ## 전략 2: 볼린저밴드 + 이등분선 매수 신호 (1분봉 사용)
-            #signal_result, reason = self._check_bollinger_bisector_buy_signal(combined_data)
-            #if signal_result:
-            #    return True, f"볼린저밴드+이등분선: {reason}"
-            
-            # 전략 3: 다중 볼린저밴드 매수 신호 (5분봉 사용)
-            #signal_result, reason = self._check_multi_bollinger_buy_signal(combined_data)
-            #if signal_result:
-            #    return True, f"다중볼린저밴드: {reason}"
-            
-            # 전략 4: 눌림목 캔들패턴 매수 신호 (5분봉 사용)
+            # 전략 4: 눌림목 캔들패턴 매수 신호 (3분봉 사용)
             signal_result, reason = self._check_pullback_candle_buy_signal(combined_data)
             if signal_result:
                 return True, f"눌림목캔들패턴: {reason}"
@@ -380,156 +367,6 @@ class TradingDecisionEngine:
             
         except Exception as e:
             self.logger.error(f"❌ 가상 매도 실행 오류: {e}")
-    
-    def _check_price_box_bisector_buy_signal(self, data) -> Tuple[bool, str]:
-        """전략 1: 가격박스 + 이등분선 매수 신호 확인"""
-        try:
-            from core.indicators.price_box import PriceBox
-            from core.indicators.bisector_line import BisectorLine
-            
-            # 필요한 컬럼 확인
-            required_cols = ['open', 'high', 'low', 'close']
-            if not all(col in data.columns for col in required_cols):
-                return False, ""
-            
-            # 이등분선 계산
-            bisector_signals = BisectorLine.generate_trading_signals(data)
-            
-            # 이등분선 위에 있는지 확인 (필수 조건)
-            if not bisector_signals['bullish_zone'].iloc[-1]:
-                return False, "이등분선 아래"
-            
-            # 가격박스 신호 계산
-            prices = data['close']
-            box_signals = PriceBox.generate_trading_signals(prices)
-            
-            current_idx = len(box_signals) - 1
-            
-            # 매수 조건 1: 첫 박스하한선 터치 (가장 확률 높음)
-            if box_signals['first_lower_touch'].iloc[-1]:
-                return True, "첫 박스하한선 터치"
-            
-            # 매수 조건 2: 박스하한선 지지 확인 후 박스중심선 돌파
-            for i in range(max(0, current_idx-5), current_idx):
-                if (box_signals['support_bounce'].iloc[i] and 
-                    box_signals['center_breakout_up'].iloc[-1]):
-                    return True, "박스하한선 지지 후 중심선 돌파"
-            
-            return False, ""
-            
-        except Exception as e:
-            self.logger.error(f"❌ 가격박스+이등분선 매수 신호 확인 오류: {e}")
-            return False, ""
-    
-    def _check_bollinger_bisector_buy_signal(self, data) -> Tuple[bool, str]:
-        """전략 2: 볼린저밴드 + 이등분선 매수 신호 확인"""
-        try:
-            from core.indicators.bollinger_bands import BollingerBands
-            from core.indicators.bisector_line import BisectorLine
-            
-            # 필요한 컬럼 확인
-            required_cols = ['open', 'high', 'low', 'close']
-            if not all(col in data.columns for col in required_cols):
-                return False, ""
-            
-            # 이등분선 계산
-            bisector_signals = BisectorLine.generate_trading_signals(data)
-            
-            # 이등분선 위에 있는지 확인 (필수 조건)
-            if not bisector_signals['bullish_zone'].iloc[-1]:
-                return False, "이등분선 아래"
-            
-            # 볼린저밴드 신호 계산
-            prices = data['close']
-            bb_signals = BollingerBands.generate_trading_signals(prices)
-            
-            current_idx = len(bb_signals) - 1
-            
-            # 밴드 폭 상태 확인 (최근 20개 기준)
-            recent_band_width = bb_signals['band_width'].iloc[-20:].mean()
-            total_band_width = bb_signals['band_width'].mean()
-            is_squeezed = recent_band_width < total_band_width * 0.7  # 밀집 판단
-            
-            if is_squeezed:
-                # 밴드 폭 밀집 시
-                # 1. 상한선 돌파 매수
-                if bb_signals['upper_breakout'].iloc[-1]:
-                    return True, "상한선 돌파 (밀집)"
-                
-                # 2. 상한선 돌파 확인 후 조정매수 (3/4, 2/4 지점)
-                for i in range(max(0, current_idx-10), current_idx):
-                    if bb_signals['upper_breakout'].iloc[i]:
-                        # 돌파했던 양봉의 3/4, 2/4 지점 계산
-                        breakout_candle_high = data['high'].iloc[i]
-                        breakout_candle_low = data['low'].iloc[i]
-                        current_price = data['close'].iloc[-1]
-                        
-                        three_quarter = breakout_candle_low + (breakout_candle_high - breakout_candle_low) * 0.75
-                        half_point = breakout_candle_low + (breakout_candle_high - breakout_candle_low) * 0.5
-                        
-                        if (abs(current_price - three_quarter) / three_quarter < 0.01 or
-                            abs(current_price - half_point) / half_point < 0.01):
-                            return True, "상한선 돌파 후 조정매수"
-                        break
-            else:
-                # 밴드 폭 확장 시
-                # 첫 하한선 지지 매수
-                if bb_signals['lower_touch'].iloc[-1] or bb_signals['oversold'].iloc[-1]:
-                    # 지지 확인 (반등)
-                    if len(data) >= 2 and data['close'].iloc[-1] > data['close'].iloc[-2]:
-                        return True, "첫 하한선 지지 (확장)"
-            
-            return False, ""
-            
-        except Exception as e:
-            self.logger.error(f"❌ 볼린저밴드+이등분선 매수 신호 확인 오류: {e}")
-            return False, ""
-    
-    def _check_multi_bollinger_buy_signal(self, data) -> Tuple[bool, str]:
-        """전략 3: 다중 볼린저밴드 매수 신호 확인 (5분봉 기준)"""
-        try:
-            from core.indicators.multi_bollinger_bands import MultiBollingerBands
-            
-            # 필요한 컬럼 확인
-            required_cols = ['open', 'high', 'low', 'close', 'volume']
-            if not all(col in data.columns for col in required_cols):
-                return False, "필요한 데이터 컬럼 부족"
-            
-            # 1분봉 데이터를 5분봉으로 변환
-            data_5min = self._convert_to_5min_data(data)
-            if data_5min is None or len(data_5min) < 30:
-                return False, "5분봉 데이터 부족"
-            
-            prices = data_5min['close']
-            volume_data = data_5min['volume'] if 'volume' in data_5min.columns else None
-            
-            # 다중 볼린저밴드 신호 계산 (5분봉 기준)
-            signals = MultiBollingerBands.generate_trading_signals(prices, volume_data)
-            
-            current_idx = len(signals) - 1
-            
-            # 매수 조건: 다중볼밴 돌파신호 (새로운 강세패턴)
-            if signals['buy_multi_breakout'].iloc[-1]:
-                return True, "다중볼밴 돌파신호"
-            
-            # 기존 매수 조건들 (보조 신호로 유지)
-            # 매수 조건 1: 밀집된 상한선 돌파 시 매수
-            if signals['buy_breakout'].iloc[-1]:
-                return True, "상한선 밀집 돌파"
-            
-            # 매수 조건 2: 조정 매수 (돌파 후 되돌림)
-            if signals['potential_retracement_buy'].iloc[-1]:
-                return True, "돌파 후 조정 매수"
-            
-            # 매수 조건 3: 중심선 지지 매수
-            if signals['buy_center_support'].iloc[-1]:
-                return True, "중심선 지지 매수"
-            
-            return False, ""
-            
-        except Exception as e:
-            self.logger.error(f"❌ 다중볼린저밴드 매수 신호 확인 오류: {e}")
-            return False, ""
     
     def _check_stop_loss_conditions(self, trading_stock, data) -> Tuple[bool, str]:
         """손절 조건 확인"""

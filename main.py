@@ -57,7 +57,8 @@ class DayTradingBot:
             db_manager=self.db_manager, 
             telegram_integration=self.telegram,
             trading_manager=self.trading_manager,
-            api_manager=self.api_manager
+            api_manager=self.api_manager,
+            intraday_manager=self.intraday_manager
         )  # 🆕 매매 판단 엔진
         self.chart_generator = None  # 🆕 장 마감 후 차트 생성기 (지연 초기화)
         
@@ -291,8 +292,8 @@ class DayTradingBot:
             if combined_data is None:
                 self.logger.debug(f"❌ {stock_code} 분봉 데이터 없음 (None)")
                 return
-            if len(combined_data) < 30:
-                self.logger.debug(f"❌ {stock_code} 분봉 데이터 부족: {len(combined_data)}개 (최소 30개 필요)")
+            if len(combined_data) < 10:
+                self.logger.debug(f"❌ {stock_code} 분봉 데이터 부족: {len(combined_data)}개 (최소 10개 필요)")
                 return
             
             self.logger.debug(f"✅ {stock_code} 분봉 데이터 확인: {len(combined_data)}개")
