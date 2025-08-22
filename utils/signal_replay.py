@@ -214,6 +214,7 @@ def evaluate_signals_at_times(
     target_date: str,
     times: List[str],
     *,
+    stock_code: str = "UNKNOWN",
     logger: Optional[logging.Logger] = None,
     debug_logs: bool = True,
     log_level: int = logging.INFO,
@@ -230,6 +231,10 @@ def evaluate_signals_at_times(
             })
         return results
 
+    # 로거에 종목코드 설정
+    if logger:
+        logger._stock_code = stock_code
+    
     # 공통 신호 계산 함수 사용
     signals, signals_improved = calculate_trading_signals_once(df_3min, debug_logs=debug_logs, logger=logger, log_level=log_level)
     for t in times:
@@ -824,6 +829,7 @@ async def run(
                 df_3min,
                 date_str,
                 times_map.get(code, []),
+                stock_code=code,
                 logger=capture_logger,
                 debug_logs=debug_logs,
                 log_level=log_level,
@@ -912,8 +918,8 @@ def main():
     #DEFAULT_DATE = "20250821"
     #DEFAULT_CODES = "180400,318160,019180,134580,049470,160550,310200,207760,007980,006910,017510,138040,114190,005670,464580,475960"
 
-    #DEFAULT_DATE = "20250822"
-    #DEFAULT_CODES = "098070,333430,475960,049470,464580,083650,126340,103840,318160,249420"
+    DEFAULT_DATE = "20250822"
+    DEFAULT_CODES = "098070,333430,475960,049470,464580,083650,126340,103840,318160,249420"
 
     DEFAULT_TIMES = ""
 

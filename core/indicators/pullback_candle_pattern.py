@@ -467,7 +467,7 @@ class PullbackCandlePattern:
     @staticmethod
     def check_pullback_recovery_signal(data: pd.DataFrame, baseline_volumes: pd.Series, 
                                       lookback: int = 3) -> bool:
-        """눌림목 회복 신호 확인: 1/4 수준 조정 중 거래량 회복 + 양봉"""
+        """눌림목 회복 신호 확인: 이등분선 지지 + 양봉 + 캔들 개선"""
         if len(data) < lookback + 1:
             return False
         
@@ -475,30 +475,53 @@ class PullbackCandlePattern:
             # 현재 캔들과 이전 캔들들 분리
             current_candle = data.iloc[-1]
             previous_candles = data.iloc[-(lookback+1):-1]  # 현재 제외한 최근 3봉
-            
-            current_baseline = baseline_volumes.iloc[-1]
             previous_baselines = baseline_volumes.iloc[-(lookback+1):-1]
             
             if len(previous_candles) == 0:
                 return False
             
-            # 1. 이전 캔들들이 기준거래량 1/4 수준으로 조정되었는지 확인
-            low_volume_mask = previous_candles['volume'] <= previous_baselines * 0.25
+            # 1. 이전 캔들들이 기준거래량 약 1/4 수준으로 조정되었는지 확인
+            low_volume_mask = previous_candles['volume'] <= previous_baselines * 0.265
             low_volume_ratio = low_volume_mask.sum() / len(previous_candles)
             
             # 최소 2/3 이상이 1/4 이하로 조정되어야 함
             if low_volume_ratio < 2/3:
                 return False
             
-            # 2. 현재 캔들이 회복 신호인지 확인
-            # 조건 1: 양봉
+            # 2. 이등분선 계산 확인
+            bisector_line_series = BisectorLine.calculate_bisector_line(data['high'], data['low'])
+            current_bisector = bisector_line_series.iloc[-1] if not bisector_line_series.empty else None
+            
+            if current_bisector is None:
+                return False
+            
+            # 현재 캔들이 이등분선 위에 있는지 확인
+            current_above_bisector = current_candle['close'] > current_bisector
+            
+            if not current_above_bisector:
+                return False
+            
+            # 3. 현재 캔들이 양봉인지 확인
             is_bullish = current_candle['close'] > current_candle['open']
             
-            # 조건 2: 거래량이 기준거래량 1/4 이상으로 회복
-            volume_recovered = current_candle['volume'] > current_baseline * 0.25
+            if not is_bullish:
+                return False
             
-            # 두 조건 모두 만족해야 매수 신호
-            return is_bullish and volume_recovered
+            # 4. 캔들의 크기가 직전 캔들보다 크거나 위에 있는지 확인
+            prev_candle = data.iloc[-2]  # 직전 캔들
+            
+            # 캔들 크기 비교 (고가-저가)
+            current_size = current_candle['high'] - current_candle['low']
+            prev_size = prev_candle['high'] - prev_candle['low']
+            size_improved = current_size >= prev_size
+            
+            # 캔들 위치 비교 (고가가 더 높은지)
+            position_improved = current_candle['high'] >= prev_candle['high']
+            
+            # 크기가 크거나 위치가 개선되어야 함
+            candle_improved = size_improved or position_improved
+            
+            return candle_improved
             
         except Exception:
             return False
@@ -546,7 +569,18 @@ class PullbackCandlePattern:
             # 위험신호가 있으면 즉시 매도 신호 반환
             if risk_signals:
                 if debug and logger:
-                    logger.info(f"위험신호 감지: {[r.value for r in risk_signals]}")
+                    # 현재 봉 정보 추가 (시간 포함)
+                    candle_time = ""
+                    if 'datetime' in data.columns:
+                        try:
+                            dt = pd.to_datetime(current['datetime'])
+                            candle_time = f" {dt.strftime('%H:%M')}"
+                        except:
+                            candle_time = ""
+                    
+                    current_candle_info = f"봉:{len(data)}개{candle_time} 종가:{current['close']:,.0f}원"
+                    logger.info(f"[{getattr(logger, '_stock_code', 'UNKNOWN')}] {current_candle_info} | "
+                               f"위험신호 감지: {[r.value for r in risk_signals]}")
                 return (SignalStrength(SignalType.SELL, 100, 0, 
                                      [f'위험신호: {r.value}' for r in risk_signals], 
                                      volume_analysis.volume_ratio, 
@@ -562,10 +596,8 @@ class PullbackCandlePattern:
             # 6. 지지선 상태 확인
             bisector_status = PullbackCandlePattern.get_bisector_status(current['close'], bisector_line)
             
-            # 7. 변곡캔들 감지
-            has_turning_candle = PullbackCandlePattern.is_valid_turning_candle(
-                current, volume_analysis, candle_analysis
-            )
+            # 7. 변곡캔들 체크는 check_pullback_recovery_signal에서 처리됨
+            has_turning_candle = True  # 회복 신호에서 이미 캔들 품질 확인함
             
             # 8. 필수 조건 체크: 눌림목 회복 신호 확인
             has_recovery_signal = PullbackCandlePattern.check_pullback_recovery_signal(data, baseline_volumes)
@@ -601,7 +633,18 @@ class PullbackCandlePattern:
                 signal_strength.reasons.append('이등분선 이탈로 매수 금지')
             
             if debug and logger:
-                logger.info(f"신호: {signal_strength.signal_type.value}, 신뢰도: {signal_strength.confidence:.1f}%, "
+                # 현재 봉 정보 추가 (시간 포함)
+                candle_time = ""
+                if 'datetime' in data.columns:
+                    try:
+                        dt = pd.to_datetime(current['datetime'])
+                        candle_time = f" {dt.strftime('%H:%M')}"
+                    except:
+                        candle_time = ""
+                
+                current_candle_info = f"봉:{len(data)}개{candle_time} 종가:{current['close']:,.0f}원"
+                logger.info(f"[{getattr(logger, '_stock_code', 'UNKNOWN')}] {current_candle_info} | "
+                           f"신호: {signal_strength.signal_type.value}, 신뢰도: {signal_strength.confidence:.1f}%, "
                            f"거래량비율: {volume_analysis.volume_ratio:.1%}, 이등분선: {bisector_status.value}")
             
             return (signal_strength, risk_signals)
@@ -720,8 +763,19 @@ class PullbackCandlePattern:
                         entry_low = float(current_data['low'].iloc[-1])
                         
                         if debug and logger:
-                            logger.log(log_level, f"매수 신호: {signal_strength.signal_type.value} "
-                                     f"신뢰도: {signal_strength.confidence:.1f}% 가격: {entry_price}")
+                            # 현재 봉 정보 추가 (시간 포함)
+                            candle_time = ""
+                            if 'datetime' in current_data.columns:
+                                try:
+                                    dt = pd.to_datetime(current_data['datetime'].iloc[-1])
+                                    candle_time = f" {dt.strftime('%H:%M')}"
+                                except:
+                                    candle_time = ""
+                            
+                            current_candle_info = f"봉:{i+1}개{candle_time} 종가:{entry_price:,.0f}원"
+                            logger.log(log_level, f"[{getattr(logger, '_stock_code', 'UNKNOWN')}] {current_candle_info} | "
+                                     f"매수 신호: {signal_strength.signal_type.value} "
+                                     f"신뢰도: {signal_strength.confidence:.1f}% 가격: {entry_price:,.0f}원")
                 else:
                     # 매도 신호 확인
                     if risk_signals:
@@ -740,7 +794,18 @@ class PullbackCandlePattern:
                         entry_low = None
                         
                         if debug and logger:
-                            logger.log(log_level, f"매도 신호: {[r.value for r in risk_signals]}")
+                            # 현재 봉 정보 추가 (시간 포함)
+                            candle_time = ""
+                            if 'datetime' in current_data.columns:
+                                try:
+                                    dt = pd.to_datetime(current_data['datetime'].iloc[-1])
+                                    candle_time = f" {dt.strftime('%H:%M')}"
+                                except:
+                                    candle_time = ""
+                            
+                            current_candle_info = f"봉:{i+1}개{candle_time} 종가:{current_data['close'].iloc[-1]:,.0f}원"
+                            logger.log(log_level, f"[{getattr(logger, '_stock_code', 'UNKNOWN')}] {current_candle_info} | "
+                                     f"매도 신호: {[r.value for r in risk_signals]}")
             
             return signals
             
