@@ -153,6 +153,11 @@ class TradingStock:
     last_update: datetime = field(default_factory=datetime.now)
     target_profit_rate: float = 0.015  # 목표수익률 (기본값 1.5%)
     
+    # 가상매매 관련 정보
+    _virtual_buy_record_id: Optional[int] = None  # 가상 매수 기록 ID
+    _virtual_buy_price: Optional[float] = None    # 가상 매수가
+    _virtual_quantity: Optional[int] = None       # 가상 매수 수량
+    
     def change_state(self, new_state: StockState, reason: str = ""):
         """상태 변경 및 이력 기록"""
         old_state = self.state
@@ -187,6 +192,26 @@ class TradingStock:
     def clear_position(self):
         """포지션 클리어"""
         self.position = None
+    
+    def set_virtual_buy_info(self, record_id: int, price: float, quantity: int):
+        """가상 매수 정보 설정"""
+        self._virtual_buy_record_id = record_id
+        self._virtual_buy_price = price
+        self._virtual_quantity = quantity
+    
+    def clear_virtual_buy_info(self):
+        """가상 매수 정보 클리어"""
+        self._virtual_buy_record_id = None
+        self._virtual_buy_price = None
+        self._virtual_quantity = None
+    
+    def has_virtual_position(self) -> bool:
+        """가상 포지션 보유 여부"""
+        return all([
+            self._virtual_buy_record_id is not None,
+            self._virtual_buy_price is not None,
+            self._virtual_quantity is not None
+        ])
 
 
 @dataclass

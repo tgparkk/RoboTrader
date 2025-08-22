@@ -251,8 +251,6 @@ class DayTradingBot:
                 f"📦 상태요약: SELECTED={len(selected_stocks)} BUY_CANDIDATE={len(buy_candidates)} POSITIONED={len(positioned_stocks)}"
             )
             
-            # 대기 중인 매수 신호 처리 (전략별 내부에서 처리하므로 제거)
-            
             # 매수 판단: 선정된 종목들
             if selected_stocks:
                 self.logger.debug(f"🔍 매수 판단 대상 {len(selected_stocks)}개 종목: {[f'{s.stock_code}({s.stock_name})' for s in selected_stocks]}")
@@ -311,7 +309,8 @@ class DayTradingBot:
             if hasattr(self.decision_engine, 'verify_signal_consistency'):
                 try:
                     # 3분봉 데이터로 변환
-                    data_3min = self.decision_engine._convert_to_3min_data(combined_data)
+                    from core.timeframe_converter import TimeFrameConverter
+                    data_3min = TimeFrameConverter.convert_to_3min_data(combined_data)
                     if data_3min is not None and not data_3min.empty:
                         verification_result = self.decision_engine.verify_signal_consistency(stock_code, data_3min)
                         
@@ -463,9 +462,7 @@ class DayTradingBot:
                         )
                         
                         # 가상 포지션 정보 설정
-                        trading_stock._virtual_buy_record_id = position['id']
-                        trading_stock._virtual_buy_price = buy_price
-                        trading_stock._virtual_quantity = position['quantity']
+                        trading_stock.set_virtual_buy_info(position['id'], buy_price, position['quantity'])
                         trading_stock.set_position(position['quantity'], buy_price)
                         
                         # 차트 데이터는 간단히 처리 (현재가만 사용하므로)
@@ -494,9 +491,7 @@ class DayTradingBot:
                     )
                     
                     # 가상 포지션 정보 설정
-                    trading_stock._virtual_buy_record_id = position['id']
-                    trading_stock._virtual_buy_price = buy_price
-                    trading_stock._virtual_quantity = position['quantity']
+                    trading_stock.set_virtual_buy_info(position['id'], buy_price, position['quantity'])
                     trading_stock.set_position(position['quantity'], buy_price)
                     
                     # 전략별 매도 판단 실행
@@ -688,9 +683,7 @@ class DayTradingBot:
                     )
                     
                     # 가상 포지션 정보 설정
-                    trading_stock._virtual_buy_record_id = position['id']
-                    trading_stock._virtual_buy_price = buy_price
-                    trading_stock._virtual_quantity = position['quantity']
+                    trading_stock.set_virtual_buy_info(position['id'], buy_price, position['quantity'])
                     trading_stock.set_position(position['quantity'], buy_price)
                     
                     # 차트 데이터

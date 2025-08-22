@@ -131,9 +131,7 @@ class TradingDecisionEngine:
                     quantity = latest_position['quantity']
                     
                     # 가상 포지션 정보를 trading_stock에 복원
-                    trading_stock._virtual_buy_record_id = buy_record_id
-                    trading_stock._virtual_buy_price = buy_price
-                    trading_stock._virtual_quantity = quantity
+                    trading_stock.set_virtual_buy_info(buy_record_id, buy_price, quantity)
                     trading_stock.set_position(quantity, buy_price)
                     
                     self.logger.debug(f"🔄 가상 포지션 복원: {trading_stock.stock_code} {quantity}주 @{buy_price:,.0f}원")
@@ -171,7 +169,7 @@ class TradingDecisionEngine:
                 # 3/5가 계산 (별도 클래스 사용)
                 try:
                     from core.price_calculator import PriceCalculator
-                    data_3min = self._convert_to_3min_data(combined_data)
+                    data_3min = TimeFrameConverter.convert_to_3min_data(combined_data)
                     
                     three_fifths_price, entry_low = PriceCalculator.calculate_three_fifths_price(data_3min, self.logger)
                     
@@ -220,9 +218,7 @@ class TradingDecisionEngine:
             if buy_record_id:
                     
                     # 가상 포지션 정보를 trading_stock에 저장
-                    trading_stock._virtual_buy_record_id = buy_record_id
-                    trading_stock._virtual_buy_price = current_price
-                    trading_stock._virtual_quantity = quantity
+                    trading_stock.set_virtual_buy_info(buy_record_id, current_price, quantity)
                     
                     # 신호 강도에 따른 목표수익률 설정
                     if "눌림목" in buy_reason:
@@ -315,9 +311,7 @@ class TradingDecisionEngine:
                 if success:
                     
                     # 가상 포지션 정보 정리
-                    for attr in ['_virtual_buy_record_id', '_virtual_buy_price', '_virtual_quantity']:
-                        if hasattr(trading_stock, attr):
-                            delattr(trading_stock, attr)
+                    trading_stock.clear_virtual_buy_info()
                     
                     # 포지션 정리
                     trading_stock.clear_position()
@@ -574,7 +568,7 @@ class TradingDecisionEngine:
             
             # 1분봉 데이터를 3분봉으로 변환
             data_3min = TimeFrameConverter.convert_to_3min_data(data)
-            if data_3min is None or len(data_3min) < 10:  # 20개 → 10개로 완화
+            if data_3min is None or len(data_3min) < 10:
                 self.logger.warning(f"📊 3분봉 데이터 부족: {len(data_3min) if data_3min is not None else 0}개 (최소 10개 필요)")
                 return False, f"3분봉 데이터 부족 ({len(data_3min) if data_3min is not None else 0}/10)"
             

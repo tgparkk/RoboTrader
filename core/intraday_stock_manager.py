@@ -682,7 +682,8 @@ class IntradayStockManager:
             
             # 완성된 봉만 사용 (현재 진행 중인 1분봉 제외)
             current_time = now_kst()
-            combined_data = self._filter_completed_candles_only(combined_data, current_time)
+            from core.timeframe_converter import TimeFrameConverter
+            combined_data = TimeFrameConverter.filter_completed_candles_only(combined_data, current_time)
             
             # 시간순 정렬
             if 'datetime' in combined_data.columns:
@@ -997,96 +998,3 @@ class IntradayStockManager:
             return {'has_issues': True, 'issues': [f'품질검사 오류: {str(e)[:30]}']}
     
     
-    def _filter_completed_candles_only(self, chart_data: pd.DataFrame, current_time: datetime) -> pd.DataFrame:
-        """
-        완성된 캔들만 필터링 (진행 중인 1분봉 제외)
-        
-        시뮬레이션과의 일관성을 위해 현재 진행 중인 1분봉을 제외하고
-        완전히 완성된 1분봉만 반환합니다.
-        
-        Args:
-            chart_data: 원본 차트 데이터
-            current_time: 현재 시간
-            
-        Returns:
-            완성된 캔들만 포함한 데이터프레임
-        """
-        try:
-            if chart_data.empty:
-                return chart_data
-            
-            # 현재 분의 시작 시간 (초, 마이크로초 제거)
-            current_minute_start = current_time.replace(second=0, microsecond=0)
-            
-            # datetime 컬럼이 있는 경우
-            if 'datetime' in chart_data.columns:
-                # 한국시간(KST) 유지하면서 안전한 타입 변환
-                chart_data_copy = chart_data.copy()
-                
-                # 현재 시간이 KST이므로 같은 타임존으로 맞춤
-                if hasattr(current_time, 'tzinfo') and current_time.tzinfo is not None:
-                    # current_time이 KST를 가지고 있으면 그대로 사용
-                    current_minute_start_pd = pd.Timestamp(current_minute_start).tz_convert(current_time.tzinfo)
-                else:
-                    # KST 타임존이 없으면 naive로 처리
-                    current_minute_start_pd = pd.Timestamp(current_minute_start)
-                
-                # datetime 컬럼을 pandas Timestamp로 변환 (기존 타임존 정보 보존)
-                try:
-                    chart_data_copy['datetime'] = pd.to_datetime(chart_data_copy['datetime'])
-                    
-                    # 타임존 정보가 있는 경우 일치시키기
-                    if hasattr(current_minute_start_pd, 'tz') and current_minute_start_pd.tz is not None:
-                        if chart_data_copy['datetime'].dt.tz is None:
-                            # 차트 데이터가 naive이면 KST로 가정
-                            from utils.korean_time import KST
-                            chart_data_copy['datetime'] = chart_data_copy['datetime'].dt.tz_localize(KST)
-                    else:
-                        # 비교 기준이 naive이면 차트 데이터도 naive로 변환
-                        if chart_data_copy['datetime'].dt.tz is not None:
-                            chart_data_copy['datetime'] = chart_data_copy['datetime'].dt.tz_localize(None)
-                            current_minute_start_pd = pd.Timestamp(current_minute_start.replace(tzinfo=None))
-                            
-                except Exception as e:
-                    # 변환 실패시 문자열 비교로 대체
-                    self.logger.warning(f"datetime 타입 변환 실패, 문자열 비교 사용: {e}")
-                    return chart_data
-                
-                # 현재 진행 중인 1분봉 제외 (완성되지 않았으므로)
-                completed_data = chart_data_copy[chart_data_copy['datetime'] < current_minute_start_pd].copy()
-                
-                excluded_count = len(chart_data) - len(completed_data)
-                if excluded_count > 0:
-                    self.logger.debug(f"📊 미완성 봉 {excluded_count}개 제외 (진행 중인 1분봉)")
-                
-                return completed_data
-            
-            # time 컬럼만 있는 경우
-            elif 'time' in chart_data.columns:
-                # 이전 분의 시간 문자열 생성
-                prev_minute = current_minute_start - timedelta(minutes=1)
-                prev_time_str = prev_minute.strftime('%H%M%S')
-                
-                # time을 문자열로 변환하여 비교
-                chart_data_copy = chart_data.copy()
-                chart_data_copy['time_str'] = chart_data_copy['time'].astype(str).str.zfill(6)
-                completed_data = chart_data_copy[chart_data_copy['time_str'] <= prev_time_str].copy()
-                
-                # time_str 컬럼 제거
-                if 'time_str' in completed_data.columns:
-                    completed_data = completed_data.drop('time_str', axis=1)
-                
-                excluded_count = len(chart_data) - len(completed_data)
-                if excluded_count > 0:
-                    self.logger.debug(f"📊 미완성 봉 {excluded_count}개 제외 (진행 중인 1분봉)")
-                
-                return completed_data
-            
-            # 시간 컬럼이 없으면 원본 반환
-            else:
-                self.logger.warning("시간 컬럼을 찾을 수 없어 원본 데이터 반환")
-                return chart_data
-                
-        except Exception as e:
-            self.logger.error(f"완성된 캔들 필터링 오류: {e}")
-            return chart_data  # 오류 시 원본 반환

@@ -150,56 +150,6 @@ def calculate_trading_signals_once(df_3min: pd.DataFrame, *, debug_logs: bool = 
     return signals, signals
 
 
-def _convert_to_3min_data(data: pd.DataFrame) -> Optional[pd.DataFrame]:
-    """1분봉 데이터를 3분봉으로 변환 (main.py _convert_to_3min_data와 동일한 방식)"""
-    try:
-        if data is None or len(data) < 3:
-            return None
-        
-        df = data.copy()
-        
-        # datetime 컬럼 확인 및 변환 (main.py 방식과 동일)
-        if 'datetime' not in df.columns:
-            if 'date' in df.columns and 'time' in df.columns:
-                df['datetime'] = pd.to_datetime(df['date'].astype(str) + ' ' + df['time'].astype(str))
-            elif 'time' in df.columns:
-                # time 컬럼만 있는 경우 임시 날짜 추가
-                time_str = df['time'].astype(str).str.zfill(6)
-                df['datetime'] = pd.to_datetime('2024-01-01 ' + 
-                                              time_str.str[:2] + ':' + 
-                                              time_str.str[2:4] + ':' + 
-                                              time_str.str[4:6])
-            else:
-                # datetime 컬럼이 없으면 순차적으로 생성 (09:00부터)
-                df['datetime'] = pd.date_range(start='09:00', periods=len(df), freq='1min')
-        
-        # datetime을 인덱스로 설정
-        df['datetime'] = pd.to_datetime(df['datetime'])
-        df = df.set_index('datetime')
-        
-        # 3분봉으로 리샘플링 (main.py와 완전히 동일)
-        resampled = df.resample('3T').agg({
-            'open': 'first',
-            'high': 'max',
-            'low': 'min',
-            'close': 'last',
-            'volume': 'sum'
-        })
-        
-        # NaN 제거 후 인덱스 리셋 (main.py와 동일)
-        resampled = resampled.dropna().reset_index()
-
-        # 확정 봉만 사용: 마지막 행은 진행 중일 수 있으므로 제외 (main.py와 동일)
-        if resampled is not None and len(resampled) >= 1:
-            resampled = resampled.iloc[:-1] if len(resampled) > 0 else resampled
-        
-        logger.debug(f"📊 3분봉 변환: {len(data)}개 → {len(resampled)}개 (main.py 방식)")
-        
-        return resampled
-        
-    except Exception as e:
-        logger.error(f"❌ 3분봉 변환 오류: {e}")
-        return None
 
 def floor_to_3min(ts: pd.Timestamp) -> pd.Timestamp:
     """주어진 타임스탬프를 3분 경계로 내림(floor)한다."""
@@ -244,8 +194,9 @@ async def fetch_and_prepare_data(stock_code: str, target_date: str) -> Tuple[Opt
         logger.error(f"{stock_code} {target_date} 1분봉 데이터 조회 실패")
         return None, None
     
-    # main.py와 동일한 방식으로 3분봉 변환
-    df_3min = _convert_to_3min_data(base_1min)
+    # TimeFrameConverter를 사용한 3분봉 변환
+    from core.timeframe_converter import TimeFrameConverter
+    df_3min = TimeFrameConverter.convert_to_3min_data(base_1min)
     if df_3min is None or df_3min.empty:
         logger.error(f"{stock_code} {target_date} 3분봉 변환 실패")
         return base_1min, None
