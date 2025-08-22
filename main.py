@@ -258,17 +258,18 @@ class DayTradingBot:
             else:
                 self.logger.debug("📊 매수 판단 대상 종목 없음 (SELECTED 상태 종목 없음)")
             
-            # 매도 판단: 포지션 보유 종목들  
-            if positioned_stocks:
-                self.logger.debug(f"💰 매도 판단 대상 {len(positioned_stocks)}개 종목: {[f'{s.stock_code}({s.stock_name})' for s in positioned_stocks]}")
-                for trading_stock in positioned_stocks:
-                    await self._analyze_sell_decision(trading_stock)
-            else:
-                self.logger.debug("📊 매도 판단 대상 종목 없음 (POSITIONED 상태 종목 없음)")
-            
-            # 가상 포지션 매도 판단 활성화
-            if hasattr(self, 'db_manager') and self.db_manager:
+            # 🆕 가상매매 vs 실제거래 모드에 따른 매도 로직 분리
+            if self.decision_engine.is_virtual_mode:
+                # 가상매매 모드: DB에서 직접 가상 포지션 조회하여 매도 판단
                 await self._analyze_virtual_positions_for_sell()
+            else:
+                # 실제 거래 모드: 포지션 보유 종목 매도 판단 실행
+                if positioned_stocks:
+                    self.logger.debug(f"💰 매도 판단 대상 {len(positioned_stocks)}개 종목: {[f'{s.stock_code}({s.stock_name})' for s in positioned_stocks]}")
+                    for trading_stock in positioned_stocks:
+                        await self._analyze_sell_decision(trading_stock)
+                else:
+                    self.logger.debug("📊 매도 판단 대상 종목 없음 (POSITIONED 상태 종목 없음)")
                 
         except Exception as e:
             self.logger.error(f"❌ 매매 판단 시스템 오류: {e}")
@@ -603,10 +604,26 @@ class DayTradingBot:
         try:
             from core.models import StockState
             positioned_stocks = self.trading_manager.get_stocks_by_state(StockState.POSITIONED)
-            if not positioned_stocks:
+            
+            # 🆕 가상 포지션 일괄 매도 추가
+            virtual_positions = []
+            if hasattr(self, 'db_manager') and self.db_manager:
+                try:
+                    open_positions = self.db_manager.get_virtual_open_positions()
+                    if not open_positions.empty:
+                        virtual_positions = open_positions.to_dict('records')
+                        self.logger.info(f"🛎️ 장마감 가상포지션 일괄청산: 대상 {len(virtual_positions)}종목")
+                except Exception as ve:
+                    self.logger.error(f"❌ 가상 포지션 조회 오류: {ve}")
+            
+            if not positioned_stocks and not virtual_positions:
                 self.logger.info("📦 장마감 일괄청산: 보유 포지션 없음")
                 return
-            self.logger.info(f"🛎️ 장마감 일괄청산 시작: 대상 {len(positioned_stocks)}종목")
+                
+            total_positions = len(positioned_stocks) + len(virtual_positions)
+            self.logger.info(f"🛎️ 장마감 일괄청산 시작: 실제 {len(positioned_stocks)}종목, 가상 {len(virtual_positions)}종목")
+            
+            # 실제 포지션 매도
             for trading_stock in positioned_stocks:
                 try:
                     if not trading_stock.position or trading_stock.position.quantity <= 0:
@@ -634,7 +651,62 @@ class DayTradingBot:
                         )
                 except Exception as se:
                     self.logger.error(f"❌ 장마감 청산 개별 처리 오류({trading_stock.stock_code}): {se}")
+            
+            # 🆕 가상 포지션 매도
+            for position in virtual_positions:
+                try:
+                    stock_code = position['stock_code']
+                    stock_name = position['stock_name']
+                    buy_price = position['buy_price']
+                    
+                    # 현재가 조회
+                    current_price_info = self.intraday_manager.get_cached_current_price(stock_code)
+                    if current_price_info is None:
+                        # 분봉 데이터로 현재가 추정
+                        combined_data = self.intraday_manager.get_combined_chart_data(stock_code)
+                        if combined_data is not None and len(combined_data) > 0:
+                            current_price = float(combined_data['close'].iloc[-1])
+                        else:
+                            self.logger.warning(f"⚠️ 장마감 가상매도 실패: {stock_code} 현재가 조회 불가")
+                            continue
+                    else:
+                        current_price = current_price_info['current_price']
+                    
+                    # 임시 TradingStock 객체 생성
+                    from core.models import TradingStock, StockState
+                    from utils.korean_time import now_kst
+                    trading_stock = TradingStock(
+                        stock_code=stock_code,
+                        stock_name=stock_name,
+                        state=StockState.POSITIONED,
+                        selected_time=now_kst(),
+                        selection_reason="가상매수"
+                    )
+                    
+                    # 가상 포지션 정보 설정
+                    trading_stock._virtual_buy_record_id = position['id']
+                    trading_stock._virtual_buy_price = buy_price
+                    trading_stock._virtual_quantity = position['quantity']
+                    trading_stock.set_position(position['quantity'], buy_price)
+                    
+                    # 차트 데이터
+                    combined_data = self.intraday_manager.get_combined_chart_data(stock_code)
+                    if combined_data is None:
+                        self.logger.warning(f"⚠️ 장마감 가상매도 실패: {stock_code} 차트 데이터 없음")
+                        continue
+                    
+                    # 가상 매도 실행
+                    await self.decision_engine.execute_virtual_sell(trading_stock, combined_data, "EOD")
+                    
+                    profit_rate = (current_price - buy_price) / buy_price
+                    self.logger.info(f"🧹 장마감 가상청산: {stock_code}({stock_name}) "
+                                   f"@{current_price:,.0f}원 ({profit_rate:+.2%}) - EOD")
+                    
+                except Exception as ve:
+                    self.logger.error(f"❌ 장마감 가상청산 개별 처리 오류({position.get('stock_code', 'Unknown')}): {ve}")
+            
             self.logger.info("✅ 장마감 일괄청산 요청 완료")
+            
         except Exception as e:
             self.logger.error(f"❌ 장마감 일괄청산 오류: {e}")
     
