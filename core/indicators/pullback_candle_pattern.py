@@ -530,11 +530,25 @@ class PullbackCandlePattern:
             pullback_data = today_data.iloc[high_point_idx:]
             pullback_baselines = today_baselines.iloc[high_point_idx:]
             
-            # 하락 과정에서 거래량 60% 이상인 봉이 있는지 확인
-            # 기준 거래량은 실시간으로 변하므로 각 캔들별로 해당 시점의 기준량 사용
-            for i in range(len(pullback_data)):
+            # baseline_volumes 갱신 시점을 추적하여 갱신된 시점부터만 체크
+            prev_baseline = None
+            baseline_updated_idx = None
+            
+            for i in range(len(pullback_baselines)):
+                current_baseline = pullback_baselines.iloc[i]
+                
+                # baseline_volumes가 갱신되었는지 확인 (이전 값과 다르면 갱신)
+                if prev_baseline is not None and current_baseline != prev_baseline:
+                    baseline_updated_idx = i
+                    break
+                prev_baseline = current_baseline
+            
+            # baseline이 갱신된 시점이 없다면 전체 구간 체크, 있다면 갱신 시점부터만 체크
+            check_start_idx = baseline_updated_idx if baseline_updated_idx is not None else 0
+            
+            # 갱신된 시점부터 하락봉이면서 고거래량인지 체크
+            for i in range(check_start_idx, len(pullback_data)):
                 candle = pullback_data.iloc[i]
-                # 현재 캔들까지의 누적 최대 거래량이 해당 시점의 기준 거래량
                 current_baseline = pullback_baselines.iloc[i] if i < len(pullback_baselines) else 0
                 
                 # 하락봉이면서 고거래량인지 체크

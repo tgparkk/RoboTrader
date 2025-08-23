@@ -294,8 +294,8 @@ class DayTradingBot:
             if combined_data is None:
                 self.logger.debug(f"❌ {stock_code} 분봉 데이터 없음 (None)")
                 return
-            if len(combined_data) < 10:
-                self.logger.debug(f"❌ {stock_code} 분봉 데이터 부족: {len(combined_data)}개 (최소 10개 필요)")
+            if len(combined_data) < 5:
+                self.logger.debug(f"❌ {stock_code} 분봉 데이터 부족: {len(combined_data)}개 (최소 5개 필요)")
                 return
             
             self.logger.debug(f"✅ {stock_code} 분봉 데이터 확인: {len(combined_data)}개")

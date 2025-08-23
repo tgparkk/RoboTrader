@@ -568,9 +568,9 @@ class TradingDecisionEngine:
             
             # 1분봉 데이터를 3분봉으로 변환
             data_3min = TimeFrameConverter.convert_to_3min_data(data)
-            if data_3min is None or len(data_3min) < 10:
-                self.logger.warning(f"📊 3분봉 데이터 부족: {len(data_3min) if data_3min is not None else 0}개 (최소 10개 필요)")
-                return False, f"3분봉 데이터 부족 ({len(data_3min) if data_3min is not None else 0}/10)"
+            if data_3min is None or len(data_3min) < 5:
+                self.logger.warning(f"📊 3분봉 데이터 부족: {len(data_3min) if data_3min is not None else 0}개 (최소 5개 필요)")
+                return False, f"3분봉 데이터 부족 ({len(data_3min) if data_3min is not None else 0}/5)"
             
             # 눌림목 캔들패턴 신호 계산 (3분봉 기준, signal_replay.py와 동일 설정)
             signals = PullbackCandlePattern.generate_trading_signals(

@@ -249,12 +249,12 @@ class IntradayStockManager:
                 
                 # 3분봉 변환 예상 개수 계산
                 expected_3min_count = data_count // 3
-                self.logger.info(f"   예상 3분봉: {expected_3min_count}개 (최소 10개 필요)")
+                self.logger.info(f"   예상 3분봉: {expected_3min_count}개 (최소 5개 필요)")
                 
-                if expected_3min_count >= 10:
+                if expected_3min_count >= 5:
                     self.logger.info(f"   ✅ 신호 생성 조건 충족!")
                 else:
-                    self.logger.warning(f"   ⚠️ 3분봉 데이터 부족 위험: {expected_3min_count}/10")
+                    self.logger.warning(f"   ⚠️ 3분봉 데이터 부족 위험: {expected_3min_count}/5")
                 
                 # 09:00부터 데이터가 시작되는지 확인
                 if start_time and  start_time < "090000":
@@ -470,9 +470,9 @@ class IntradayStockManager:
             
             data_count = len(combined_data)
             
-            # 최소 데이터 개수 체크 (3분봉 최소 10개 = 30분봉 필요)
-            if data_count < 10:
-                self.logger.debug(f"❌ {stock_code} 데이터 부족: {data_count}/30")
+            # 최소 데이터 개수 체크 (3분봉 최소 5개 = 15분봉 필요)
+            if data_count < 5:
+                self.logger.debug(f"❌ {stock_code} 데이터 부족: {data_count}/15")
                 return False
             
             # 시작 시간 체크 (08:00 또는 09:00대 시작 확인)
@@ -955,8 +955,8 @@ class IntradayStockManager:
             # DataFrame을 dict 형태로 변환하여 기존 로직과 호환
             data = all_data.to_dict('records')
             
-            # 1. 데이터 양 검사 (최소 10개 이상)
-            if len(data) < 10:
+            # 1. 데이터 양 검사 (최소 5개 이상)
+            if len(data) < 5:
                 issues.append(f'데이터 부족 ({len(data)}개)')
             
             # 2. 시간 순서 검사 (최근 5개 데이터)
