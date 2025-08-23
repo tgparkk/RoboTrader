@@ -265,7 +265,7 @@ def evaluate_signals_at_times(
                 "unmet_conditions": [],
             })
         else:
-            unmet = analyze_unmet_conditions_at(df_3min, row_idx)
+            unmet = []  # 조건 분석 기능은 추후 구현
             results.append({
                 "time": t,
                 "has_signal": False,
@@ -919,6 +919,7 @@ def main():
     #DEFAULT_CODES = "180400,318160,019180,134580,049470,160550,310200,207760,007980,006910,017510,138040,114190,005670,464580,475960"
 
     DEFAULT_DATE = "20250822"
+    #DEFAULT_CODES = "098070"
     DEFAULT_CODES = "098070,333430,475960,049470,464580,083650,126340,103840,318160,249420"
 
     DEFAULT_TIMES = ""

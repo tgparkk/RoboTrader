@@ -465,6 +465,91 @@ class PullbackCandlePattern:
                 small_candle_ratio >= 0.5)
     
     @staticmethod
+    def check_heavy_selling_pressure(data: pd.DataFrame, baseline_volumes: pd.Series) -> bool:
+        """
+        눌림목 하락 과정에서 매물부담 체크
+        
+        조건:
+        1. 3% 이상 상승한 구간이 있었는지 확인
+        2. 상승 후 하락(눌림목) 과정에서 거래량 60% 이상인 봉이 있는지 확인
+        
+        Args:
+            data: 3분봉 데이터
+            baseline_volumes: 기준 거래량
+            
+        Returns:
+            bool: True이면 매물부담으로 매수 제외
+        """
+        try:
+            if len(data) < 5:  # 최소 데이터 필요
+                return False
+            
+            # 1. 당일 데이터 범위 확정
+            if 'datetime' in data.columns:
+                try:
+                    # datetime 컬럼이 있는 경우 당일 데이터 필터링
+                    dates = pd.to_datetime(data['datetime']).dt.date
+                    today = dates.iloc[-1]  # 현재(마지막) 캔들의 날짜
+                    
+                    # 당일 데이터만 필터링
+                    today_mask = dates == today
+                    today_data = data[today_mask].reset_index(drop=True)
+                    today_baselines = baseline_volumes[today_mask].reset_index(drop=True)
+                    
+                    if len(today_data) < 5:
+                        return False
+                        
+                except Exception:
+                    # datetime 처리 실패시 전체 데이터를 당일로 간주
+                    today_data = data.copy()
+                    today_baselines = baseline_volumes.copy()
+            else:
+                # datetime 컬럼이 없으면 전체 데이터를 당일로 간주
+                today_data = data.copy()
+                today_baselines = baseline_volumes.copy()
+            
+            # 2. 당일 시작점부터 3% 이상 상승 구간 찾기
+            start_price = today_data['open'].iloc[0]  # 당일 시가
+            high_point_idx = None
+            high_price = None
+            
+            for i in range(len(today_data)):
+                current_high = today_data['high'].iloc[i]
+                # 당일 시가 대비 상승률 계산
+                gain_rate = (current_high - start_price) / start_price if start_price > 0 else 0
+                
+                if gain_rate >= 0.03:  # 3% 이상 상승
+                    high_point_idx = i
+                    high_price = current_high
+                    break
+            
+            if high_point_idx is None:
+                return False  # 3% 상승 구간이 없으면 매물부담 체크 안함
+            
+            # 3. 고점 이후 하락 과정에서 고거래량 체크
+            pullback_data = today_data.iloc[high_point_idx:]
+            pullback_baselines = today_baselines.iloc[high_point_idx:]
+            
+            # 하락 과정에서 거래량 60% 이상인 봉이 있는지 확인
+            # 기준 거래량은 실시간으로 변하므로 각 캔들별로 해당 시점의 기준량 사용
+            for i in range(len(pullback_data)):
+                candle = pullback_data.iloc[i]
+                # 현재 캔들까지의 누적 최대 거래량이 해당 시점의 기준 거래량
+                current_baseline = pullback_baselines.iloc[i] if i < len(pullback_baselines) else 0
+                
+                # 하락봉이면서 고거래량인지 체크
+                is_declining = candle['close'] < candle['open'] or candle['close'] < high_price
+                high_volume = candle['volume'] >= current_baseline * 0.6 if current_baseline > 0 else False
+                
+                if is_declining and high_volume:
+                    return True  # 매물부담 감지
+            
+            return False
+            
+        except Exception:
+            return False
+    
+    @staticmethod
     def check_pullback_recovery_signal(data: pd.DataFrame, baseline_volumes: pd.Series, 
                                       lookback: int = 3) -> bool:
         """눌림목 회복 신호 확인: 이등분선 지지 + 양봉 + 캔들 개선"""
@@ -540,7 +625,7 @@ class PullbackCandlePattern:
             Tuple[SignalStrength, List[RiskSignal]]: (신호 강도, 위험 신호 목록)
         """
         try:
-            if data is None or data.empty or len(data) < 10:
+            if data is None or data.empty or len(data) < 5:
                 return (SignalStrength(SignalType.AVOID, 0, 0, ['데이터 부족'], 0, BisectorStatus.BROKEN), [])
 
             # 1. 데이터 수집 및 기본 계산
@@ -587,19 +672,41 @@ class PullbackCandlePattern:
                                      PullbackCandlePattern.get_bisector_status(current['close'], bisector_line)), 
                        risk_signals)
             
-            # 4. 선행 상승 확인
+            # 4. 눌림목 과정 매물부담 체크 (매수 제외 조건)
+            has_selling_pressure = PullbackCandlePattern.check_heavy_selling_pressure(data, baseline_volumes)
+            
+            if has_selling_pressure:
+                if debug and logger:
+                    candle_time = ""
+                    if 'datetime' in data.columns:
+                        try:
+                            dt = pd.to_datetime(current['datetime'])
+                            candle_time = f" {dt.strftime('%H:%M')}"
+                        except:
+                            candle_time = ""
+                    
+                    current_candle_info = f"봉:{len(data)}개{candle_time} 종가:{current['close']:,.0f}원"
+                    logger.info(f"[{getattr(logger, '_stock_code', 'UNKNOWN')}] {current_candle_info} | "
+                               f"눌림목 과정 매물부담 감지 - 매수 제외")
+                
+                return (SignalStrength(SignalType.AVOID, 0, 0, 
+                                     ['눌림목 과정 매물부담 (3% 상승 후 하락시 고거래량)'], 
+                                     volume_analysis.volume_ratio, 
+                                     PullbackCandlePattern.get_bisector_status(current['close'], bisector_line)), [])
+            
+            # 5. 선행 상승 확인
             prior_uptrend = PullbackCandlePattern.check_prior_uptrend(data)
             
-            # 5. 조정 품질 분석
+            # 6. 조정 품질 분석
             good_pullback = PullbackCandlePattern.analyze_pullback_quality(data, baseline_volumes)
             
-            # 6. 지지선 상태 확인
+            # 7. 지지선 상태 확인
             bisector_status = PullbackCandlePattern.get_bisector_status(current['close'], bisector_line)
             
-            # 7. 변곡캔들 체크는 check_pullback_recovery_signal에서 처리됨
+            # 8. 변곡캔들 체크는 check_pullback_recovery_signal에서 처리됨
             has_turning_candle = True  # 회복 신호에서 이미 캔들 품질 확인함
             
-            # 8. 필수 조건 체크: 눌림목 회복 신호 확인
+            # 9. 필수 조건 체크: 눌림목 회복 신호 확인
             has_recovery_signal = PullbackCandlePattern.check_pullback_recovery_signal(data, baseline_volumes)
             
             # 눌림목 회복 신호가 없으면 매수 신호 금지
@@ -613,7 +720,7 @@ class PullbackCandlePattern:
                     bisector_status=bisector_status
                 )
             else:
-                # 9. 신호 생성 (제시된 로직 적용)
+                # 10. 신호 생성 (제시된 로직 적용)
                 signal_strength = PullbackCandlePattern.generate_confidence_signal(
                     bisector_status, volume_analysis, has_turning_candle, prior_uptrend
                 )
@@ -682,7 +789,7 @@ class PullbackCandlePattern:
         - bisector_line: 이등분선 값(보조)
         """
         try:
-            if data is None or data.empty or len(data) < 10:
+            if data is None or data.empty or len(data) < 5:
                 return pd.DataFrame()
 
             df = data.copy()
@@ -736,7 +843,7 @@ class PullbackCandlePattern:
             entry_low = None
             
             # 각 시점에서 신호 계산
-            for i in range(10, len(data)):  # 최소 10개 데이터 필요
+            for i in range(5, len(data)):  # 최소 5개 데이터 필요
                 current_data = data.iloc[:i+1]
                 
                 # 개선된 신호 생성

@@ -13,6 +13,34 @@ from core.indicators.bollinger_bands import BollingerBands
 from core.indicators.multi_bollinger_bands import MultiBollingerBands
 
 
+def get_stock_data_fixed_market(stock_code: str, input_date: str, input_hour: str, past_data_yn: str = "Y", div_code: str = "J") -> Optional[tuple]:
+    """
+    고정된 시장으로 종목 데이터 조회
+    
+    Args:
+        stock_code: 종목코드
+        input_date: 입력 날짜 (YYYYMMDD)
+        input_hour: 입력 시간 (HHMMSS)
+        past_data_yn: 과거 데이터 포함 여부
+        div_code: 시장 구분 코드 (J: KRX, NX: NXT 등)
+        
+    Returns:
+        Tuple[pd.DataFrame, pd.DataFrame]: (종목요약정보, 분봉데이터) 또는 None
+    """
+    try:
+        result = get_inquire_time_dailychartprice(
+            div_code=div_code,
+            stock_code=stock_code,
+            input_date=input_date,
+            input_hour=input_hour,
+            past_data_yn=past_data_yn
+        )
+        return result
+    except Exception as e:
+        print(f"❌ {stock_code} {div_code} 시장 조회 실패: {e}")
+        return None
+
+
 class DataProcessor:
     """데이터 처리 및 지표 계산 전용 클래스"""
     
@@ -91,7 +119,7 @@ class DataProcessor:
             target_date: 조회 날짜 (YYYYMMDD)
             
         Returns:
-            pd.DataFrame: 전체 거래시간 분봉 데이터 (08:00~15:30)
+            pd.DataFrame: 전체 거래시간 분봉 데이터 (09:00~15:30)
         """
         try:
             self.logger.info(f"{stock_code} {target_date} 전체 분봉 데이터 조회 시작")
@@ -100,19 +128,20 @@ class DataProcessor:
             all_data = []
             
             # 15:30부터 거슬러 올라가면서 조회 (API는 최신 데이터부터 제공)
-            # 1회 호출당 최대 120분 데이터 → 7번 호출로 전체 커버 (450분: 08:00~15:30)
-            time_points = ["153000", "143000", "123000", "103000", "093000", "083000", "080000"]  # 15:30, 14:30, 12:30, 10:30, 09:30, 08:30, 08:00
+            # 1회 호출당 최대 120분 데이터 → 4번 호출로 전체 커버 (390분: 09:00~15:30)
+            time_points = ["153000", "143000", "123000", "103000", "090000"]  # 15:30, 14:30, 12:30, 10:30, 09:00
             
             for i, end_time in enumerate(time_points):
                 try:
-                    self.logger.info(f"{stock_code} 분봉 데이터 조회 {i+1}/7: {end_time[:2]}:{end_time[2:4]}까지")
-                    # 폴백 방식으로 데이터 조회 (UN → J → NX 순서)
+                    self.logger.info(f"{stock_code} 분봉 데이터 조회 {i+1}/5: {end_time[:2]}:{end_time[2:4]}까지")
+                    # KRX J 시장만 조회
                     result = await asyncio.to_thread(
-                        get_stock_data_with_fallback,
+                        get_stock_data_fixed_market,
                         stock_code=stock_code,
                         input_date=target_date,
                         input_hour=end_time,
-                        past_data_yn="Y"
+                        past_data_yn="Y",
+                        div_code="J"
                     )
                     
                     if result is None:
@@ -154,13 +183,6 @@ class DataProcessor:
                             last_time = chart_df[time_col].iloc[-1]
                             self.logger.info(f"{stock_code} {end_time} 시점 데이터 수집 완료: {len(chart_df)}건 ({first_time} ~ {last_time})")
                             
-                            # 08시대 데이터 디버깅 (08:00와 08:30 조회 모두에서 확인)
-                            if end_time in ["083000", "080000"]:
-                                early_data = chart_df[chart_df[time_col].astype(str).str[:2] == '08'] if time_col == 'time' else chart_df[chart_df[time_col].dt.hour == 8]
-                                self.logger.info(f"🔍 {stock_code} {end_time} 조회에서 08시대 데이터: {len(early_data)}건")
-                                if not early_data.empty:
-                                    self.logger.info(f"   첫 번째 08시 데이터: {early_data[time_col].iloc[0]}")
-                                    self.logger.info(f"   마지막 08시 데이터: {early_data[time_col].iloc[-1]}")
                         else:
                             self.logger.info(f"{stock_code} {end_time} 시점 데이터 수집 완료: {len(chart_df)}건")
                             
