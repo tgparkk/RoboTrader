@@ -793,7 +793,22 @@ async def run(
         if capture_logger.handlers:
             capture_logger.handlers.clear()
         handler = logging.StreamHandler(log_buffer)
-        formatter = logging.Formatter('%(asctime)s | %(name)s | %(levelname)s | %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+        # 종목코드와 기준거래량 정보를 포함한 포맷터
+        class CustomFormatter(logging.Formatter):
+            def format(self, record):
+                # 기본 포맷 적용
+                formatted = super().format(record)
+                
+                # 종목코드 추가 (logger에 설정된 경우)
+                if hasattr(record, '_stock_code'):
+                    formatted = formatted.replace('PullbackCandlePattern', f'PullbackCandlePattern[{record._stock_code}]')
+                elif hasattr(self, 'logger') and hasattr(self.logger, '_stock_code'):
+                    formatted = formatted.replace('PullbackCandlePattern', f'PullbackCandlePattern[{self.logger._stock_code}]')
+                
+                return formatted
+        
+        formatter = CustomFormatter('%(asctime)s | %(name)s | %(levelname)s | %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+        formatter.logger = capture_logger
         # 한국시간 변환
         try:
             def _kst_conv(secs: float):
@@ -915,12 +930,12 @@ def main():
     #DEFAULT_DATE = "20250820"
     #DEFAULT_CODES = "013310,103840,114450,180400,192250,007980,019180,408900"
 
-    #DEFAULT_DATE = "20250821"
-    #DEFAULT_CODES = "180400,318160,019180,134580,049470,160550,310200,207760,007980,006910,017510,138040,114190,005670,464580,475960"
+    DEFAULT_DATE = "20250821"
+    DEFAULT_CODES = "180400,318160,019180,134580,049470,160550,310200,207760,007980,006910,017510,138040,114190,005670,464580,475960"
 
-    DEFAULT_DATE = "20250822"
+    #DEFAULT_DATE = "20250822"
+    #DEFAULT_CODES = "098070,333430,475960,049470,464580,083650,126340,103840,318160,249420"
     #DEFAULT_CODES = "098070"
-    DEFAULT_CODES = "098070,333430,475960,049470,464580,083650,126340,103840,318160,249420"
 
     DEFAULT_TIMES = ""
 
