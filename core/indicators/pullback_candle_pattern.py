@@ -353,10 +353,39 @@ class PullbackCandlePattern:
     
     @staticmethod
     def generate_confidence_signal(bisector_status: BisectorStatus, volume_analysis: VolumeAnalysis, 
-                                 has_turning_candle: bool, prior_uptrend: bool) -> SignalStrength:
+                                 has_turning_candle: bool, prior_uptrend: bool, data: pd.DataFrame = None, bisector_line: pd.Series = None) -> SignalStrength:
         """조건에 따른 신뢰도별 신호 생성 (제시된 로직 적용)"""
         score = 0
         reasons = []
+        
+        # 09:30 이후 이등분선 완전 이탈 체크
+        bisector_fully_broken_after_0930 = False
+        if data is not None and bisector_line is not None and 'datetime' in data.columns:
+            try:
+                # 09:30 이후 데이터 필터링
+                data_times = pd.to_datetime(data['datetime'])
+                today = data_times.iloc[-1].date()
+                time_0930 = pd.Timestamp.combine(today, pd.Timestamp('09:30:00').time())
+                
+                after_0930_mask = data_times >= time_0930
+                after_0930_data = data[after_0930_mask]
+                after_0930_bisector = bisector_line[after_0930_mask]
+                
+                # 09:30 이후 봉이 완전히 이등분선 아래로 내려간 경우 체크
+                for i in range(len(after_0930_data)):
+                    candle = after_0930_data.iloc[i]
+                    bisector_value = after_0930_bisector.iloc[i] if i < len(after_0930_bisector) else 0
+                    
+                    # 봉 전체(고가, 저가, 시가, 종가)가 모두 이등분선 아래인 경우
+                    if bisector_value > 0 and (candle['high'] < bisector_value and 
+                                              candle['low'] < bisector_value and
+                                              candle['open'] < bisector_value and
+                                              candle['close'] < bisector_value):
+                        bisector_fully_broken_after_0930 = True
+                        break
+                        
+            except Exception:
+                pass  # 시간 파싱 실패시 무시
         
         # 이등분선 상태 점수
         if bisector_status == BisectorStatus.HOLDING:
@@ -396,8 +425,13 @@ class PullbackCandlePattern:
             score -= 10
             reasons.append('선행 상승 부족')
         
+        # 09:30 이후 이등분선 완전 이탈시 STRONG_BUY 방지
+        if bisector_fully_broken_after_0930 and score >= 90:
+            score = 89  # 90점 미만으로 제한
+            reasons.append('09:30 이후 이등분선 완전 이탈로 신호 강도 제한')
+        
         # 신뢰도별 분류 (제시된 로직 적용)
-        if score >= 80:
+        if score >= 90:
             return SignalStrength(
                 signal_type=SignalType.STRONG_BUY,
                 confidence=score,
@@ -406,7 +440,7 @@ class PullbackCandlePattern:
                 volume_ratio=volume_analysis.volume_ratio,
                 bisector_status=bisector_status
             )
-        elif score >= 60:
+        elif score >= 70:
             return SignalStrength(
                 signal_type=SignalType.CAUTIOUS_BUY,
                 confidence=score,
@@ -551,8 +585,8 @@ class PullbackCandlePattern:
                 candle = pullback_data.iloc[i]
                 current_baseline = pullback_baselines.iloc[i] if i < len(pullback_baselines) else 0
                 
-                # 하락봉이면서 고거래량인지 체크
-                is_declining = candle['close'] < candle['open'] or candle['close'] < high_price
+                # 음봉이면서 고거래량인지 체크 (양봉은 제외)
+                is_declining = candle['close'] < candle['open']  # 양봉에서는 매물부담 감지하지 않음
                 high_volume = candle['volume'] >= current_baseline * 0.6 if current_baseline > 0 else False
                 
                 if is_declining and high_volume:
@@ -902,7 +936,7 @@ class PullbackCandlePattern:
             else:
                 # 12. 신호 생성 (제시된 로직 적용)
                 signal_strength = PullbackCandlePattern.generate_confidence_signal(
-                    bisector_status, volume_analysis, has_turning_candle, prior_uptrend
+                    bisector_status, volume_analysis, has_turning_candle, prior_uptrend, data, bisector_line_series
                 )
                 
                 # 조정 품질이 나쁘면 신뢰도 차감
