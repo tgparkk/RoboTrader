@@ -233,6 +233,9 @@ class TradingDecisionEngine:
                     # 포지션 상태로 변경 (가상)
                     trading_stock.set_position(quantity, current_price)
                     
+                    # 총 매수금액 계산
+                    total_cost = quantity * current_price
+                    
                     self.logger.info(f"🎯 가상 매수 완료: {stock_code}({stock_name}) "
                                    f"{quantity}주 @{current_price:,.0f}원 총 {total_cost:,.0f}원")
                     

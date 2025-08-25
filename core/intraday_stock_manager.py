@@ -183,13 +183,13 @@ class IntradayStockManager:
             target_date = selected_time.strftime("%Y%m%d")
             target_hour = selected_time.strftime("%H%M%S")
             
-            self.logger.info(f"📈 {stock_code} 당일 전체 데이터 수집 시작 (08:00 ~ {target_hour})")
+            self.logger.info(f"📈 {stock_code} 당일 전체 데이터 수집 시작 (09:00 ~ {target_hour})")
             
             historical_data = await get_full_trading_day_data_async(
                 stock_code=stock_code,
                 target_date=target_date,
                 selected_time=target_hour,
-                start_time="080000"  # 08:00부터 시작 (NXT 거래소 지원)
+                start_time="090000"  # 09:00부터 시작 (KRX 정규장만)
             )
             
             if historical_data is None or historical_data.empty:
@@ -256,10 +256,8 @@ class IntradayStockManager:
                 else:
                     self.logger.warning(f"   ⚠️ 3분봉 데이터 부족 위험: {expected_3min_count}/5")
                 
-                # 09:00부터 데이터가 시작되는지 확인
-                if start_time and  start_time < "090000":
-                    self.logger.info(f"   📊 프리마켓 데이터 포함: {start_time}부터")
-                elif start_time and start_time >= "090000":
+                # 09:00부터 데이터가 시작되는지 확인  
+                if start_time and start_time >= "090000":
                     self.logger.info(f"   📊 정규장 데이터: {start_time}부터")
                 
             else:
@@ -475,21 +473,21 @@ class IntradayStockManager:
                 self.logger.debug(f"❌ {stock_code} 데이터 부족: {data_count}/15")
                 return False
             
-            # 시작 시간 체크 (08:00 또는 09:00대 시작 확인)
+            # 시작 시간 체크 (09:00대 시작 확인)
             if 'time' in combined_data.columns:
                 start_time_str = str(combined_data.iloc[0]['time']).zfill(6)
                 start_hour = int(start_time_str[:2])
                 
-                if start_hour not in [8, 9]:  # 08시 또는 09시
-                    self.logger.debug(f"❌ {stock_code} 시작 시간 문제: {start_time_str} (08/09시 아님)")
+                if start_hour != 9:  # 09시만
+                    self.logger.debug(f"❌ {stock_code} 시작 시간 문제: {start_time_str} (09시 아님)")
                     return False
                     
             elif 'datetime' in combined_data.columns:
                 start_dt = combined_data.iloc[0]['datetime']
                 if hasattr(start_dt, 'hour'):
                     start_hour = start_dt.hour
-                    if start_hour not in [8, 9]:
-                        self.logger.debug(f"❌ {stock_code} 시작 시간 문제: {start_hour}시 (08/09시 아님)")
+                    if start_hour != 9:
+                        self.logger.debug(f"❌ {stock_code} 시작 시간 문제: {start_hour}시 (09시 아님)")
                         return False
             
             self.logger.debug(f"✅ {stock_code} 기본 데이터 충분: {data_count}개")

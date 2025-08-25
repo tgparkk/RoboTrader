@@ -17,16 +17,15 @@ FALLBACK_MAX_DAYS = 3  # 주말/휴일 등 데이터 없을 때 최대 폴백 �
 
 def get_div_code_for_stock(stock_code: str) -> str:
     """
-    종목코드에 따른 시장 구분 코드 반환 (폴백 방식으로 변경 예정)
+    종목코드에 따른 시장 구분 코드 반환
     
     Args:
         stock_code: 종목코드 (6자리)
         
     Returns:
-        str: 시장 구분 코드 (J: KRX, NX: NXT, UN: 통합)
+        str: 시장 구분 코드 (J: KRX만 사용)
     """
-    # 우선 통합 조회 시도 (NXT + KRX 모두 포함)
-    #return "UN"  # 통합 (KRX + NXT)
+    # KRX 시장만 사용
     return "J"
 
 
@@ -44,7 +43,7 @@ def get_stock_data_with_fallback(stock_code: str, input_date: str, input_hour: s
     Returns:
         Tuple[pd.DataFrame, pd.DataFrame]: (종목요약정보, 분봉데이터) 또는 None
     """
-    div_codes = ["J","NX"]  # 통합 → KRX → NXT 순서
+    div_codes = ["J"]  # KRX만 사용
     
     for div_code in div_codes:
         try:
@@ -726,16 +725,15 @@ async def get_full_trading_day_data_async(stock_code: str, target_date: str = ""
         if not selected_time:
             selected_time = now_kst().strftime("%H%M%S")
         if not start_time:
-            start_time = "080000"
+            start_time = "090000"
 
         from datetime import datetime as _dt, timedelta as _td
         base_dt = _dt.strptime(target_date, "%Y%m%d")
 
         time_segments = [
-            ("080000", "100000"),
-            ("100000", "120000"),
-            ("120000", "140000"),
-            ("140000", "153000")
+            ("090000", "110000"),
+            ("110000", "130000"),
+            ("130000", "153000")
         ]
 
         for back in range(0, FALLBACK_MAX_DAYS + 1):
