@@ -84,20 +84,37 @@ class PullbackCandlePattern:
     
     @staticmethod
     def calculate_daily_baseline_volume(data: pd.DataFrame) -> pd.Series:
-        """당일 기준거래량 계산 (당일 최대 거래량을 실시간 추적)"""
+        """당일 기준거래량 계산 (당일 양봉 최대 거래량을 실시간 추적)"""
         try:
             if 'datetime' in data.columns:
                 dates = pd.to_datetime(data['datetime']).dt.normalize()
             else:
                 dates = pd.to_datetime(data.index).normalize()
             
-            # 당일 누적 최대 거래량
-            daily_max = data['volume'].groupby(dates).cummax()
-            return daily_max
+            # 양봉 여부 계산
+            is_bullish = data['close'] > data['open']
+            
+            # 양봉인 경우만 거래량 고려, 음봉은 0으로 설정
+            bullish_volume = data['volume'].where(is_bullish, 0)
+            
+            # 당일 양봉 누적 최대 거래량
+            daily_max_bullish = bullish_volume.groupby(dates).cummax()
+            
+            # 양봉 최대 거래량이 0인 경우 (양봉이 없는 경우) 전체 최대값의 50%를 기준으로 사용
+            fallback_volume = data['volume'].groupby(dates).cummax() * 0.5
+            daily_baseline = daily_max_bullish.where(daily_max_bullish > 0, fallback_volume)
+            
+            return daily_baseline
             
         except Exception:
-            # 날짜 정보가 없으면 전체 기간 중 최대값 사용
-            return pd.Series([data['volume'].max()] * len(data), index=data.index)
+            # 날짜 정보가 없으면 전체 기간 중 양봉 최대값 사용
+            is_bullish = data['close'] > data['open']
+            bullish_volume = data['volume'].where(is_bullish, 0)
+            max_bullish_vol = bullish_volume.max()
+            if max_bullish_vol > 0:
+                return pd.Series([max_bullish_vol] * len(data), index=data.index)
+            else:
+                return pd.Series([data['volume'].max() * 0.5] * len(data), index=data.index)
     
     @staticmethod
     def analyze_volume(data: pd.DataFrame, period: int = 10) -> VolumeAnalysis:
@@ -353,7 +370,8 @@ class PullbackCandlePattern:
     
     @staticmethod
     def generate_confidence_signal(bisector_status: BisectorStatus, volume_analysis: VolumeAnalysis, 
-                                 has_turning_candle: bool, prior_uptrend: bool, data: pd.DataFrame = None, bisector_line: pd.Series = None) -> SignalStrength:
+                                 has_turning_candle: bool, prior_uptrend: bool, data: pd.DataFrame = None, 
+                                 bisector_line: pd.Series = None, started_below_bisector: bool = False) -> SignalStrength:
         """조건에 따른 신뢰도별 신호 생성 (제시된 로직 적용)"""
         score = 0
         reasons = []
@@ -430,13 +448,17 @@ class PullbackCandlePattern:
             score = 89  # 90점 미만으로 제한
             reasons.append('09:30 이후 이등분선 완전 이탈로 신호 강도 제한')
         
+        # 목표 수익률 설정 (이등분선 아래/걸침 시작 시 1.5%)
+        strong_buy_target = 0.015 if started_below_bisector else 0.025  # 1.5% vs 2.5%
+        cautious_buy_target = 0.015 if started_below_bisector else 0.02  # 1.5% vs 2.0%
+        
         # 신뢰도별 분류 (제시된 로직 적용)
         if score >= 90:
             return SignalStrength(
                 signal_type=SignalType.STRONG_BUY,
                 confidence=score,
-                target_profit=0.025,  # 2.5% 목표 (기존 3% → 2.5%)
-                reasons=reasons,
+                target_profit=strong_buy_target,
+                reasons=reasons + (['이등분선 아래 시작으로 목표 1.5%'] if started_below_bisector else []),
                 volume_ratio=volume_analysis.volume_ratio,
                 bisector_status=bisector_status
             )
@@ -444,8 +466,8 @@ class PullbackCandlePattern:
             return SignalStrength(
                 signal_type=SignalType.CAUTIOUS_BUY,
                 confidence=score,
-                target_profit=0.02,  # 2.0% 목표 (기존 2% → 2.0%)
-                reasons=reasons,
+                target_profit=cautious_buy_target,
+                reasons=reasons + (['이등분선 아래 시작으로 목표 1.5%'] if started_below_bisector else []),
                 volume_ratio=volume_analysis.volume_ratio,
                 bisector_status=bisector_status
             )
@@ -600,15 +622,15 @@ class PullbackCandlePattern:
     @staticmethod
     def check_bearish_volume_restriction(data: pd.DataFrame, baseline_volumes: pd.Series) -> bool:
         """
-        음봉의 대량 거래량 제한 체크
+        음봉의 최대 거래량 제한 체크
         
         조건:
-        1. 기준 거래량보다 큰 거래량을 가진 음봉을 찾음
-        2. 해당 음봉보다 위에 있는 양봉이 나타나기 전까지 거래 제한
+        1. 당일 음봉 중 최대 거래량을 찾음
+        2. 그 거래량보다 큰 양봉이 나오기 전까지 거래 제한
         
         Args:
             data: 3분봉 데이터
-            baseline_volumes: 기준 거래량
+            baseline_volumes: 기준 거래량 (사용하지 않음)
             
         Returns:
             bool: True이면 거래 제한 (매수 금지)
@@ -617,39 +639,62 @@ class PullbackCandlePattern:
             if len(data) < 2:
                 return False
             
-            # 시간순으로 검사하여 대량 음봉들을 찾고, 각각이 해제되었는지 확인
-            for i in range(len(data)):
-                candle = data.iloc[i]
-                baseline_vol = baseline_volumes.iloc[i] if i < len(baseline_volumes) else 0
-                
-                # 음봉이면서 대량 거래량인지 체크
-                is_bearish = candle['close'] < candle['open']
-                is_high_volume = candle['volume'] >= baseline_vol if baseline_vol > 0 else False
-                
-                if is_bearish and is_high_volume:
-                    # 대량 음봉을 찾았음 - 이 음봉의 고가를 기준점으로 설정
-                    bearish_high = candle['high']
-                    restriction_cleared = False
+            # 당일 데이터 필터링
+            if 'datetime' in data.columns:
+                try:
+                    dates = pd.to_datetime(data['datetime']).dt.date
+                    today = dates.iloc[-1]
+                    today_mask = dates == today
+                    today_data = data[today_mask].reset_index(drop=True)
                     
-                    # 이 음봉 이후의 봉들을 체크하여 양봉이 기준점 위에 나타났는지 확인
-                    for j in range(i + 1, len(data)):
-                        next_candle = data.iloc[j]
-                        
-                        # 양봉이면서 대량 음봉의 고가보다 위에 있는지 체크
-                        is_bullish = next_candle['close'] > next_candle['open']
-                        is_above_bearish = next_candle['close'] > bearish_high
-                        
-                        if is_bullish and is_above_bearish:
-                            # 이 대량 음봉의 제한은 해제됨
-                            restriction_cleared = True
-                            break
-                    
-                    # 이 대량 음봉의 제한이 해제되지 않았으면 거래 제한
-                    if not restriction_cleared:
-                        return True
+                    if len(today_data) < 2:
+                        return False
+                except Exception:
+                    today_data = data.copy()
+            else:
+                today_data = data.copy()
             
-            # 모든 대량 음봉의 제한이 해제되었거나, 대량 음봉이 없음 - 제한 없음
-            return False
+            # 음봉들의 거래량 찾기
+            is_bearish = today_data['close'] < today_data['open']
+            bearish_data = today_data[is_bearish]
+            
+            if len(bearish_data) == 0:
+                return False  # 음봉이 없으면 제한 없음
+            
+            # 당일 음봉 중 최대 거래량 찾기
+            max_bearish_volume = bearish_data['volume'].max()
+            max_bearish_idx = bearish_data['volume'].idxmax()
+            max_bearish_candle = bearish_data.loc[max_bearish_idx]
+            
+            # 원본 데이터에서 해당 음봉의 인덱스 찾기
+            max_bearish_original_idx = None
+            for i, row in today_data.iterrows():
+                if (row['volume'] == max_bearish_candle['volume'] and 
+                    row['close'] == max_bearish_candle['close'] and
+                    row['open'] == max_bearish_candle['open']):
+                    max_bearish_original_idx = i
+                    break
+            
+            if max_bearish_original_idx is None:
+                return False
+            
+            # 최대 음봉의 고가를 기준점으로 설정
+            bearish_high = max_bearish_candle['high']
+            
+            # 최대 음봉 이후의 봉들을 체크하여 더 큰 거래량의 양봉이 나타났는지 확인
+            for i in range(max_bearish_original_idx + 1, len(today_data)):
+                next_candle = today_data.iloc[i]
+                
+                # 양봉이면서 최대 음봉 거래량보다 큰지 체크
+                is_bullish = next_candle['close'] > next_candle['open']
+                has_larger_volume = next_candle['volume'] > max_bearish_volume
+                
+                if is_bullish and has_larger_volume:
+                    # 제한 해제 조건 만족
+                    return False
+            
+            # 최대 음봉 거래량보다 큰 양봉이 아직 없음 - 거래 제한
+            return True
             
         except Exception:
             return False
@@ -770,6 +815,61 @@ class PullbackCandlePattern:
             return False
     
     @staticmethod
+    def check_daily_start_below_bisector_restriction(data: pd.DataFrame) -> Tuple[bool, bool]:
+        """
+        당일 시작이 이등분선 근처/아래인 경우 하루 종일 매물부담 체크
+        
+        조건:
+        1. 당일 첫 캔들(09:00)이 이등분선 아래이거나 걸침
+        2. 해당 조건이면 하루 종일 매물부담으로 매수 제외
+        
+        Args:
+            data: 3분봉 데이터
+            
+        Returns:
+            Tuple[bool, bool]: (매물부담 제한 여부, 이등분선 아래/걸림 여부)
+        """
+        try:
+            if len(data) < 2:
+                return (False, False)
+            
+            # datetime 컬럼이 없으면 시간 체크 불가
+            if 'datetime' not in data.columns:
+                return (False, False)
+            
+            # 당일 데이터 필터링
+            dates = pd.to_datetime(data['datetime'])
+            today = dates.iloc[-1].date()
+            today_mask = dates.dt.date == today
+            today_data = data[today_mask].reset_index(drop=True)
+            
+            if len(today_data) < 2:
+                return (False, False)
+            
+            # 당일 첫 캔들(09:00) 찾기
+            first_candle = today_data.iloc[0]
+            
+            # 이등분선 계산 (당일 데이터만 사용)
+            bisector_line = BisectorLine.calculate_bisector_line(today_data['high'], today_data['low'])
+            if bisector_line is None or len(bisector_line) == 0:
+                return (False, False)
+            
+            first_bisector = bisector_line.iloc[0]
+            
+            # 첫 캔들이 이등분선 아래이거나 걸치는지 확인
+            # 걸친다는 것은: 시가나 종가 중 하나가 이등분선 아래에 있는 경우
+            candle_below_or_crossing = (first_candle['open'] <= first_bisector or 
+                                       first_candle['close'] <= first_bisector)
+            
+            # 매물부담 제한: 이등분선 아래/걸침이면 하루 종일 제한
+            restriction_active = candle_below_or_crossing
+            
+            return (restriction_active, candle_below_or_crossing)
+            
+        except Exception:
+            return (False, False)
+    
+    @staticmethod
     def generate_improved_signals(
         data: pd.DataFrame,
         entry_price: Optional[float] = None,
@@ -839,6 +939,31 @@ class PullbackCandlePattern:
             # 6. 이등분선 돌파 양봉 거래량 조건 체크 (매수 제외 조건)
             bisector_breakout_volume_ok = PullbackCandlePattern.check_bisector_breakout_volume(data)
             
+            # 7. 당일 이등분선 아래 시작 시 오전 10시까지 매물부담 체크 (매수 제외 조건) - 비활성화됨
+            # has_daily_start_restriction, started_below_bisector = PullbackCandlePattern.check_daily_start_below_bisector_restriction(data)
+            
+            # 목표치 조정을 위해 이등분선 아래 시작 여부만 확인
+            _, started_below_bisector = PullbackCandlePattern.check_daily_start_below_bisector_restriction(data)
+            
+            # if has_daily_start_restriction:
+            #     if debug and logger:
+            #         candle_time = ""
+            #         if 'datetime' in data.columns:
+            #             try:
+            #                 dt = pd.to_datetime(current['datetime'])
+            #                 candle_time = f" {dt.strftime('%H:%M')}"
+            #             except:
+            #                 candle_time = ""
+            #         
+            #         current_candle_info = f"봉:{len(data)}개{candle_time} 종가:{current['close']:,.0f}원"
+            #         logger.info(f"[{getattr(logger, '_stock_code', 'UNKNOWN')}] {current_candle_info} | "
+            #                    f"당일 이등분선 근처/아래 시작으로 하루 종일 매물부담 - 매수 제외")
+            #     
+            #     return (SignalStrength(SignalType.AVOID, 0, 0, 
+            #                          ['당일 이등분선 근처/아래 시작으로 하루 종일 매물부담'], 
+            #                          volume_analysis.volume_ratio, 
+            #                          PullbackCandlePattern.get_bisector_status(current['close'], bisector_line)), [])
+            
             if has_selling_pressure:
                 if debug and logger:
                     candle_time = ""
@@ -878,10 +1003,10 @@ class PullbackCandlePattern:
                     
                     current_candle_info = f"봉:{len(data)}개{candle_time} 종가:{current['close']:,.0f}원"
                     logger.info(f"[{getattr(logger, '_stock_code', 'UNKNOWN')}] {current_candle_info} | "
-                               f"음봉 대량거래량 제한 - 매수 제외{baseline_info}")
+                               f"음봉 최대거래량 제한 - 매수 제외{baseline_info}")
                 
                 return (SignalStrength(SignalType.AVOID, 0, 0, 
-                                     ['음봉 대량거래량 제한 (기준거래량 초과 음봉 이후 양봉 회복 대기 중)'], 
+                                     ['음봉 최대거래량 제한 (당일 최대 음봉 거래량보다 큰 양봉 출현 대기 중)'], 
                                      volume_analysis.volume_ratio, 
                                      PullbackCandlePattern.get_bisector_status(current['close'], bisector_line)), [])
             
@@ -936,7 +1061,8 @@ class PullbackCandlePattern:
             else:
                 # 12. 신호 생성 (제시된 로직 적용)
                 signal_strength = PullbackCandlePattern.generate_confidence_signal(
-                    bisector_status, volume_analysis, has_turning_candle, prior_uptrend, data, bisector_line_series
+                    bisector_status, volume_analysis, has_turning_candle, prior_uptrend, 
+                    data, bisector_line_series, started_below_bisector
                 )
                 
                 # 조정 품질이 나쁘면 신뢰도 차감
