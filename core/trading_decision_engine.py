@@ -338,7 +338,7 @@ class TradingDecisionEngine:
             self.logger.error(f"❌ 가상 매도 실행 오류: {e}")
     
     def _check_stop_loss_conditions(self, trading_stock, data) -> Tuple[bool, str]:
-        """손절 조건 확인"""
+        """손절 조건 확인 (신호강도별 손익비 2:1 적용)"""
         try:
             if not trading_stock.position:
                 return False, ""
@@ -346,19 +346,31 @@ class TradingDecisionEngine:
             current_price = data['close'].iloc[-1]
             buy_price = trading_stock.position.avg_price
             
-            loss_rate = (current_price - buy_price) / buy_price
-            if loss_rate <= -0.01:
-                return True, "매수가 대비 -1.0% 손실"
+            # 신호강도별 손절 기준 (signal_replay.py와 동일)
+            target_profit_rate = getattr(trading_stock, 'target_profit_rate', 0.02)  # 기본값 2%
+            stop_loss_rate = target_profit_rate / 2.0  # 손익비 2:1
             
-            # 매수 사유에 따른 개별 손절 조건
+            loss_rate = (current_price - buy_price) / buy_price
+            if loss_rate <= -stop_loss_rate:
+                return True, f"신호강도별손절 {loss_rate*100:.1f}% (기준: -{stop_loss_rate*100:.1f}%)"
+            
+            # 매수 사유에 따른 추가 기술적 손절 조건 (신호강도별 손절과 병행)
             if "가격박스" in trading_stock.selection_reason:
-                return self._check_price_box_stop_loss(data, buy_price, current_price)
+                technical_stop, technical_reason = self._check_price_box_stop_loss(data, buy_price, current_price)
+                if technical_stop:
+                    return True, f"기술적손절: {technical_reason}"
             elif "다중볼린저밴드" in trading_stock.selection_reason:
-                return self._check_multi_bollinger_stop_loss(data, buy_price, current_price)
+                technical_stop, technical_reason = self._check_multi_bollinger_stop_loss(data, buy_price, current_price)
+                if technical_stop:
+                    return True, f"기술적손절: {technical_reason}"
             elif "볼린저밴드" in trading_stock.selection_reason:
-                return self._check_bollinger_stop_loss(data, buy_price, current_price, trading_stock)
+                technical_stop, technical_reason = self._check_bollinger_stop_loss(data, buy_price, current_price, trading_stock)
+                if technical_stop:
+                    return True, f"기술적손절: {technical_reason}"
             elif "눌림목캔들패턴" in trading_stock.selection_reason:
-                return self._check_pullback_candle_stop_loss(trading_stock, data, buy_price, current_price)
+                technical_stop, technical_reason = self._check_pullback_candle_stop_loss(trading_stock, data, buy_price, current_price)
+                if technical_stop:
+                    return True, f"기술적손절: {technical_reason}"
             
             return False, ""
             
@@ -613,7 +625,7 @@ class TradingDecisionEngine:
             return False, ""
     
     def _is_candle_confirmed(self, data_3min) -> bool:
-        """3분봉 확정 여부 확인 (signal_replay 방식)"""
+        """3분봉 확정 여부 확인 (signal_replay.py와 완전히 동일한 방식)"""
         try:
             if data_3min is None or data_3min.empty or 'datetime' not in data_3min.columns:
                 return False
@@ -624,11 +636,13 @@ class TradingDecisionEngine:
             current_time = now_kst()
             last_candle_time = pd.to_datetime(data_3min['datetime'].iloc[-1])
             
-            # 3분봉 확정 조건: 현재 시간이 마지막 캔들 시간 + 3분 이후
+            # signal_replay.py와 동일한 방식: 라벨 + 3분 경과 후 확정
+            # 라벨(ts_3min)은 구간 시작 시각이므로 [라벨, 라벨+2분]을 포함하고,
+            # 라벨+3분 경과 후에 봉이 확정됨
             candle_end_time = last_candle_time + pd.Timedelta(minutes=3)
             is_confirmed = current_time >= candle_end_time
             
-            self.logger.debug(f"📊 3분봉 확정 체크: 마지막캔들={last_candle_time.strftime('%H:%M')}, "
+            self.logger.debug(f"📊 3분봉 확정 체크 (signal_replay 방식): 마지막캔들={last_candle_time.strftime('%H:%M')}, "
                              f"확정시간={candle_end_time.strftime('%H:%M')}, 현재={current_time.strftime('%H:%M')}, "
                              f"확정여부={is_confirmed}")
             

@@ -2,6 +2,10 @@
 실데이터 기반 매매신호(눌림목/3분봉) 재현 리포트 스크립트
 
 사용 예 (Windows PowerShell):
+  # candidate_stocks 테이블에서 자동으로 종목 조회
+  python utils\signal_replay.py --date 20250825 --export txt --charts
+  
+  # 특정 종목 직접 지정
   python utils\signal_replay.py --date 20250808 \
     --codes 034230,078520,107600,214450 \
     --times "034230=14:39;078520=11:33;107600=11:24,11:27,14:51;214450=12:00,14:39" \
@@ -28,6 +32,7 @@ import logging
 from datetime import datetime
 import sys
 import os
+import sqlite3
 
 import pandas as pd
 
@@ -68,6 +73,46 @@ def parse_times_mapping(arg_value: str) -> Dict[str, List[str]]:
         if code and times_list:
             mapping[code] = times_list
     return mapping
+
+
+def get_stocks_from_candidate_table(date_str: str) -> List[str]:
+    """candidate_stocks 테이블에서 특정 날짜의 종목코드들을 조회
+    
+    Args:
+        date_str: YYYYMMDD 형식의 날짜
+        
+    Returns:
+        List[str]: 종목코드 목록 (6자리 문자열)
+    """
+    try:
+        # 데이터베이스 파일 경로 설정
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        db_path = os.path.join(project_root, 'data', 'robotrader.db')
+        
+        if not os.path.exists(db_path):
+            logger.warning(f"데이터베이스 파일을 찾을 수 없음: {db_path}")
+            return []
+        
+        # YYYYMMDD → YYYY-MM-DD 형식으로 변환
+        target_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+        
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT DISTINCT stock_code FROM candidate_stocks 
+                WHERE DATE(selection_date) = ?
+                ORDER BY score DESC
+            ''', (target_date,))
+            
+            rows = cursor.fetchall()
+            stock_codes = [row[0].zfill(6) for row in rows]  # 6자리로 패딩
+            
+            logger.info(f"📅 {date_str} 날짜로 candidate_stocks에서 {len(stock_codes)}개 종목 조회")
+            return stock_codes
+            
+    except Exception as e:
+        logger.error(f"candidate_stocks 테이블 조회 실패: {e}")
+        return []
 
 
 def get_target_profit_from_signal_strength(sig_improved: pd.DataFrame, index: int) -> float:
@@ -901,8 +946,8 @@ async def run(
 
 def main():
     parser = argparse.ArgumentParser(description="눌림목(3분) 매수신호 재현 리포트")
-    parser.add_argument("--date", required=False, default=None, help="대상 날짜 (YYYYMMDD)")
-    parser.add_argument("--codes", required=False, default=None, help="종목코드 콤마구분 예: 034230,078520")
+    parser.add_argument("--date", required=True, help="대상 날짜 (YYYYMMDD) - candidate_stocks 테이블에서 해당 날짜의 종목 자동 조회")
+    parser.add_argument("--codes", required=False, default=None, help="종목코드 콤마구분 예: 034230,078520 (생략 시 DB에서 자동 조회)")
     parser.add_argument("--times", required=False, default=None, help="종목별 확인시각 매핑 예: 034230=14:39;078520=11:33")
     parser.add_argument("--export", choices=["csv", "txt"], default=None, help="결과를 파일로 저장 (csv|txt)")
     parser.add_argument("--csv-path", default="signal_replay.csv", help="CSV 저장 경로 (기본: signal_replay.csv)")
@@ -915,29 +960,31 @@ def main():
         return str(code).strip().zfill(6)
 
 
-    DEFAULT_DATE = "20250821"
-    DEFAULT_CODES = "180400,318160,019180,134580,049470,160550,310200,207760,007980,006910,017510,138040,114190,005670,464580,475960"
-
-    #DEFAULT_DATE = "20250822"
-    #DEFAULT_CODES = "098070,333430,475960,049470,464580,083650,126340,103840,318160,249420"
-
-    #DEFAULT_DATE = "20250825"
-    #DEFAULT_CODES = "332570,249420,318160,008490,006650,389650,039830,049470,287840,201490,078520,114190,003570,469750,187660,213420,134580"
-
-    DEFAULT_TIMES = ""
-
-    date_str: str = (args.date or DEFAULT_DATE).strip()
-    codes_input = args.codes or DEFAULT_CODES
-    times_input = args.times or DEFAULT_TIMES
-
-    codes: List[str] = [normalize_code(c) for c in codes_input.split(",") if str(c).strip()]
-    # 중복 제거(입력 순서 유지)
-    codes = list(dict.fromkeys(codes))
+    # 날짜는 필수 파라미터
+    date_str: str = args.date.strip()
+    
+    # codes가 지정되지 않으면 candidate_stocks 테이블에서 조회
+    if args.codes:
+        codes_input = args.codes
+        codes: List[str] = [normalize_code(c) for c in codes_input.split(",") if str(c).strip()]
+        # 중복 제거(입력 순서 유지)
+        codes = list(dict.fromkeys(codes))
+        logger.info(f"📝 명시적으로 지정된 종목: {len(codes)}개")
+    else:
+        # candidate_stocks 테이블에서 해당 날짜의 종목 조회
+        codes = get_stocks_from_candidate_table(date_str)
+        if not codes:
+            logger.error(f"❌ {date_str} 날짜에 해당하는 candidate_stocks가 없습니다.")
+            print(f"\n❌ {date_str} 날짜에 해당하는 candidate_stocks가 없습니다.")
+            print("   --codes 파라미터로 직접 종목을 지정하거나, 해당 날짜에 종목 선정 작업을 먼저 실행하세요.")
+            sys.exit(1)
+    
+    times_input = args.times or ""
     raw_times_map: Dict[str, List[str]] = parse_times_mapping(times_input)
     # 키도 6자리로 정규화
     times_map: Dict[str, List[str]] = {normalize_code(k): v for k, v in raw_times_map.items()}
 
-    # 코드 집합: DEFAULT_CODES + DEFAULT_TIMES에 언급된 종목들의 합집합(순서: codes → times)
+    # 코드 집합: codes + times에 언급된 종목들의 합집합(순서: codes → times)
     codes_union: List[str] = list(codes)
     for k in times_map.keys():
         if k not in codes_union:

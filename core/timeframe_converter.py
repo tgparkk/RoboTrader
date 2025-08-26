@@ -65,10 +65,6 @@ class TimeFrameConverter:
             
             # NaN 제거 후 인덱스 리셋
             resampled = resampled.dropna().reset_index()
-
-            # 확정 봉만 사용: 마지막 행은 진행 중일 수 있으므로 제외
-            if resampled is not None and len(resampled) >= 1:
-                resampled = resampled.iloc[:-1] if len(resampled) > 0 else resampled
             
             logger.debug(f"📊 {timeframe_minutes}분봉 변환: {len(data)}개 → {len(resampled)}개")
             

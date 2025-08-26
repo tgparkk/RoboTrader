@@ -128,7 +128,7 @@ class IntradayStockManager:
                     'market_time': current_time.strftime('%H:%M:%S')
                 })
                 
-                self.logger.info(f"✅ {stock_code}({stock_name}) 장중 선정 완료 - "
+                self.logger.debug(f"✅ {stock_code}({stock_name}) 장중 선정 완료 - "
                                f"시간: {current_time.strftime('%H:%M:%S')}")
             
             # 🆕 과거 데이터 수집 완료까지 대기
@@ -653,14 +653,15 @@ class IntradayStockManager:
             
             # historical_data와 realtime_data 결합
             if historical_data.empty and realtime_data.empty:
-                self.logger.debug(f"❌ {stock_code} 과거 및 실시간 데이터 모두 없음")
+                self.logger.error(f"❌ {stock_code} 과거 및 실시간 데이터 모두 없음")
                 return None
             elif historical_data.empty:
                 combined_data = realtime_data.copy()
-                self.logger.debug(f"📊 {stock_code} 실시간 데이터만 사용: {len(combined_data)}건")
+                self.logger.error(f"📊 {stock_code} 실시간 데이터만 사용: {len(combined_data)}건")
+                return None
             elif realtime_data.empty:
                 combined_data = historical_data.copy()
-                self.logger.debug(f"📊 {stock_code} 과거 데이터만 사용: {len(combined_data)}건")
+                self.logger.error(f"📊 {stock_code} 과거 데이터만 사용: {len(combined_data)}건")
             else:
                 combined_data = pd.concat([historical_data, realtime_data], ignore_index=True)
                 self.logger.debug(f"📊 {stock_code} 과거+실시간 데이터 결합: {len(historical_data)}+{len(realtime_data)}={len(combined_data)}건")

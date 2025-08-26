@@ -755,7 +755,7 @@ class DayTradingBot:
     async def _check_condition_search(self):
         """장중 조건검색 체크"""
         try:
-            self.logger.info("🔍 장중 조건검색 체크 시작")
+            self.logger.debug("🔍 장중 조건검색 체크 시작")
             
             # 조건검색 seq 리스트 (필요에 따라 여러 조건 추가 가능)
             #condition_seqs = ["0", "1", "2"]  # 예: 0, 1, 2번 조건
@@ -770,7 +770,7 @@ class DayTradingBot:
                     
                     if condition_results:
                         all_condition_results.extend(condition_results)
-                        self.logger.info(f"✅ 조건검색 {seq}번: {len(condition_results)}개 종목 발견")
+                        self.logger.debug(f"✅ 조건검색 {seq}번: {len(condition_results)}개 종목 발견")
                         self.logger.debug(f"🔍 조건검색 {seq}번 결과: {condition_results}")
                     else:
                         self.logger.debug(f"ℹ️ 조건검색 {seq}번: 해당 종목 없음")
@@ -780,12 +780,12 @@ class DayTradingBot:
                     continue
             
             # 결과가 있으면 알림 발송
-            self.logger.info(f"🔍 조건검색 전체 결과: {len(all_condition_results)}개 종목")
+            self.logger.debug(f"🔍 조건검색 전체 결과: {len(all_condition_results)}개 종목")
             if all_condition_results:
                 #await self._notify_condition_search_results(all_condition_results)
                 
                 # 🆕 장중 선정 종목 관리자에 추가 (과거 분봉 데이터 포함)
-                self.logger.info(f"🎯 장중 선정 종목 관리자에 {len(all_condition_results)}개 종목 추가 시작")
+                self.logger.debug(f"🎯 장중 선정 종목 관리자에 {len(all_condition_results)}개 종목 추가 시작")
                 candidates_to_save = []
                 for stock_data in all_condition_results:
                     stock_code = stock_data.get('code', '')
@@ -802,7 +802,7 @@ class DayTradingBot:
                         )
                         
                         if success:
-                            self.logger.info(f"🎯 거래 종목 추가: {stock_code}({stock_name}) - {selection_reason}")
+                            self.logger.debug(f"🎯 거래 종목 추가: {stock_code}({stock_name}) - {selection_reason}")
                             # 🆕 후보 종목 DB 저장용 리스트 구성
                             try:
                                 score_val = 0.0
@@ -826,7 +826,7 @@ class DayTradingBot:
                 try:
                     if candidates_to_save:
                         self.db_manager.save_candidate_stocks(candidates_to_save)
-                        self.logger.info(f"🗄️ 후보 종목 DB 저장 완료: {len(candidates_to_save)}건")
+                        self.logger.debug(f"🗄️ 후보 종목 DB 저장 완료: {len(candidates_to_save)}건")
                 except Exception as db_err:
                     self.logger.error(f"❌ 후보 종목 DB 저장 오류: {db_err}")
             else:
