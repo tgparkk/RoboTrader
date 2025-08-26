@@ -13,70 +13,13 @@ from dataclasses import dataclass
 from typing import List, Optional
 from enum import Enum
 from core.indicators.bisector_line import BisectorLine
+from core.indicators.pullback_utils import (
+    SignalType, BisectorStatus, RiskSignal, SignalStrength, 
+    VolumeAnalysis, CandleAnalysis, PullbackUtils
+)
 
 
-class SignalType(Enum):
-    """신호 타입"""
-    STRONG_BUY = "STRONG_BUY"
-    CAUTIOUS_BUY = "CAUTIOUS_BUY" 
-    WAIT = "WAIT"
-    AVOID = "AVOID"
-    SELL = "SELL"
-
-
-class BisectorStatus(Enum):
-    """이등분선 상태"""
-    HOLDING = "HOLDING"        # 현재가 >= 이등분선
-    NEAR_SUPPORT = "NEAR_SUPPORT"  # 이등분선 ± 0.5% 범위
-    BROKEN = "BROKEN"          # 현재가 < 이등분선 - 0.5%
-
-
-class RiskSignal(Enum):
-    """위험 신호 타입"""
-    LARGE_BEARISH_VOLUME = "LARGE_BEARISH_VOLUME"  # 장대음봉 + 대량거래량
-    BISECTOR_BREAK = "BISECTOR_BREAK"              # 이등분선 이탈
-    ENTRY_LOW_BREAK = "ENTRY_LOW_BREAK"            # 변곡캔들 저가 이탈
-    SUPPORT_BREAK = "SUPPORT_BREAK"                # 지지 저점 이탈
-    TARGET_REACHED = "TARGET_REACHED"              # 목표 수익 달성
-
-
-@dataclass
-class SignalStrength:
-    """신호 강도 정보"""
-    signal_type: SignalType
-    confidence: float          # 0-100 신뢰도
-    target_profit: float       # 목표 수익률
-    reasons: List[str]         # 신호 근거
-    volume_ratio: float        # 거래량 비율
-    bisector_status: BisectorStatus  # 이등분선 상태
-
-
-@dataclass
-class VolumeAnalysis:
-    """거래량 분석 결과"""
-    baseline_volume: float     # 기준 거래량 (당일 최대량)
-    current_volume: float      # 현재 거래량
-    avg_recent_volume: float   # 최근 평균 거래량
-    volume_ratio: float        # 현재/기준 비율
-    volume_trend: str         # 'increasing', 'decreasing', 'stable'
-    is_volume_surge: bool     # 거래량 급증 여부
-    is_low_volume: bool       # 저거래량 여부 (기준의 25% 이하)
-    is_moderate_volume: bool  # 보통거래량 여부 (25-50%)
-    is_high_volume: bool      # 고거래량 여부 (기준의 50% 이상)
-
-
-@dataclass
-class CandleAnalysis:
-    """캔들 분석 결과"""
-    is_bullish: bool             # 양봉 여부
-    body_size: float             # 캔들 실체 크기
-    body_pct: float              # 실체 크기 비율 (%)
-    current_candle_size: float   # 현재 캔들 크기 (high-low)
-    avg_recent_candle_size: float # 최근 평균 캔들 크기
-    candle_trend: str           # 'expanding', 'shrinking', 'stable'
-    is_small_candle: bool       # 작은 캔들 여부
-    is_large_candle: bool       # 큰 캔들 여부
-    is_meaningful_body: bool    # 의미있는 실체 크기 (0.5% 이상)
+# Enums and dataclasses are now imported from pullback_utils
 
 
 class PullbackCandlePattern:
@@ -84,138 +27,18 @@ class PullbackCandlePattern:
     
     @staticmethod
     def calculate_daily_baseline_volume(data: pd.DataFrame) -> pd.Series:
-        """당일 기준거래량 계산 (당일 양봉 최대 거래량을 실시간 추적)"""
-        try:
-            if 'datetime' in data.columns:
-                dates = pd.to_datetime(data['datetime']).dt.normalize()
-            else:
-                dates = pd.to_datetime(data.index).normalize()
-            
-            # 양봉 여부 계산
-            is_bullish = data['close'] > data['open']
-            
-            # 양봉인 경우만 거래량 고려, 음봉은 0으로 설정
-            bullish_volume = data['volume'].where(is_bullish, 0)
-            
-            # 당일 양봉 누적 최대 거래량
-            daily_max_bullish = bullish_volume.groupby(dates).cummax()
-            
-            # 양봉 최대 거래량이 0인 경우 (양봉이 없는 경우) 전체 최대값의 50%를 기준으로 사용
-            fallback_volume = data['volume'].groupby(dates).cummax() * 0.5
-            daily_baseline = daily_max_bullish.where(daily_max_bullish > 0, fallback_volume)
-            
-            return daily_baseline
-            
-        except Exception:
-            # 날짜 정보가 없으면 전체 기간 중 양봉 최대값 사용
-            is_bullish = data['close'] > data['open']
-            bullish_volume = data['volume'].where(is_bullish, 0)
-            max_bullish_vol = bullish_volume.max()
-            if max_bullish_vol > 0:
-                return pd.Series([max_bullish_vol] * len(data), index=data.index)
-            else:
-                return pd.Series([data['volume'].max() * 0.5] * len(data), index=data.index)
+        """당일 기준거래량 계산 - PullbackUtils로 위임"""
+        return PullbackUtils.calculate_daily_baseline_volume(data)
     
     @staticmethod
     def analyze_volume(data: pd.DataFrame, period: int = 10) -> VolumeAnalysis:
-        """거래량 분석 (개선된 기준거래량 사용)"""
-        if 'volume' not in data.columns or len(data) < period:
-            return VolumeAnalysis(0, 0, 0, 0, 'stable', False, False, False, False)
-        
-        volumes = data['volume'].values
-        current_volume = volumes[-1]
-        
-        # 기준 거래량: 당일 최대 거래량 (실시간)
-        baseline_volumes = PullbackCandlePattern.calculate_daily_baseline_volume(data)
-        baseline_volume = baseline_volumes.iloc[-1]
-        
-        # 최근 평균 거래량
-        avg_recent_volume = np.mean(volumes[-period:])
-        
-        # 거래량 비율 계산
-        volume_ratio = current_volume / baseline_volume if baseline_volume > 0 else 0
-        
-        # 거래량 추세 분석
-        if len(volumes) >= 3:
-            recent_3 = volumes[-3:]
-            if recent_3[-1] > recent_3[-2] > recent_3[-3]:
-                volume_trend = 'increasing'
-            elif recent_3[-1] < recent_3[-2] < recent_3[-3]:
-                volume_trend = 'decreasing'
-            else:
-                volume_trend = 'stable'
-        else:
-            volume_trend = 'stable'
-        
-        # 거래량 상태 분석 (제시된 로직에 따라)
-        is_volume_surge = current_volume > avg_recent_volume * 1.5
-        is_low_volume = volume_ratio <= 0.25      # 25% 이하: 매우 적음
-        is_moderate_volume = 0.25 < volume_ratio <= 0.50  # 25-50%: 보통
-        is_high_volume = volume_ratio > 0.50      # 50% 이상: 과다
-        
-        return VolumeAnalysis(
-            baseline_volume=baseline_volume,
-            current_volume=current_volume,
-            avg_recent_volume=avg_recent_volume,
-            volume_ratio=volume_ratio,
-            volume_trend=volume_trend,
-            is_volume_surge=is_volume_surge,
-            is_low_volume=is_low_volume,
-            is_moderate_volume=is_moderate_volume,
-            is_high_volume=is_high_volume
-        )
+        """거래량 분석 (개선된 기준거래량 사용) - PullbackUtils로 위임"""
+        return PullbackUtils.analyze_volume(data, period)
     
     @staticmethod
     def analyze_candle(data: pd.DataFrame, period: int = 10) -> CandleAnalysis:
-        """캔들 분석 (변곡캔들 검증 로직 강화)"""
-        if len(data) < period:
-            return CandleAnalysis(False, 0, 0, 0, 0, 'stable', False, False, False)
-        
-        current = data.iloc[-1]
-        
-        # 기본 캔들 정보
-        is_bullish = current['close'] > current['open']
-        body_size = abs(current['close'] - current['open'])
-        
-        # 캔들 실체 크기 비율 계산 (평균가 기준)
-        avg_price = (current['high'] + current['low'] + current['close'] + current['open']) / 4
-        body_pct = (body_size / avg_price) * 100 if avg_price > 0 else 0
-        
-        # 캔들 크기 계산 (high - low)
-        candle_sizes = data['high'].values - data['low'].values
-        current_candle_size = candle_sizes[-1]
-        avg_recent_candle_size = np.mean(candle_sizes[-period:])
-        
-        # 캔들 크기 추세 분석
-        if len(candle_sizes) >= 3:
-            recent_3 = candle_sizes[-3:]
-            if recent_3[-1] > recent_3[-2] > recent_3[-3]:
-                candle_trend = 'expanding'
-            elif recent_3[-1] < recent_3[-2] < recent_3[-3]:
-                candle_trend = 'shrinking'
-            else:
-                candle_trend = 'stable'
-        else:
-            candle_trend = 'stable'
-        
-        # 캔들 크기 상태
-        is_small_candle = current_candle_size < avg_recent_candle_size * 0.7
-        is_large_candle = current_candle_size > avg_recent_candle_size * 1.3
-        
-        # 의미있는 실체 크기 검증 (제시된 로직: 0.5% 이상)
-        is_meaningful_body = body_pct >= 0.5
-        
-        return CandleAnalysis(
-            is_bullish=is_bullish,
-            body_size=body_size,
-            body_pct=body_pct,
-            current_candle_size=current_candle_size,
-            avg_recent_candle_size=avg_recent_candle_size,
-            candle_trend=candle_trend,
-            is_small_candle=is_small_candle,
-            is_large_candle=is_large_candle,
-            is_meaningful_body=is_meaningful_body
-        )
+        """캔들 분석 (변곡캔들 검증 로직 강화) - PullbackUtils로 위임"""
+        return PullbackUtils.analyze_candle(data, period)
     
     @staticmethod
     def is_valid_turning_candle(current_candle: pd.Series, volume_analysis: VolumeAnalysis, 
@@ -238,135 +61,36 @@ class PullbackCandlePattern:
     
     @staticmethod
     def get_bisector_status(current_price: float, bisector_line: float) -> BisectorStatus:
-        """지지선 상태 판단 (제시된 로직 적용)"""
-        if bisector_line is None or pd.isna(bisector_line) or bisector_line == 0:
-            return BisectorStatus.BROKEN
-        
-        diff_pct = (current_price - bisector_line) / bisector_line
-        
-        if diff_pct >= 0.005:  # +0.5% 이상
-            return BisectorStatus.HOLDING
-        elif diff_pct >= -0.005:  # ±0.5% 범위  
-            return BisectorStatus.NEAR_SUPPORT
-        else:  # -0.5% 미만
-            return BisectorStatus.BROKEN
+        """지지선 상태 판단 (제시된 로직 적용) - PullbackUtils로 위임"""
+        return PullbackUtils.get_bisector_status(current_price, bisector_line)
     
     @staticmethod
     def check_price_above_bisector(data: pd.DataFrame) -> bool:
-        """이등분선 위에 있는지 확인 (기존 호환성)"""
-        try:
-            bisector_line = BisectorLine.calculate_bisector_line(data['high'], data['low'])
-            current_price = data['close'].iloc[-1]
-            bl = bisector_line.iloc[-1]
-            
-            status = PullbackCandlePattern.get_bisector_status(current_price, bl)
-            return status in [BisectorStatus.HOLDING, BisectorStatus.NEAR_SUPPORT]
-        except:
-            return False
+        """이등분선 위에 있는지 확인 (기존 호환성) - PullbackUtils로 위임"""
+        return PullbackUtils.check_price_above_bisector(data)
     
     @staticmethod
     def check_price_trend(data: pd.DataFrame, period: int = 10) -> str:
-        """주가 추세 확인"""
-        if len(data) < period:
-            return 'stable'
-        
-        closes = data['close'].values
-        recent_closes = closes[-period:]
-        
-        # 선형 회귀로 추세 판단
-        x = np.arange(len(recent_closes))
-        slope = np.polyfit(x, recent_closes, 1)[0]
-        
-        if slope > 0:
-            return 'uptrend'
-        elif slope < 0:
-            return 'downtrend'
-        else:
-            return 'stable'
+        """주가 추세 확인 - PullbackUtils로 위임"""
+        return PullbackUtils.check_price_trend(data, period)
     
     @staticmethod
     def find_recent_low(data: pd.DataFrame, period: int = 5) -> Optional[float]:
-        """최근 저점 찾기 (최근 5개 봉)"""
-        if len(data) < period:
-            return None
-        
-        recent_lows = data['low'].values[-period:]
-        return np.min(recent_lows)
+        """최근 저점 찾기 (최근 5개 봉) - PullbackUtils로 위임"""
+        return PullbackUtils.find_recent_low(data, period)
     
     @staticmethod
     def check_risk_signals(current: pd.Series, bisector_line: float, entry_low: Optional[float], 
                           recent_low: float, entry_price: Optional[float], 
                           volume_analysis: VolumeAnalysis, candle_analysis: CandleAnalysis) -> List[RiskSignal]:
-        """위험 신호 최우선 체크 (제시된 로직 적용)"""
-        risk_signals = []
-        
-        # 1. 장대음봉 + 대량거래량 (50% 이상)
-        if (not candle_analysis.is_bullish and 
-            candle_analysis.is_large_candle and 
-            volume_analysis.is_high_volume):
-            risk_signals.append(RiskSignal.LARGE_BEARISH_VOLUME)
-        
-        # 2. 이등분선 이탈 (0.2% 기준)
-        if bisector_line is not None and current['close'] < bisector_line * 0.998:
-            risk_signals.append(RiskSignal.BISECTOR_BREAK)
-        
-        # 3. 변곡캔들 저가 이탈 (0.2% 기준)
-        if entry_low is not None and current['close'] <= entry_low * 0.998:
-            risk_signals.append(RiskSignal.ENTRY_LOW_BREAK)
-        
-        # 4. 지지 저점 이탈
-        if current['close'] < recent_low:
-            risk_signals.append(RiskSignal.SUPPORT_BREAK)
-        
-        # 5. 목표 수익 3% 달성
-        if entry_price is not None and current['close'] >= entry_price * 1.03:
-            risk_signals.append(RiskSignal.TARGET_REACHED)
-        
-        return risk_signals
+        """위험 신호 최우선 체크 (제시된 로직 적용) - PullbackUtils로 위임"""
+        return PullbackUtils.check_risk_signals(current, bisector_line, entry_low, 
+                                               recent_low, entry_price, volume_analysis, candle_analysis)
     
     @staticmethod
     def check_prior_uptrend(data: pd.DataFrame, min_gain: float = 0.05) -> bool:
-        """선행 상승 확인 (당일 시가 대비 5% 이상 상승했었는지)"""
-        if len(data) < 1:
-            return False
-        
-        try:
-            # 당일 데이터에서 시가와 고점 추출
-            if 'datetime' in data.columns:
-                dates = pd.to_datetime(data['datetime']).dt.normalize()
-                today = dates.iloc[-1]  # 현재(마지막) 캔들의 날짜
-                
-                # 당일 데이터만 필터링
-                today_data = data[dates == today]
-                
-                if len(today_data) == 0:
-                    return False
-                
-                # 당일 시가 (첫 번째 캔들의 시가)
-                day_open = today_data['open'].iloc[0]
-                # 당일 고점 (당일 중 최대 고가)
-                day_high = today_data['high'].max()
-                
-            else:
-                # datetime 정보가 없으면 전체 데이터를 당일로 간주
-                day_open = data['open'].iloc[0]
-                day_high = data['high'].max()
-            
-            # 당일 시가 대비 고점 상승률 계산
-            if day_open > 0:
-                gain_pct = (day_high - day_open) / day_open
-                return gain_pct >= min_gain  # 5% 이상 상승했었는지
-            
-            return False
-            
-        except Exception:
-            # 오류 시 기존 로직으로 폴백
-            if len(data) >= 10:
-                start_price = data['close'].iloc[-10]
-                current_price = data['close'].iloc[-1]
-                gain_pct = (current_price - start_price) / start_price if start_price > 0 else 0
-                return gain_pct >= min_gain
-            return False
+        """선행 상승 확인 (당일 시가 대비 5% 이상 상승했었는지) - PullbackUtils로 위임"""
+        return PullbackUtils.check_prior_uptrend(data, min_gain)
     
     @staticmethod
     def generate_confidence_signal(bisector_status: BisectorStatus, volume_analysis: VolumeAnalysis, 
@@ -626,7 +350,8 @@ class PullbackCandlePattern:
         
         조건:
         1. 당일 음봉 중 최대 거래량을 찾음
-        2. 그 거래량보다 큰 양봉이 나오기 전까지 거래 제한
+        2. 해당 음봉 이전에 더 큰 거래량의 양봉이 있으면 제한 무시
+        3. 그렇지 않으면 그 거래량보다 큰 양봉이 나올 때까지 거래 제한
         
         Args:
             data: 3분봉 데이터
@@ -678,8 +403,17 @@ class PullbackCandlePattern:
             if max_bearish_original_idx is None:
                 return False
             
-            # 최대 음봉의 고가를 기준점으로 설정
-            bearish_high = max_bearish_candle['high']
+            # 최대 음봉 이전에 이미 더 큰 거래량의 양봉이 있었는지 체크
+            for i in range(0, max_bearish_original_idx):
+                prev_candle = today_data.iloc[i]
+                
+                # 양봉이면서 최대 음봉 거래량보다 큰지 체크
+                is_bullish = prev_candle['close'] > prev_candle['open']
+                has_larger_volume = prev_candle['volume'] > max_bearish_volume
+                
+                if is_bullish and has_larger_volume:
+                    # 이전에 이미 더 큰 양봉이 있었으므로 제한 무시
+                    return False
             
             # 최대 음봉 이후의 봉들을 체크하여 더 큰 거래량의 양봉이 나타났는지 확인
             for i in range(max_bearish_original_idx + 1, len(today_data)):
@@ -755,7 +489,7 @@ class PullbackCandlePattern:
     @staticmethod
     def check_pullback_recovery_signal(data: pd.DataFrame, baseline_volumes: pd.Series, 
                                       lookback: int = 3) -> bool:
-        """눌림목 회복 신호 확인: 이등분선 지지 + 양봉 + 캔들 개선"""
+        """눌림목 회복 신호 확인: 이등분선 지지 + 양봉 + 거래량 증가 + 캔들 개선"""
         if len(data) < lookback + 1:
             return False
         
@@ -795,9 +529,14 @@ class PullbackCandlePattern:
             if not is_bullish:
                 return False
             
-            # 4. 캔들의 크기가 직전 캔들보다 크거나 위에 있는지 확인
+            # 4. 현재 캔들의 거래량이 직전 3분봉보다 같거나 큰지 확인
             prev_candle = data.iloc[-2]  # 직전 캔들
+            volume_improved = current_candle['volume'] >= prev_candle['volume']
             
+            if not volume_improved:
+                return False
+            
+            # 5. 캔들의 크기가 직전 캔들보다 크거나 위에 있는지 확인
             # 캔들 크기 비교 (고가-저가)
             current_size = current_candle['high'] - current_candle['low']
             prev_size = prev_candle['high'] - prev_candle['low']
@@ -939,30 +678,8 @@ class PullbackCandlePattern:
             # 6. 이등분선 돌파 양봉 거래량 조건 체크 (매수 제외 조건)
             bisector_breakout_volume_ok = PullbackCandlePattern.check_bisector_breakout_volume(data)
             
-            # 7. 당일 이등분선 아래 시작 시 오전 10시까지 매물부담 체크 (매수 제외 조건) - 비활성화됨
-            # has_daily_start_restriction, started_below_bisector = PullbackCandlePattern.check_daily_start_below_bisector_restriction(data)
-            
             # 목표치 조정을 위해 이등분선 아래 시작 여부만 확인
             _, started_below_bisector = PullbackCandlePattern.check_daily_start_below_bisector_restriction(data)
-            
-            # if has_daily_start_restriction:
-            #     if debug and logger:
-            #         candle_time = ""
-            #         if 'datetime' in data.columns:
-            #             try:
-            #                 dt = pd.to_datetime(current['datetime'])
-            #                 candle_time = f" {dt.strftime('%H:%M')}"
-            #             except:
-            #                 candle_time = ""
-            #         
-            #         current_candle_info = f"봉:{len(data)}개{candle_time} 종가:{current['close']:,.0f}원"
-            #         logger.info(f"[{getattr(logger, '_stock_code', 'UNKNOWN')}] {current_candle_info} | "
-            #                    f"당일 이등분선 근처/아래 시작으로 하루 종일 매물부담 - 매수 제외")
-            #     
-            #     return (SignalStrength(SignalType.AVOID, 0, 0, 
-            #                          ['당일 이등분선 근처/아래 시작으로 하루 종일 매물부담'], 
-            #                          volume_analysis.volume_ratio, 
-            #                          PullbackCandlePattern.get_bisector_status(current['close'], bisector_line)), [])
             
             if has_selling_pressure:
                 if debug and logger:
