@@ -134,21 +134,21 @@ class PullbackCandlePattern:
             score += 30
             reasons.append('이등분선 안정 지지')
         elif bisector_status == BisectorStatus.NEAR_SUPPORT:
-            score += 15
+            score += 20
             reasons.append('이등분선 근접')
         else:  # BROKEN
-            score -= 20
+            score -= 25
             reasons.append('이등분선 이탈 위험')
         
         # 거래량 상태 점수
         if volume_analysis.is_low_volume:  # 25% 이하
-            score += 25
+            score += 30
             reasons.append('매물부담 매우 적음')
         elif volume_analysis.is_moderate_volume:  # 25-50%
             score += 10
             reasons.append('매물부담 보통')
         else:  # 50% 이상
-            score -= 15
+            score -= 20
             reasons.append('매물부담 과다')
         
         # 변곡캔들 점수
@@ -156,7 +156,7 @@ class PullbackCandlePattern:
             score += 25
             reasons.append('변곡캔들 출현')
         else:
-            score -= 10
+            score -= 15
             reasons.append('변곡캔들 미출현')
         
         # 선행 상승 점수
@@ -509,10 +509,14 @@ class PullbackCandlePattern:
     
     @staticmethod
     def check_pullback_recovery_signal(data: pd.DataFrame, baseline_volumes: pd.Series, 
-                                      lookback: int = 3) -> bool:
-        """눌림목 회복 신호 확인: 이등분선 지지 + 양봉 + 거래량 증가 + 캔들 개선"""
+                                      lookback: int = 3) -> Tuple[bool, bool]:
+        """눌림목 회복 신호 확인: 이등분선 지지 + 양봉 + 거래량 증가 + 캔들 개선
+        
+        Returns:
+            Tuple[bool, bool]: (회복신호여부, 비슷한조정캔들여부)
+        """
         if len(data) < lookback + 1:
-            return False
+            return (False, False)
         
         try:
             # 현재 캔들과 이전 캔들들 분리
@@ -529,33 +533,66 @@ class PullbackCandlePattern:
             
             # 최소 2/3 이상이 1/4 이하로 조정되어야 함
             if low_volume_ratio < 2/3:
-                return False
+                return (False, False)
             
             # 2. 이등분선 계산 확인
             bisector_line_series = BisectorLine.calculate_bisector_line(data['high'], data['low'])
             current_bisector = bisector_line_series.iloc[-1] if not bisector_line_series.empty else None
             
             if current_bisector is None:
-                return False
+                return (False, False)
             
             # 현재 캔들이 이등분선 위에 있는지 확인
             current_above_bisector = current_candle['close'] > current_bisector
             
-            if not current_above_bisector:
-                return False
+            # 당일 이등분선 아래로 내려간 적이 있는지 확인
+            has_been_below_bisector_today = False
+            if 'datetime' in data.columns:
+                try:
+                    dates = pd.to_datetime(data['datetime']).dt.date
+                    today = dates.iloc[-1]
+                    today_mask = dates == today
+                    today_data = data[today_mask]
+                    today_bisector = bisector_line_series[today_mask]
+                    
+                    # 당일 중 한 번이라도 이등분선 아래로 내려간 적이 있는지 확인
+                    for i in range(len(today_data)):
+                        if i < len(today_bisector):
+                            candle_close = today_data.iloc[i]['close']
+                            bisector_value = today_bisector.iloc[i]
+                            if candle_close < bisector_value:
+                                has_been_below_bisector_today = True
+                                break
+                except:
+                    # 날짜 파싱 실패시 현재 상태로 판단
+                    has_been_below_bisector_today = not current_above_bisector
+            else:
+                # datetime 컬럼이 없으면 현재 상태로 판단
+                has_been_below_bisector_today = not current_above_bisector
+            
+            # 현재 이등분선 아래이거나 당일 아래로 내려간 적이 있으면 특별 조건 확인
+            if not current_above_bisector or has_been_below_bisector_today:
+                # 직전 캔들 대비 거래량이 2배 이상이고 1% 이상 상승한 경우에만 허용
+                prev_candle = data.iloc[-2]
+                volume_2x_increased = current_candle['volume'] >= prev_candle['volume'] * 2.0
+                price_1pct_increase = current_candle['close'] >= prev_candle['close'] * 1.01
+                
+                # 두 조건을 모두 만족해야 함
+                if not (volume_2x_increased and price_1pct_increase):
+                    return (False, False)
             
             # 3. 현재 캔들이 양봉인지 확인
             is_bullish = current_candle['close'] > current_candle['open']
             
             if not is_bullish:
-                return False
+                return (False, False)
             
             # 4. 현재 캔들의 거래량이 직전 3분봉보다 같거나 큰지 확인
             prev_candle = data.iloc[-2]  # 직전 캔들
             volume_improved = current_candle['volume'] >= prev_candle['volume']
             
             if not volume_improved:
-                return False
+                return (False, False)
             
             # 5. 캔들의 크기가 직전 캔들보다 크거나 위에 있는지 확인
             # 캔들 크기 비교 (고가-저가)
@@ -569,10 +606,44 @@ class PullbackCandlePattern:
             # 크기가 크거나 위치가 개선되어야 함
             candle_improved = size_improved or position_improved
             
-            return candle_improved
+            if not candle_improved:
+                return (False, False)
+            
+            # 6. 직전 캔들 최소 두개가 조정되는 상황인지 확인 (필수 조건)
+            if len(data) >= 3:  # 현재 + 직전 2개 = 최소 3개 필요
+                # 직전 두 캔들 가져오기
+                prev_candle_1 = data.iloc[-2]  # 바로 직전
+                prev_candle_2 = data.iloc[-3]  # 그 전
+                
+                # 캔들 크기 계산 (high - low)
+                prev_size_1 = prev_candle_1['high'] - prev_candle_1['low']
+                prev_size_2 = prev_candle_2['high'] - prev_candle_2['low']
+                
+                # 캔들 중간가 계산 (시가+종가)/2
+                prev_mid_1 = (prev_candle_1['open'] + prev_candle_1['close']) / 2
+                prev_mid_2 = (prev_candle_2['open'] + prev_candle_2['close']) / 2
+                
+                # 비슷한 크기 조건: 크기 차이가 20% 이내
+                size_diff_pct = abs(prev_size_1 - prev_size_2) / max(prev_size_1, prev_size_2) if max(prev_size_1, prev_size_2) > 0 else 0
+                similar_size = size_diff_pct <= 0.20
+                
+                # 비슷한 가격 조건: 중간가 차이가 2% 이내
+                price_diff_pct = abs(prev_mid_1 - prev_mid_2) / max(prev_mid_1, prev_mid_2) if max(prev_mid_1, prev_mid_2) > 0 else 0
+                similar_price = price_diff_pct <= 0.02
+                
+                # 두 조건을 모두 만족해야 함 (필수 조건)
+                has_similar_adjustment = similar_size and similar_price
+                
+                # 필수 조건이므로 만족하지 않으면 False 반환
+                if not has_similar_adjustment:
+                    return (False, False)
+                
+                return (True, has_similar_adjustment)
+            else:
+                return (False, False)  # 3개 미만인 경우 조건 확인 불가로 실패
             
         except Exception:
-            return False
+            return (False, False)
     
     @staticmethod
     def check_daily_start_below_bisector_restriction(data: pd.DataFrame) -> Tuple[bool, bool]:
@@ -723,7 +794,7 @@ class PullbackCandlePattern:
             has_turning_candle = True  # 회복 신호에서 이미 캔들 품질 확인함
             
             # 11. 필수 조건 체크: 눌림목 회복 신호 확인
-            has_recovery_signal = PullbackCandlePattern.check_pullback_recovery_signal(data, baseline_volumes)
+            has_recovery_signal, has_similar_adjustment = PullbackCandlePattern.check_pullback_recovery_signal(data, baseline_volumes)
             
             # 추가: 저거래량 회복 신호 확인
             has_low_volume_breakout = PullbackUtils.check_low_volume_breakout_signal(data, baseline_volumes)
@@ -750,7 +821,7 @@ class PullbackCandlePattern:
                 
                 # 저거래량 돌파 신호가 있으면 신뢰도 보너스 추가
                 if has_low_volume_breakout:
-                    signal_strength.confidence += 15
+                    signal_strength.confidence += 5
                     signal_strength.reasons.append('저거래량 돌파')
                     
                     # 신뢰도에 따른 신호 타입 재분류
