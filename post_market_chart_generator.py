@@ -368,6 +368,147 @@ class PostMarketChartGenerator:
             self.logger.error(f"듀얼 차트 생성 오류: {e}")
             return {'price_box': None, 'multi_bollinger': None}
     
+    async def _process_single_stock_with_intraday_data(self, stock_code: str, stock_name: str, 
+                                                     target_date: str, selection_reason: str, 
+                                                     intraday_data) -> Dict[str, Any]:
+        """장중 수집 데이터로 단일 종목 처리 (테스트용)"""
+        try:
+            self.logger.info(f"📊 {stock_code}({stock_name}) 장중 데이터로 차트 생성 시작")
+            
+            # 장중 수집된 데이터 사용
+            combined_data = intraday_data.intraday_manager.get_combined_chart_data(stock_code) if hasattr(intraday_data, 'intraday_manager') else None
+            
+            if combined_data is None:
+                # intraday_data에서 직접 데이터 가져오기
+                historical_data = getattr(intraday_data, 'historical_data', pd.DataFrame())
+                realtime_data = getattr(intraday_data, 'realtime_data', pd.DataFrame())
+                
+                if historical_data.empty and realtime_data.empty:
+                    self.logger.warning(f"⚠️ {stock_code} 장중 수집 데이터 없음")
+                    return {
+                        'stock_code': stock_code,
+                        'stock_name': stock_name,
+                        'success': False,
+                        'error': '장중 수집 데이터 없음'
+                    }
+                
+                # 데이터 결합
+                if not historical_data.empty and not realtime_data.empty:
+                    combined_data = pd.concat([historical_data, realtime_data], ignore_index=True)
+                    self.logger.info(f"📊 {stock_code} 장중 데이터 결합: 과거 {len(historical_data)} + 실시간 {len(realtime_data)} = {len(combined_data)}건")
+                elif not historical_data.empty:
+                    combined_data = historical_data
+                    self.logger.info(f"📊 {stock_code} 과거 데이터만 사용: {len(combined_data)}건")
+                else:
+                    combined_data = realtime_data
+                    self.logger.info(f"📊 {stock_code} 실시간 데이터만 사용: {len(combined_data)}건")
+                
+                # 중복 제거 및 정렬
+                if 'datetime' in combined_data.columns:
+                    combined_data = combined_data.drop_duplicates(subset=['datetime']).sort_values('datetime').reset_index(drop=True)
+                elif 'time' in combined_data.columns:
+                    combined_data = combined_data.drop_duplicates(subset=['time']).sort_values('time').reset_index(drop=True)
+            
+            if combined_data is None or combined_data.empty:
+                self.logger.warning(f"⚠️ {stock_code} 결합 데이터 없음")
+                return {
+                    'stock_code': stock_code,
+                    'stock_name': stock_name,
+                    'success': False,
+                    'error': '결합 데이터 없음'
+                }
+            
+            # 눌림목 캔들패턴 전용 차트 생성 (3분봉)
+            from core.timeframe_converter import TimeFrameConverter
+            data_3min = TimeFrameConverter.convert_to_3min_data(combined_data)
+            
+            if data_3min is None or data_3min.empty:
+                self.logger.warning(f"⚠️ {stock_code} 3분봉 변환 실패")
+                return {
+                    'stock_code': stock_code,
+                    'stock_name': stock_name,
+                    'success': False,
+                    'error': '3분봉 변환 실패'
+                }
+            
+            # 눌림목 패턴 신호 계산
+            from core.indicators.pullback_candle_pattern import PullbackCandlePattern
+            
+            signals = PullbackCandlePattern.generate_trading_signals(
+                data_3min,
+                enable_candle_shrink_expand=False,
+                enable_divergence_precondition=False,
+                enable_overhead_supply_filter=True,
+                use_improved_logic=True,
+                candle_expand_multiplier=1.10,
+                overhead_lookback=10,
+                overhead_threshold_hits=2,
+                debug=True,
+                logger=self.logger
+            )
+            
+            # 차트 생성
+            chart_filename = f"intraday_live_{stock_code}_3min_{target_date}_pullback_candle_{now_kst().strftime('%Y%m%d_%H%M%S')}.png"
+            
+            # 간단한 차트 렌더링 (전략 차트 생성 사용)
+            try:
+                # 눌림목 전략 정보 생성
+                pullback_strategy = self.strategy_manager.get_strategy('pullback_candle_pattern')
+                if not pullback_strategy:
+                    # 기본 전략 정보 생성
+                    from visualization.strategy_manager import Strategy
+                    pullback_strategy = Strategy(
+                        name="pullback_candle_pattern",
+                        timeframe="3min",
+                        indicators=[],
+                        description="눌림목 캔들패턴 (장중 실시간 데이터)"
+                    )
+                
+                chart_path = self.chart_renderer.create_strategy_chart(
+                    stock_code, stock_name, target_date, pullback_strategy,
+                    data_3min, signals, selection_reason + " (장중 실시간 데이터)",
+                    chart_suffix="intraday_live", timeframe="3min"
+                )
+                
+                if chart_path:
+                    self.logger.info(f"✅ {stock_code} 장중 데이터 차트 생성 완료: {chart_path}")
+                    return {
+                        'stock_code': stock_code,
+                        'stock_name': stock_name,
+                        'success': True,
+                        'chart_path': chart_path,
+                        'data_info': {
+                            'total_1min_bars': len(combined_data),
+                            'total_3min_bars': len(data_3min),
+                            'data_range': f"{combined_data.iloc[0].get('time', 'N/A')} ~ {combined_data.iloc[-1].get('time', 'N/A')}" if len(combined_data) > 0 else 'N/A'
+                        }
+                    }
+                else:
+                    return {
+                        'stock_code': stock_code,
+                        'stock_name': stock_name,
+                        'success': False,
+                        'error': '차트 렌더링 실패'
+                    }
+                    
+            except Exception as chart_error:
+                self.logger.error(f"❌ {stock_code} 차트 렌더링 오류: {chart_error}")
+                return {
+                    'stock_code': stock_code,
+                    'stock_name': stock_name,
+                    'success': False,
+                    'error': f'차트 렌더링 오류: {chart_error}'
+                }
+                
+        except Exception as e:
+            self.logger.error(f"❌ {stock_code} 장중 데이터 처리 오류: {e}")
+            return {
+                'stock_code': stock_code,
+                'stock_name': stock_name,
+                'success': False,
+                'error': str(e)
+            }
+    
     async def _process_single_stock(self, stock_code: str, stock_name: str, 
                                    target_date: str, selection_reason: str, change_rate: str) -> Dict[str, Any]:
         """단일 종목 처리 (내부 메서드)"""
@@ -413,6 +554,106 @@ class PostMarketChartGenerator:
                 'error': str(e)
             }
     
+    async def generate_intraday_charts_with_live_data(self, intraday_manager=None, telegram_integration=None) -> Dict[str, Any]:
+        """
+        장중 선정된 종목들의 차트 생성 - 장중 수집한 실시간 데이터 사용 (테스트용)
+        
+        Args:
+            intraday_manager: IntradayStockManager 인스턴스 (None이면 기본 사용)
+            telegram_integration: 텔레그램 통합 객체 (선택사항)
+            
+        Returns:
+            Dict: 차트 생성 결과
+        """
+        try:
+            current_time = now_kst()
+            
+            self.logger.info("🎨 장중 실시간 데이터로 차트 생성 시작 (데이터 차이 테스트용)")
+            
+            # intraday_manager 결정
+            if intraday_manager is None:
+                intraday_manager = self.intraday_manager
+            
+            if intraday_manager is None:
+                self.logger.error("IntradayStockManager가 초기화되지 않음")
+                return {'success': False, 'error': 'IntradayStockManager 없음'}
+            
+            # 장중 선정된 종목들 조회
+            selected_stocks = []
+            summary = intraday_manager.get_all_stocks_summary()
+            
+            if summary.get('total_stocks', 0) > 0:
+                for stock_info in summary.get('stocks', []):
+                    stock_code = stock_info.get('stock_code', '')
+                    
+                    # 종목 상세 정보 조회
+                    stock_data = intraday_manager.get_stock_data(stock_code)
+                    if stock_data:
+                        selected_stocks.append({
+                            'code': stock_code,
+                            'name': stock_data.stock_name,
+                            'chgrate': f"+{stock_info.get('price_change_rate', 0):.1f}",
+                            'selection_reason': f"장중 선정 종목 ({stock_data.selected_time.strftime('%H:%M')} 선정)",
+                            'intraday_data': stock_data  # 장중 수집 데이터 추가
+                        })
+            
+            if not selected_stocks:
+                self.logger.info("ℹ️ 오늘 선정된 종목이 없어 차트 생성을 건너뜁니다")
+                return {'success': False, 'message': '선정된 종목이 없음'}
+            
+            # 당일 날짜로 차트 생성
+            target_date = current_time.strftime("%Y%m%d")
+            
+            self.logger.info(f"📊 {len(selected_stocks)}개 선정 종목의 {target_date} 실시간 데이터 차트 생성 중...")
+            
+            # 캐시 클리어 (새로운 배치 작업 시작)
+            self.clear_cache()
+            
+            # 병렬 처리 - 장중 데이터 사용
+            tasks = []
+            for stock_data in selected_stocks:
+                stock_code = stock_data.get('code', '')
+                stock_name = stock_data.get('name', '')
+                selection_reason = stock_data.get('selection_reason', '')
+                intraday_data = stock_data.get('intraday_data')
+                
+                task = self._process_single_stock_with_intraday_data(
+                    stock_code, stock_name, target_date, selection_reason, intraday_data
+                )
+                tasks.append(task)
+            
+            # 병렬 처리 실행
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # 결과 처리
+            success_count = 0
+            error_count = 0
+            
+            for result in results:
+                if isinstance(result, Exception):
+                    self.logger.error(f"차트 생성 중 오류: {result}")
+                    error_count += 1
+                elif result and result.get('success', False):
+                    success_count += 1
+                else:
+                    error_count += 1
+                    if result:
+                        self.logger.error(f"차트 생성 실패: {result.get('error', 'Unknown error')}")
+            
+            self.logger.info(f"✅ 실시간 데이터 차트 생성 완료: 성공 {success_count}개, 실패 {error_count}개")
+            
+            return {
+                'success': True,
+                'total_stocks': len(selected_stocks),
+                'success_count': success_count,
+                'error_count': error_count,
+                'message': f'실시간 데이터로 {success_count}개 종목 차트 생성 완료'
+            }
+            
+        except Exception as e:
+            self.logger.error(f"❌ 실시간 데이터 차트 생성 중 오류: {e}")
+            return {'success': False, 'error': str(e)}
+
     async def generate_post_market_charts_for_intraday_stocks(self, intraday_manager=None, telegram_integration=None) -> Dict[str, Any]:
         """
         장중 선정된 종목들의 장 마감 후 차트 생성 (최적화 버전)
@@ -587,22 +828,76 @@ class PostMarketChartGenerator:
             return None
 
 
+async def test_intraday_data_comparison():
+    """장중 데이터 vs 장마감후 데이터 비교 테스트 함수"""
+    try:
+        print("🔍 장중 데이터 vs 장마감후 데이터 비교 테스트 시작")
+        
+        generator = PostMarketChartGenerator()
+        if not generator.initialize():
+            print("❌ 초기화 실패")
+            return
+        
+        print("✅ 차트 생성기 초기화 성공")
+        
+        # IntradayStockManager 초기화 (실제 프로그램에서 전달받은 것 사용)
+        from core.intraday_stock_manager import IntradayStockManager
+        intraday_manager = IntradayStockManager(generator.api_manager)
+        
+        # 장중 실시간 데이터로 차트 생성
+        print("\n🔄 장중 실시간 데이터로 차트 생성 중...")
+        intraday_result = await generator.generate_intraday_charts_with_live_data(intraday_manager)
+        
+        if intraday_result.get('success'):
+            print(f"✅ 장중 데이터 차트 생성 완료: {intraday_result.get('success_count')}개 성공")
+        else:
+            print(f"⚠️ 장중 데이터 차트 생성 결과: {intraday_result.get('message')}")
+        
+        # 장마감후 데이터로 차트 생성 (비교용)
+        print("\n📊 장마감후 데이터로 차트 생성 중...")
+        postmarket_result = await generator.generate_post_market_charts_for_intraday_stocks(intraday_manager)
+        
+        if postmarket_result.get('success'):
+            print(f"✅ 장마감후 데이터 차트 생성 완료: {postmarket_result.get('success_count')}개 성공")
+        else:
+            print(f"⚠️ 장마감후 데이터 차트 생성 결과: {postmarket_result.get('message')}")
+        
+        # 결과 비교
+        print("\n📈 데이터 차이 테스트 결과 요약:")
+        print(f"- 장중 실시간 데이터: {intraday_result.get('success_count', 0)}개 차트 생성")
+        print(f"- 장마감후 데이터: {postmarket_result.get('success_count', 0)}개 차트 생성")
+        print("\n💡 생성된 차트를 비교하여 데이터 차이를 확인할 수 있습니다.")
+        print("   - 파일명에 'intraday_live'가 포함된 것이 장중 실시간 데이터")
+        print("   - 기존 파일명은 장마감후 데이터")
+        
+    except Exception as e:
+        print(f"❌ 테스트 실행 오류: {e}")
+
 def main():
     """테스트용 메인 함수"""
+    import sys
     try:
-        print("리팩토링된 차트 생성기 테스트")
-        generator = PostMarketChartGenerator()
-        if generator.initialize():
-            print("초기화 성공")
-            
-            # 전략 현황 출력
-            summary = generator.strategy_manager.get_strategy_summary()
-            print(f"사용 가능한 전략: {summary['enabled_strategies']}/{summary['total_strategies']}개")
-            
+        if len(sys.argv) > 1 and sys.argv[1] == "compare":
+            # 비교 테스트 실행
+            asyncio.run(test_intraday_data_comparison())
         else:
-            print("초기화 실패")
+            # 기본 테스트
+            print("리팩토링된 차트 생성기 테스트")
+            generator = PostMarketChartGenerator()
+            if generator.initialize():
+                print("✅ 초기화 성공")
+                
+                # 전략 현황 출력
+                summary = generator.strategy_manager.get_strategy_summary()
+                print(f"📊 사용 가능한 전략: {summary['enabled_strategies']}/{summary['total_strategies']}개")
+                
+                print("\n💡 사용법:")
+                print("  python post_market_chart_generator.py compare  # 데이터 차이 비교 테스트")
+                
+            else:
+                print("❌ 초기화 실패")
     except Exception as e:
-        print(f"메인 실행 오류: {e}")
+        print(f"❌ 메인 실행 오류: {e}")
 
 
 if __name__ == "__main__":

@@ -233,8 +233,24 @@ def locate_row_for_time(df_3min: pd.DataFrame, target_date: str, hhmm: str) -> O
 
 async def fetch_and_prepare_data(stock_code: str, target_date: str) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
     """실데이터 1분봉을 조회 후 1분봉과 3분봉을 모두 반환."""
-    dp = DataProcessor()
-    base_1min = await dp.get_historical_chart_data(stock_code, target_date)
+    from datetime import datetime
+    from utils.korean_time import now_kst
+    from api.kis_chart_api import get_realtime_minute_data
+    
+    # 오늘 날짜인 경우 실시간 데이터 사용, 과거 날짜는 기존 방식 사용
+    today_str = now_kst().strftime("%Y%m%d")
+    
+    if target_date == today_str:
+        # 오늘 날짜면 전체 거래시간 실시간 데이터 사용 (분할 요청)
+        logger.info(f"🔄 {stock_code} 전체 거래시간 실시간 데이터 조회 (오늘 날짜)")
+        from api.kis_chart_api import get_full_trading_day_data
+        base_1min = get_full_trading_day_data(stock_code, target_date)
+    else:
+        # 과거 날짜는 기존 방식 사용
+        logger.info(f"📊 {stock_code} 과거 분봉 데이터 조회 ({target_date})")
+        dp = DataProcessor()
+        base_1min = await dp.get_historical_chart_data(stock_code, target_date)
+    
     if base_1min is None or base_1min.empty:
         logger.error(f"{stock_code} {target_date} 1분봉 데이터 조회 실패")
         return None, None

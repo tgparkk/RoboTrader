@@ -80,37 +80,22 @@ class PullbackUtils:
     
     @staticmethod
     def calculate_daily_baseline_volume(data: pd.DataFrame) -> pd.Series:
-        """당일 기준거래량 계산 (당일 양봉 최대 거래량을 실시간 추적)"""
+        """당일 기준거래량 계산 (당일 최대 거래량을 실시간 추적)"""
         try:
             if 'datetime' in data.columns:
                 dates = pd.to_datetime(data['datetime']).dt.normalize()
             else:
                 dates = pd.to_datetime(data.index).normalize()
             
-            # 양봉 여부 계산
-            is_bullish = data['close'] > data['open']
-            
-            # 양봉인 경우만 거래량 고려, 음봉은 0으로 설정
-            bullish_volume = data['volume'].where(is_bullish, 0)
-            
-            # 당일 양봉 누적 최대 거래량
-            daily_max_bullish = bullish_volume.groupby(dates).cummax()
-            
-            # 양봉 최대 거래량이 0인 경우 (양봉이 없는 경우) 전체 최대값의 50%를 기준으로 사용
-            fallback_volume = data['volume'].groupby(dates).cummax() * 0.5
-            daily_baseline = daily_max_bullish.where(daily_max_bullish > 0, fallback_volume)
+            # 당일 누적 최대 거래량 (양봉/음봉 구분없이)
+            daily_baseline = data['volume'].groupby(dates).cummax()
             
             return daily_baseline
             
         except Exception:
-            # 날짜 정보가 없으면 전체 기간 중 양봉 최대값 사용
-            is_bullish = data['close'] > data['open']
-            bullish_volume = data['volume'].where(is_bullish, 0)
-            max_bullish_vol = bullish_volume.max()
-            if max_bullish_vol > 0:
-                return pd.Series([max_bullish_vol] * len(data), index=data.index)
-            else:
-                return pd.Series([data['volume'].max() * 0.5] * len(data), index=data.index)
+            # 날짜 정보가 없으면 전체 기간 중 최대값 사용
+            max_vol = data['volume'].max()
+            return pd.Series([max_vol] * len(data), index=data.index)
     
     @staticmethod
     def analyze_volume(data: pd.DataFrame, period: int = 10) -> VolumeAnalysis:
@@ -679,3 +664,152 @@ class PullbackUtils:
             is_large_candle=is_large_candle,
             is_meaningful_body=is_meaningful_body
         )
+
+    @staticmethod
+    def handle_avoid_conditions(has_selling_pressure: bool, has_bearish_volume_restriction: bool, 
+                              bisector_breakout_volume_ok: bool, current: pd.Series,
+                              volume_analysis: VolumeAnalysis, bisector_line: float,
+                              data: pd.DataFrame = None, debug: bool = False, logger = None) -> Optional[SignalStrength]:
+        """회피 조건들 처리 (lines 684-751 from pullback_candle_pattern.py)"""
+        
+        if has_selling_pressure:
+            if debug and logger:
+                candle_time = ""
+                if 'datetime' in current.index:
+                    try:
+                        dt = pd.to_datetime(current['datetime'])
+                        candle_time = f" {dt.strftime('%H:%M')}"
+                    except:
+                        candle_time = ""
+                
+                # 기준 거래량 정보 추가
+                baseline_vol = volume_analysis.baseline_volume
+                baseline_info = f", 기준거래량: {baseline_vol:,.0f}주" if baseline_vol > 0 else ""
+                
+                candle_count = len(data) if data is not None else "N/A"
+                current_candle_info = f"봉:{candle_count}개{candle_time} 종가:{current['close']:,.0f}원"
+                logger.info(f"[{getattr(logger, '_stock_code', 'UNKNOWN')}] {current_candle_info} | "
+                           f"눌림목 과정 매물부담 감지 - 매수 제외{baseline_info}")
+            
+            return SignalStrength(SignalType.AVOID, 0, 0, 
+                                ['눌림목 과정 매물부담 (3% 상승 후 하락시 고거래량)'], 
+                                volume_analysis.volume_ratio, 
+                                PullbackUtils.get_bisector_status(current['close'], bisector_line))
+        
+        if has_bearish_volume_restriction:
+            if debug and logger:
+                candle_time = ""
+                if 'datetime' in current.index:
+                    try:
+                        dt = pd.to_datetime(current['datetime'])
+                        candle_time = f" {dt.strftime('%H:%M')}"
+                    except:
+                        candle_time = ""
+                
+                # 기준 거래량 정보 추가
+                baseline_vol = volume_analysis.baseline_volume
+                baseline_info = f", 기준거래량: {baseline_vol:,.0f}주" if baseline_vol > 0 else ""
+                
+                candle_count = len(data) if data is not None else "N/A"
+                current_candle_info = f"봉:{candle_count}개{candle_time} 종가:{current['close']:,.0f}원"
+                logger.info(f"[{getattr(logger, '_stock_code', 'UNKNOWN')}] {current_candle_info} | "
+                           f"음봉 최대거래량 제한 - 매수 제외{baseline_info}")
+            
+            return SignalStrength(SignalType.AVOID, 0, 0, 
+                                ['음봉 최대거래량 제한 (당일 최대 음봉 거래량보다 큰 양봉 출현 대기 중)'], 
+                                volume_analysis.volume_ratio, 
+                                PullbackUtils.get_bisector_status(current['close'], bisector_line))
+        
+        if not bisector_breakout_volume_ok:
+            if debug and logger:
+                candle_time = ""
+                if 'datetime' in current.index:
+                    try:
+                        dt = pd.to_datetime(current['datetime'])
+                        candle_time = f" {dt.strftime('%H:%M')}"
+                    except:
+                        candle_time = ""
+                
+                # 기준 거래량 정보 추가
+                baseline_vol = volume_analysis.baseline_volume
+                baseline_info = f", 기준거래량: {baseline_vol:,.0f}주" if baseline_vol > 0 else ""
+                
+                candle_count = len(data) if data is not None else "N/A"
+                current_candle_info = f"봉:{candle_count}개{candle_time} 종가:{current['close']:,.0f}원"
+                logger.info(f"[{getattr(logger, '_stock_code', 'UNKNOWN')}] {current_candle_info} | "
+                           f"이등분선 돌파 거래량 부족 - 매수 제외{baseline_info}")
+            
+            return SignalStrength(SignalType.AVOID, 0, 0, 
+                                ['이등분선 돌파 거래량 부족 (직전 봉 거래량의 2배 이상 필요)'], 
+                                volume_analysis.volume_ratio, 
+                                PullbackUtils.get_bisector_status(current['close'], bisector_line))
+        
+        return None
+    
+    @staticmethod
+    def check_low_volume_breakout_signal(data: pd.DataFrame, baseline_volumes: pd.Series,
+                                       min_low_volume_candles: int = 5,
+                                       volume_threshold: float = 0.25) -> bool:
+        """
+        저거래량 조정 후 회복 양봉 신호 확인
+        
+        조건:
+        - 기준거래량의 1/4 수준으로 연속 5개 이상 거래
+        - 1/4 수준을 넘는 직전봉보다 위에 있는 양봉 출현
+        
+        Args:
+            data: 3분봉 데이터
+            baseline_volumes: 기준거래량 시리즈
+            min_low_volume_candles: 최소 저거래량 캔들 개수 (기본 5개)
+            volume_threshold: 저거래량 기준 (기준거래량의 25%)
+            
+        Returns:
+            bool: 저거래량 회복 신호 여부
+        """
+        if len(data) < min_low_volume_candles + 1 or len(baseline_volumes) < len(data):
+            return False
+        
+        try:
+            # 현재 캔들과 이전 캔들들
+            current_candle = data.iloc[-1]
+            
+            # 현재 캔들이 양봉인지 확인
+            if current_candle['close'] <= current_candle['open']:
+                return False
+            
+            # 연속 저거래량 구간 찾기
+            low_volume_count = 0
+            prev_candle_idx = -2  # 직전봉부터 시작
+            
+            # 직전봉부터 역순으로 저거래량 캔들 개수 확인
+            for i in range(len(data) - 2, -1, -1):  # 현재 캔들 제외하고 역순
+                candle = data.iloc[i]
+                baseline = baseline_volumes.iloc[i]
+                
+                # 기준거래량의 1/4 이하인지 확인
+                if candle['volume'] <= baseline * volume_threshold:
+                    low_volume_count += 1
+                else:
+                    break  # 연속성이 깨지면 중단
+            
+            # 최소 개수 이상의 연속 저거래량 캔들이 있는지 확인
+            if low_volume_count < min_low_volume_candles:
+                return False
+            
+            # 직전봉 정보
+            prev_candle = data.iloc[-2]
+            prev_baseline = baseline_volumes.iloc[-2]
+            
+            # 현재 캔들의 거래량이 1/4 수준을 넘는지 확인
+            current_baseline = baseline_volumes.iloc[-1]
+            if current_candle['volume'] <= current_baseline * volume_threshold:
+                return False
+            
+            # 현재 캔들이 직전봉보다 위에 있는지 확인 (고가 비교)
+            if current_candle['high'] <= prev_candle['high']:
+                return False
+            
+            return True
+            
+        except Exception:
+            return False

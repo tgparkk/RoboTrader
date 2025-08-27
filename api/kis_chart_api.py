@@ -729,6 +729,13 @@ async def get_full_trading_day_data_async(stock_code: str, target_date: str = ""
 
         from datetime import datetime as _dt, timedelta as _td
         base_dt = _dt.strptime(target_date, "%Y%m%d")
+        
+        # 🆕 데이터 부족 시 당일 전체 분봉 조회
+        current_time = now_kst().strftime("%H%M%S")
+        if target_date == now_kst().strftime("%Y%m%d"):  # 당일인 경우
+            # 현재시간까지 전체 수집으로 변경
+            logger.info(f"📊 {stock_code} 당일 전체 분봉 수집: 09:00 ~ {current_time}")
+            selected_time = current_time
 
         time_segments = [
             ("090000", "110000"),
