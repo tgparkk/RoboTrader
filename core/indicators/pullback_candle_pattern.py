@@ -131,10 +131,10 @@ class PullbackCandlePattern:
         
         # 이등분선 상태 점수
         if bisector_status == BisectorStatus.HOLDING:
-            score += 30
+            score += 20
             reasons.append('이등분선 안정 지지')
         elif bisector_status == BisectorStatus.NEAR_SUPPORT:
-            score += 20
+            score += 10
             reasons.append('이등분선 근접')
         else:  # BROKEN
             score -= 25
@@ -148,15 +148,15 @@ class PullbackCandlePattern:
             score += 10
             reasons.append('매물부담 보통')
         else:  # 50% 이상
-            score -= 20
+            score -= 30
             reasons.append('매물부담 과다')
         
         # 변곡캔들 점수
         if has_turning_candle:
-            score += 25
+            score += 20
             reasons.append('변곡캔들 출현')
         else:
-            score -= 15
+            score -= 30
             reasons.append('변곡캔들 미출현')
         
         # 선행 상승 점수
@@ -186,7 +186,7 @@ class PullbackCandlePattern:
                 volume_ratio=volume_analysis.volume_ratio,
                 bisector_status=bisector_status
             )
-        elif score >= 60:
+        elif score >= 70:
             return SignalStrength(
                 signal_type=SignalType.CAUTIOUS_BUY,
                 confidence=score,
@@ -252,6 +252,7 @@ class PullbackCandlePattern:
         조건:
         1. 3% 이상 상승한 구간이 있었는지 확인
         2. 상승 후 하락(눌림목) 과정에서 거래량 60% 이상인 봉이 있는지 확인
+        3. 🆕 단, 5봉 이상 조정 중이면 매물부담을 무시하고 매수 허용
         
         Args:
             data: 3분봉 데이터
@@ -310,6 +311,12 @@ class PullbackCandlePattern:
             pullback_data = today_data.iloc[high_point_idx:]
             pullback_baselines = today_baselines.iloc[high_point_idx:]
             
+            # 🆕 조정 기간 확인 - 5봉 이상 조정 중이면 매물부담 무시
+            pullback_length = len(pullback_data)
+            if pullback_length >= 5:
+                # 5봉 이상 조정 중이면 매물부담을 무시하고 매수 허용
+                return False
+            
             # baseline_volumes 갱신 시점을 추적하여 갱신된 시점부터만 체크
             prev_baseline = None
             baseline_updated_idx = None
@@ -336,7 +343,7 @@ class PullbackCandlePattern:
                 high_volume = candle['volume'] >= current_baseline * 0.6 if current_baseline > 0 else False
                 
                 if is_declining and high_volume:
-                    return True  # 매물부담 감지
+                    return True  # 매물부담 감지 (5봉 미만 조정에서만)
             
             return False
             
@@ -521,21 +528,13 @@ class PullbackCandlePattern:
         try:
             # 현재 캔들과 이전 캔들들 분리
             current_candle = data.iloc[-1]
-            previous_candles = data.iloc[-(lookback+1):-1]  # 현재 제외한 최근 3봉
-            previous_baselines = baseline_volumes.iloc[-(lookback+1):-1]
             
-            if len(previous_candles) == 0:
-                return False
-            
-            # 1. 이전 캔들들이 기준거래량 약 1/4 수준으로 조정되었는지 확인
-            low_volume_mask = previous_candles['volume'] <= previous_baselines * 0.265
-            low_volume_ratio = low_volume_mask.sum() / len(previous_candles)
-            
-            # 최소 2/3 이상이 1/4 이하로 조정되어야 함
-            if low_volume_ratio < 2/3:
+            # 1. 먼저 저거래량 돌파 신호 확인 (중복 로직 제거)
+            has_low_volume_breakout = PullbackUtils.check_low_volume_breakout_signal(data, baseline_volumes)
+            if not has_low_volume_breakout:
                 return (False, False)
             
-            # 2. 이등분선 계산 확인
+            # 2. 이등분선 계산 확인  
             bisector_line_series = BisectorLine.calculate_bisector_line(data['high'], data['low'])
             current_bisector = bisector_line_series.iloc[-1] if not bisector_line_series.empty else None
             
@@ -581,33 +580,8 @@ class PullbackCandlePattern:
                 if not (volume_2x_increased and price_1pct_increase):
                     return (False, False)
             
-            # 3. 현재 캔들이 양봉인지 확인
-            is_bullish = current_candle['close'] > current_candle['open']
-            
-            if not is_bullish:
-                return (False, False)
-            
-            # 4. 현재 캔들의 거래량이 직전 3분봉보다 같거나 큰지 확인
-            prev_candle = data.iloc[-2]  # 직전 캔들
-            volume_improved = current_candle['volume'] >= prev_candle['volume']
-            
-            if not volume_improved:
-                return (False, False)
-            
-            # 5. 캔들의 크기가 직전 캔들보다 크거나 위에 있는지 확인
-            # 캔들 크기 비교 (고가-저가)
-            current_size = current_candle['high'] - current_candle['low']
-            prev_size = prev_candle['high'] - prev_candle['low']
-            size_improved = current_size >= prev_size
-            
-            # 캔들 위치 비교 (고가가 더 높은지)
-            position_improved = current_candle['high'] >= prev_candle['high']
-            
-            # 크기가 크거나 위치가 개선되어야 함
-            candle_improved = size_improved or position_improved
-            
-            if not candle_improved:
-                return (False, False)
+            # 3. 추가 조건들은 check_low_volume_breakout_signal에서 이미 확인됨 (양봉, 거래량 등)
+            # 여기서는 눌림목 특화 조건만 확인
             
             # 6. 직전 캔들 최소 두개가 조정되는 상황인지 확인 (필수 조건)
             if len(data) >= 3:  # 현재 + 직전 2개 = 최소 3개 필요
@@ -790,14 +764,11 @@ class PullbackCandlePattern:
             # 10. 변곡캔들 체크는 check_pullback_recovery_signal에서 처리됨
             has_turning_candle = True  # 회복 신호에서 이미 캔들 품질 확인함
             
-            # 11. 필수 조건 체크: 눌림목 회복 신호 확인
+            # 11. 필수 조건 체크: 눌림목 회복 신호 확인 (내부에서 저거래량 신호도 함께 확인)
             has_recovery_signal, has_similar_adjustment = PullbackCandlePattern.check_pullback_recovery_signal(data, baseline_volumes)
             
-            # 추가: 저거래량 회복 신호 확인
-            has_low_volume_breakout = PullbackUtils.check_low_volume_breakout_signal(data, baseline_volumes)
-            
-            # 눌림목 회복 신호나 저거래량 회복 신호 중 하나라도 있으면 매수 신호 허용
-            has_any_recovery_signal = has_recovery_signal or has_low_volume_breakout
+            # check_pullback_recovery_signal 내부에서 이미 저거래량 조건을 확인하므로 중복 호출 제거
+            has_any_recovery_signal = has_recovery_signal
             
             # 회복 신호가 없으면 매수 신호 금지
             if not has_any_recovery_signal:
@@ -805,7 +776,7 @@ class PullbackCandlePattern:
                     signal_type=SignalType.WAIT,
                     confidence=30,
                     target_profit=0,
-                    reasons=['회복 신호 없음 (눌림목 회복 또는 저거래량 돌파 신호 필요)'],
+                    reasons=['눌림목 회복 신호 없음 (저거래량 조정 후 회복 양봉 필요)'],
                     volume_ratio=volume_analysis.volume_ratio,
                     bisector_status=bisector_status
                 )
@@ -816,18 +787,7 @@ class PullbackCandlePattern:
                     data, bisector_line_series, False
                 )
                 
-                # 저거래량 돌파 신호가 있으면 신뢰도 보너스 추가
-                if has_low_volume_breakout:
-                    signal_strength.confidence += 5
-                    signal_strength.reasons.append('저거래량 돌파')
-                    
-                    # 신뢰도에 따른 신호 타입 재분류
-                    if signal_strength.confidence >= 80:
-                        signal_strength.signal_type = SignalType.STRONG_BUY
-                        signal_strength.target_profit = 0.025
-                    elif signal_strength.confidence >= 60:
-                        signal_strength.signal_type = SignalType.CAUTIOUS_BUY  
-                        signal_strength.target_profit = 0.02
+                # 눌림목 회복 신호가 이미 저거래량 조건을 포함하므로 별도 보너스는 불필요
                 
                 # 조정 품질이 나쁘면 신뢰도 차감
                 if not good_pullback and signal_strength.signal_type in [SignalType.STRONG_BUY, SignalType.CAUTIOUS_BUY]:

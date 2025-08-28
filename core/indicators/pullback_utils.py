@@ -749,7 +749,7 @@ class PullbackUtils:
     @staticmethod
     def check_low_volume_breakout_signal(data: pd.DataFrame, baseline_volumes: pd.Series,
                                        min_low_volume_candles: int = 2,
-                                       volume_threshold: float = 0.25) -> bool:
+                                       volume_threshold: float = 0.3) -> bool:
         """
         저거래량 조정 후 회복 양봉 신호 확인
         
