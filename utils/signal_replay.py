@@ -860,11 +860,12 @@ async def run(
                 # 기본 포맷 적용
                 formatted = super().format(record)
                 
-                # 종목코드 추가 (logger에 설정된 경우)
-                if hasattr(record, '_stock_code'):
-                    formatted = formatted.replace('PullbackCandlePattern', f'PullbackCandlePattern[{record._stock_code}]')
-                elif hasattr(self, 'logger') and hasattr(self.logger, '_stock_code'):
-                    formatted = formatted.replace('PullbackCandlePattern', f'PullbackCandlePattern[{self.logger._stock_code}]')
+                # PullbackCandlePattern | INFO 부분만 제거하고 종목코드와 봉 정보는 유지
+                # 예: '2025-08-29 00:03:54 | PullbackCandlePattern[009540] | INFO | [009540] 봉:8개...'
+                # → '2025-08-29 00:03:54 | [009540] 봉:8개...'
+                import re
+                # PullbackCandlePattern[종목코드] | INFO 부분을 제거
+                formatted = re.sub(r' \| PullbackCandlePattern(\[[^\]]+\])? \| \w+ \|', ' |', formatted)
                 
                 return formatted
         

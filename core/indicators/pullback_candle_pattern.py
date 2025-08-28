@@ -770,9 +770,6 @@ class PullbackCandlePattern:
             # 6. 이등분선 돌파 양봉 거래량 조건 체크 (매수 제외 조건)
             bisector_breakout_volume_ok = PullbackCandlePattern.check_bisector_breakout_volume(data)
             
-            # 목표치 조정을 위해 이등분선 아래 시작 여부만 확인
-            _, started_below_bisector = PullbackCandlePattern.check_daily_start_below_bisector_restriction(data)
-            
             # 회피 조건들 처리
             avoid_result = PullbackUtils.handle_avoid_conditions(
                 has_selling_pressure, has_bearish_volume_restriction, bisector_breakout_volume_ok,
@@ -816,7 +813,7 @@ class PullbackCandlePattern:
                 # 12. 신호 생성 (제시된 로직 적용)
                 signal_strength = PullbackCandlePattern.generate_confidence_signal(
                     bisector_status, volume_analysis, has_turning_candle, prior_uptrend, 
-                    data, bisector_line_series, started_below_bisector
+                    data, bisector_line_series, False
                 )
                 
                 # 저거래량 돌파 신호가 있으면 신뢰도 보너스 추가
