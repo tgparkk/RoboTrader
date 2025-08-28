@@ -748,7 +748,7 @@ class PullbackUtils:
     
     @staticmethod
     def check_low_volume_breakout_signal(data: pd.DataFrame, baseline_volumes: pd.Series,
-                                       min_low_volume_candles: int = 5,
+                                       min_low_volume_candles: int = 2,
                                        volume_threshold: float = 0.25) -> bool:
         """
         저거래량 조정 후 회복 양봉 신호 확인
@@ -805,9 +805,18 @@ class PullbackUtils:
             if current_candle['volume'] <= current_baseline * volume_threshold:
                 return False
             
-            # 현재 캔들이 직전봉보다 위에 있는지 확인 (고가 비교)
-            if current_candle['high'] <= prev_candle['high']:
-                return False
+            # 현재 캔들이 직전봉보다 위에 있는지 확인
+            # 직전캔들이 음봉이면 시가보다 높은지, 직전캔들이 양봉이면 종가보다 높은지 확인
+            prev_is_bearish = prev_candle['close'] < prev_candle['open']
+            
+            if prev_is_bearish:
+                # 직전봉이 음봉인 경우: 현재 캔들의 종가가 직전봉의 시가보다 높은지 확인
+                if current_candle['close'] <= prev_candle['open']:
+                    return False
+            else:
+                # 직전봉이 양봉인 경우: 현재 캔들의 종가가 직전봉의 종가보다 높은지 확인
+                if current_candle['close'] <= prev_candle['close']:
+                    return False
             
             return True
             
