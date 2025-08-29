@@ -571,36 +571,72 @@ class PullbackUtils:
     
     @staticmethod
     def check_prior_uptrend(data: pd.DataFrame, min_gain: float = 0.05) -> bool:
-        """선행 상승 확인 (당일 시가 대비 5% 이상 상승했었는지)"""
+        """
+        선행 상승 확인 (개선된 버전)
+        
+        조건:
+        1. 당일 시가 대비 최고가가 min_gain 이상 상승 (기존 로직)
+        2. 연속된 N개 봉의 누적 상승률이 min_gain 이상 (신규 추가)
+        
+        Args:
+            data: 분봉 데이터
+            min_gain: 최소 상승률 (기본값: 5%)
+            
+        Returns:
+            bool: 선행 상승 조건 만족 여부
+        """
         if len(data) < 1:
             return False
         
         try:
-            # 당일 데이터에서 시가와 고점 추출
+            # 당일 데이터 추출
             if 'datetime' in data.columns:
                 dates = pd.to_datetime(data['datetime']).dt.normalize()
-                today = dates.iloc[-1]  # 현재(마지막) 캔들의 날짜
-                
-                # 당일 데이터만 필터링
-                today_data = data[dates == today]
+                today = dates.iloc[-1]
+                today_data = data[dates == today].reset_index(drop=True)
                 
                 if len(today_data) == 0:
                     return False
-                
-                # 당일 시가 (첫 번째 캔들의 시가)
-                day_open = today_data['open'].iloc[0]
-                # 당일 고점 (당일 중 최대 고가)
-                day_high = today_data['high'].max()
-                
             else:
                 # datetime 정보가 없으면 전체 데이터를 당일로 간주
-                day_open = data['open'].iloc[0]
-                day_high = data['high'].max()
+                today_data = data.copy()
             
-            # 당일 시가 대비 고점 상승률 계산
+            # 방법 1: 기존 로직 - 당일 시가 대비 최고가
+            day_open = today_data['open'].iloc[0]
+            day_high = today_data['high'].max()
+            
             if day_open > 0:
-                gain_pct = (day_high - day_open) / day_open
-                return gain_pct >= min_gain  # 5% 이상 상승했었는지
+                single_point_gain = (day_high - day_open) / day_open
+                if single_point_gain >= min_gain:
+                    return True  # 기존 조건 만족
+            
+            # 방법 2: 신규 로직 - 연속된 N개 봉의 누적 상승률
+            # 다중 범위 체크: 3봉, 5봉, 7봉
+            check_ranges = [3, 5, 7]
+            
+            for window_size in check_ranges:
+                if len(today_data) < window_size:
+                    continue
+                
+                # 슬라이딩 윈도우로 각 구간의 누적 상승률 체크
+                for start_idx in range(len(today_data) - window_size + 1):
+                    end_idx = start_idx + window_size - 1
+                    
+                    # 구간 시작가와 구간 내 최고가 비교
+                    segment_start_price = today_data['open'].iloc[start_idx]
+                    segment_high = today_data['high'].iloc[start_idx:end_idx+1].max()
+                    
+                    if segment_start_price > 0:
+                        segment_gain = (segment_high - segment_start_price) / segment_start_price
+                        
+                        # 연속 상승 조건 추가 체크 (선택사항)
+                        # 구간 내에서 지속적으로 상승하는 패턴인지 확인
+                        segment_data = today_data.iloc[start_idx:end_idx+1]
+                        is_sustained_uptrend = PullbackUtils._check_sustained_uptrend(segment_data)
+                        
+                        # 누적 상승률이 조건 만족하고, 지속적 상승 패턴인 경우
+                        if segment_gain >= min_gain and is_sustained_uptrend:
+                            return True
             
             return False
             
@@ -612,6 +648,53 @@ class PullbackUtils:
                 gain_pct = (current_price - start_price) / start_price if start_price > 0 else 0
                 return gain_pct >= min_gain
             return False
+    
+    @staticmethod
+    def _check_sustained_uptrend(segment_data: pd.DataFrame) -> bool:
+        """
+        구간 내 지속적 상승 패턴 확인
+        
+        조건:
+        1. 최소 60% 이상의 봉이 상승 방향
+        2. 큰 하락봉(2% 이상 하락)이 없음
+        
+        Args:
+            segment_data: 구간 데이터
+            
+        Returns:
+            bool: 지속적 상승 패턴 여부
+        """
+        try:
+            if len(segment_data) < 2:
+                return True  # 데이터 부족시 허용
+            
+            # 1. 상승 봉의 비율 체크
+            price_changes = segment_data['close'].diff().iloc[1:]  # 첫 번째 NaN 제외
+            if len(price_changes) == 0:
+                return True
+            
+            up_count = (price_changes > 0).sum()
+            up_ratio = up_count / len(price_changes)
+            
+            # 60% 이상이 상승 방향이어야 함
+            if up_ratio < 0.6:
+                return False
+            
+            # 2. 큰 하락봉 체크 (개별 봉의 하락률 2% 이상)
+            for _, candle in segment_data.iterrows():
+                open_price = candle['open']
+                close_price = candle['close']
+                
+                if open_price > 0:
+                    candle_change = (close_price - open_price) / open_price
+                    # 개별 봉이 2% 이상 하락하면 지속적 상승 패턴 아님
+                    if candle_change <= -0.02:
+                        return False
+            
+            return True
+            
+        except Exception:
+            return True  # 오류 시 허용
     
     @staticmethod
     def analyze_candle(data: pd.DataFrame, period: int = 10):
@@ -751,7 +834,7 @@ class PullbackUtils:
                                        min_low_volume_candles: int = 2,
                                        volume_threshold: float = 0.3) -> bool:
         """
-        저거래량 조정 후 회복 양봉 신호 확인
+        저거래량 조정 후 회복 양봉 신호 확인 (중복 제거된 버전)
         
         조건:
         - 기준거래량의 1/4 수준으로 연속 5개 이상 거래
@@ -770,42 +853,31 @@ class PullbackUtils:
             return False
         
         try:
-            # 현재 캔들과 이전 캔들들
+            # 공통 거래량 분석 활용 (중복 제거)
+            from core.indicators.pullback_candle_pattern import PullbackCandlePattern
+            volume_info = PullbackCandlePattern._analyze_volume_pattern(data, baseline_volumes)
+            
+            # 현재 캔들
             current_candle = data.iloc[-1]
             
-            # 현재 캔들이 양봉인지 확인
+            # 1. 현재 캔들이 양봉인지 확인
             if current_candle['close'] <= current_candle['open']:
                 return False
             
-            # 연속 저거래량 구간 찾기
-            low_volume_count = 0
-            prev_candle_idx = -2  # 직전봉부터 시작
-            
-            # 직전봉부터 역순으로 저거래량 캔들 개수 확인
-            for i in range(len(data) - 2, -1, -1):  # 현재 캔들 제외하고 역순
-                candle = data.iloc[i]
-                baseline = baseline_volumes.iloc[i]
-                
-                # 기준거래량의 1/4 이하인지 확인
-                if candle['volume'] <= baseline * volume_threshold:
-                    low_volume_count += 1
-                else:
-                    break  # 연속성이 깨지면 중단
-            
-            # 최소 개수 이상의 연속 저거래량 캔들이 있는지 확인
-            if low_volume_count < min_low_volume_candles:
+            # 2. 연속 저거래량 개수 확인 (공통 함수 결과 활용)
+            if volume_info['consecutive_low_count'] < min_low_volume_candles:
                 return False
             
-            # 직전봉 정보
+            # 3. 현재 캔들의 거래량이 threshold를 넘는지 확인
+            if volume_info['current_vs_threshold'] <= volume_threshold:
+                return False
+            
+            # 4. 현재 캔들이 직전봉보다 위에 있는지 확인
+            if len(data) < 2:
+                return True  # 비교할 직전봉이 없으면 통과
+            
             prev_candle = data.iloc[-2]
-            prev_baseline = baseline_volumes.iloc[-2]
             
-            # 현재 캔들의 거래량이 1/4 수준을 넘는지 확인
-            current_baseline = baseline_volumes.iloc[-1]
-            if current_candle['volume'] <= current_baseline * volume_threshold:
-                return False
-            
-            # 현재 캔들이 직전봉보다 위에 있는지 확인
             # 직전캔들이 음봉이면 시가보다 높은지, 직전캔들이 양봉이면 종가보다 높은지 확인
             prev_is_bearish = prev_candle['close'] < prev_candle['open']
             

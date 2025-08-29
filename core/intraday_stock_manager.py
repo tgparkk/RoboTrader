@@ -19,6 +19,7 @@ from api.kis_chart_api import (
 )
 from api.kis_market_api import get_inquire_daily_itemchartprice, get_inquire_price
 from core.indicators.price_box import PriceBox
+from core.realtime_data_logger import log_intraday_data
 
 
 logger = setup_logger(__name__)
@@ -193,9 +194,46 @@ class IntradayStockManager:
             )
             
             if historical_data is None or historical_data.empty:
-                self.logger.error(f"❌ {stock_code} 당일 전체 분봉 데이터 조회 실패")
-                # 실패 시 기존 방식으로 폴백
-                return await self._collect_historical_data_fallback(stock_code)
+                # 실패 시 1분씩 앞으로 이동하여 재시도
+                from datetime import datetime, timedelta
+                try:
+                    selected_time_dt = datetime.strptime(target_hour, "%H%M%S")
+                    new_time_dt = selected_time_dt + timedelta(minutes=1)
+                    new_target_hour = new_time_dt.strftime("%H%M%S")
+                    
+                    # 장 마감 시간(15:30) 초과 시 현재 시간으로 조정
+                    if new_target_hour > "153000":
+                        new_target_hour = now_kst().strftime("%H%M%S")
+                    
+                    self.logger.warning(f"🔄 {stock_code} 전체 데이터 조회 실패, 시간 조정하여 재시도: {target_hour} → {new_target_hour}")
+                    
+                    # 조정된 시간으로 재시도
+                    historical_data = await get_full_trading_day_data_async(
+                        stock_code=stock_code,
+                        target_date=target_date,
+                        selected_time=new_target_hour,
+                        start_time="090000"
+                    )
+                    
+                    if historical_data is not None and not historical_data.empty:
+                        # 성공 시 selected_time 업데이트
+                        with self._lock:
+                            if stock_code in self.selected_stocks:
+                                new_selected_time = selected_time.replace(
+                                    hour=new_time_dt.hour,
+                                    minute=new_time_dt.minute,
+                                    second=new_time_dt.second
+                                )
+                                self.selected_stocks[stock_code].selected_time = new_selected_time
+                                self.logger.info(f"✅ {stock_code} 시간 조정으로 전체 데이터 조회 성공, selected_time 업데이트: {new_selected_time.strftime('%H:%M:%S')}")
+                    
+                except Exception as e:
+                    self.logger.error(f"❌ {stock_code} 전체 데이터 시간 조정 중 오류: {e}")
+                
+                if historical_data is None or historical_data.empty:
+                    self.logger.error(f"❌ {stock_code} 당일 전체 분봉 데이터 조회 실패 (시간 조정 후에도 실패)")
+                    # 실패 시 기존 방식으로 폴백
+                    return await self._collect_historical_data_fallback(stock_code)
             
             # 데이터 정렬 및 정리 (시간 순서)
             if 'datetime' in historical_data.columns:
@@ -307,8 +345,45 @@ class IntradayStockManager:
             )
             
             if result is None:
-                self.logger.error(f"❌ {stock_code} 폴백 분봉 데이터 조회 실패")
-                return False
+                # 실패 시 1분씩 앞으로 이동하여 재시도
+                from datetime import datetime, timedelta
+                try:
+                    selected_time_dt = datetime.strptime(target_hour, "%H%M%S")
+                    new_time_dt = selected_time_dt + timedelta(minutes=1)
+                    new_target_hour = new_time_dt.strftime("%H%M%S")
+                    
+                    # 장 마감 시간(15:30) 초과 시 현재 시간으로 조정
+                    if new_target_hour > "153000":
+                        new_target_hour = now_kst().strftime("%H%M%S")
+                    
+                    self.logger.warning(f"🔄 {stock_code} 조회 실패, 시간 조정하여 재시도: {target_hour} → {new_target_hour}")
+                    
+                    # 조정된 시간으로 재시도
+                    result = get_inquire_time_itemchartprice(
+                        div_code=div_code,
+                        stock_code=stock_code,
+                        input_hour=new_target_hour,
+                        past_data_yn="Y"
+                    )
+                    
+                    if result is not None:
+                        # 성공 시 selected_time 업데이트
+                        with self._lock:
+                            if stock_code in self.selected_stocks:
+                                new_selected_time = selected_time.replace(
+                                    hour=new_time_dt.hour,
+                                    minute=new_time_dt.minute,
+                                    second=new_time_dt.second
+                                )
+                                self.selected_stocks[stock_code].selected_time = new_selected_time
+                                self.logger.info(f"✅ {stock_code} 시간 조정으로 조회 성공, selected_time 업데이트: {new_selected_time.strftime('%H:%M:%S')}")
+                    
+                except Exception as e:
+                    self.logger.error(f"❌ {stock_code} 시간 조정 중 오류: {e}")
+                
+                if result is None:
+                    self.logger.error(f"❌ {stock_code} 폴백 분봉 데이터 조회 실패 (시간 조정 후에도 실패)")
+                    return False
             
             summary_df, chart_df = result
             
@@ -867,6 +942,12 @@ class IntradayStockManager:
                 for j, (minute_result, price_result) in enumerate(zip(minute_results, price_results)):
                     stock_code = batch[j]
                     
+                    # 종목명 가져오기
+                    stock_name = None
+                    with self._lock:
+                        if stock_code in self.selected_stocks:
+                            stock_name = self.selected_stocks[stock_code].stock_name
+                    
                     # 분봉 데이터 결과 처리
                     if isinstance(minute_result, Exception):
                         failed_updates += 1
@@ -883,6 +964,42 @@ class IntradayStockManager:
                         quality_issues.append(f"{stock_code}: 현재가 업데이트 실패 - {str(price_result)[:30]}")
                     else:
                         successful_price_updates += 1
+                    
+                    # 실시간 데이터 로깅 (분봉 또는 현재가 업데이트 성공 시)
+                    if stock_name and (not isinstance(minute_result, Exception) or not isinstance(price_result, Exception)):
+                        try:
+                            # 분봉 데이터 준비
+                            minute_data = None
+                            if not isinstance(minute_result, Exception):
+                                with self._lock:
+                                    if stock_code in self.selected_stocks:
+                                        realtime_data = self.selected_stocks[stock_code].realtime_data
+                                        if realtime_data is not None and not realtime_data.empty:
+                                            # 최근 3분봉 데이터만 로깅
+                                            minute_data = realtime_data.tail(3)
+                            
+                            # 현재가 데이터 준비
+                            price_data = None
+                            if not isinstance(price_result, Exception):
+                                with self._lock:
+                                    if stock_code in self.selected_stocks:
+                                        current_price_info = self.selected_stocks[stock_code].current_price_info
+                                        if current_price_info:
+                                            price_data = {
+                                                'current_price': current_price_info.get('current_price', 0),
+                                                'change_rate': current_price_info.get('change_rate', 0),
+                                                'volume': current_price_info.get('volume', 0),
+                                                'high_price': current_price_info.get('high_price', 0),
+                                                'low_price': current_price_info.get('low_price', 0),
+                                                'open_price': current_price_info.get('open_price', 0)
+                                            }
+                            
+                            # 실시간 데이터 로깅 호출
+                            log_intraday_data(stock_code, stock_name, minute_data, price_data, None)
+                            
+                        except Exception as log_error:
+                            # 로깅 오류가 메인 로직에 영향을 주지 않도록 조용히 처리
+                            pass
                 
                 # API 호출 간격 조절 (더 빠른 업데이트)
                 if i + batch_size < len(stock_codes):
