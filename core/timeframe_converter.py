@@ -77,15 +77,73 @@ class TimeFrameConverter:
     @staticmethod
     def convert_to_3min_data(data: pd.DataFrame) -> Optional[pd.DataFrame]:
         """
-        1분봉 데이터를 3분봉으로 변환 (기존 호환성 유지)
+        1분봉 데이터를 3분봉으로 변환 (floor 방식, 완성된 봉만)
+        signal_replay와 동일한 방식으로 처리하여 일관성 확보
         
         Args:
             data: 1분봉 DataFrame
             
         Returns:
-            3분봉 DataFrame 또는 None
+            3분봉 DataFrame 또는 None (완성된 봉만 포함)
         """
-        return TimeFrameConverter.convert_to_timeframe(data, 3)
+        logger = setup_logger(__name__)
+        
+        try:
+            if data is None or len(data) < 3:
+                return None
+            
+            df = data.copy()
+            
+            # datetime 컬럼 확인 및 변환 (기존 로직 유지)
+            if 'datetime' not in df.columns:
+                if 'date' in df.columns and 'time' in df.columns:
+                    df['datetime'] = pd.to_datetime(df['date'].astype(str) + ' ' + df['time'].astype(str))
+                elif 'time' in df.columns:
+                    # time 컬럼만 있는 경우 임시 날짜 추가
+                    time_str = df['time'].astype(str).str.zfill(6)
+                    df['datetime'] = pd.to_datetime('2024-01-01 ' + 
+                                                  time_str.str[:2] + ':' + 
+                                                  time_str.str[2:4] + ':' + 
+                                                  time_str.str[4:6])
+                else:
+                    # datetime 컬럼이 없으면 순차적으로 생성 (09:00부터)
+                    df['datetime'] = pd.date_range(start='09:00', periods=len(df), freq='1min')
+            
+            # datetime을 pandas Timestamp로 변환
+            df['datetime'] = pd.to_datetime(df['datetime'])
+            df = df.set_index('datetime')
+            
+            # floor 방식으로 3분봉 경계 계산 (signal_replay와 동일)
+            df['floor_3min'] = df.index.floor('3T')
+            
+            # 3분 구간별로 그룹핑하여 OHLCV 계산
+            resampled = df.groupby('floor_3min').agg({
+                'open': 'first',
+                'high': 'max',
+                'low': 'min',
+                'close': 'last',
+                'volume': 'sum'
+            }).reset_index()
+            
+            resampled = resampled.rename(columns={'floor_3min': 'datetime'})
+            
+            # 현재 시간 기준으로 완성된 봉만 필터링
+            from utils.korean_time import now_kst
+            current_time = now_kst()
+            current_3min_floor = current_time.floor('3T')
+            
+            # 현재 진행중인 3분봉은 제외 (완성되지 않았으므로)
+            completed_data = resampled[
+                resampled['datetime'] < current_3min_floor
+            ].copy()
+            
+            logger.debug(f"📊 floor 방식 3분봉 변환: {len(data)}개 → {len(resampled)}개 (완성된 봉: {len(completed_data)}개)")
+            
+            return completed_data
+            
+        except Exception as e:
+            logger.error(f"❌ floor 방식 3분봉 변환 오류: {e}")
+            return None
     
     @staticmethod
     def convert_to_5min_data_hts_style(data: pd.DataFrame) -> Optional[pd.DataFrame]:

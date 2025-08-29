@@ -754,10 +754,7 @@ class IntradayStockManager:
             if before_count != len(combined_data):
                 self.logger.debug(f"📊 {stock_code} 중복 제거: {before_count} → {len(combined_data)}건")
             
-            # 완성된 봉만 사용 (현재 진행 중인 1분봉 제외)
-            current_time = now_kst()
-            from core.timeframe_converter import TimeFrameConverter
-            combined_data = TimeFrameConverter.filter_completed_candles_only(combined_data, current_time)
+            # 완성된 봉 필터링은 TimeFrameConverter.convert_to_3min_data()에서 처리됨
             
             # 시간순 정렬
             if 'datetime' in combined_data.columns:
