@@ -130,12 +130,33 @@ class TimeFrameConverter:
             # 현재 시간 기준으로 완성된 봉만 필터링
             from utils.korean_time import now_kst
             current_time = now_kst()
-            current_3min_floor = current_time.floor('3T')
             
-            # 현재 진행중인 3분봉은 제외 (완성되지 않았으므로)
-            completed_data = resampled[
-                resampled['datetime'] < current_3min_floor
-            ].copy()
+            try:
+                # pandas Timestamp로 변환하고 타임존 정보 처리
+                current_3min_floor = pd.Timestamp(current_time).floor('3T')
+                
+                # resampled datetime과 같은 형태로 맞추기
+                if not resampled.empty:
+                    # resampled datetime을 pd.to_datetime으로 보정
+                    resampled['datetime'] = pd.to_datetime(resampled['datetime'])
+                    
+                    # 타임존 정보 일치시키기
+                    if resampled['datetime'].dt.tz is None and hasattr(current_3min_floor, 'tz') and current_3min_floor.tz is not None:
+                        # resampled가 naive, current가 timezone aware인 경우
+                        current_3min_floor = current_3min_floor.tz_localize(None)
+                    elif resampled['datetime'].dt.tz is not None and (not hasattr(current_3min_floor, 'tz') or current_3min_floor.tz is None):
+                        # resampled가 timezone aware, current가 naive인 경우  
+                        current_3min_floor = pd.Timestamp(current_3min_floor).tz_localize(resampled['datetime'].dt.tz.iloc[0])
+                
+                # 현재 진행중인 3분봉은 제외 (완성되지 않았으므로)
+                completed_data = resampled[
+                    resampled['datetime'] < current_3min_floor
+                ].copy()
+                
+            except Exception as compare_error:
+                # 비교 오류 시 시간 기반 필터링 생략하고 전체 데이터 반환
+                logger.warning(f"시간 비교 오류로 필터링 생략: {compare_error}")
+                completed_data = resampled.copy()
             
             logger.debug(f"📊 floor 방식 3분봉 변환: {len(data)}개 → {len(resampled)}개 (완성된 봉: {len(completed_data)}개)")
             
