@@ -276,7 +276,7 @@ class DayTradingBot:
             self.logger.error(f"❌ 매매 판단 시스템 오류: {e}")
     
     async def _analyze_buy_decision(self, trading_stock):
-        """매수 판단 분석"""
+        """매수 판단 분석 (완성된 3분봉만 사용)"""
         try:
             stock_code = trading_stock.stock_code
             stock_name = trading_stock.stock_name
@@ -298,35 +298,48 @@ class DayTradingBot:
                 self.logger.debug(f"❌ {stock_code} 분봉 데이터 부족: {len(combined_data)}개 (최소 5개 필요)")
                 return
             
-            self.logger.debug(f"✅ {stock_code} 분봉 데이터 확인: {len(combined_data)}개")
+            # 🆕 3분봉 변환 시 완성된 봉만 자동 필터링됨 (TimeFrameConverter에서 처리)
+            from core.timeframe_converter import TimeFrameConverter
+            from utils.korean_time import now_kst
             
-            # 매매 판단 엔진으로 매수 신호 확인
-            buy_signal, buy_reason = await self.decision_engine.analyze_buy_decision(trading_stock, combined_data)
+            data_3min = TimeFrameConverter.convert_to_3min_data(combined_data)
+            
+            if data_3min is None or len(data_3min) < 5:
+                self.logger.debug(f"❌ {stock_code} 3분봉 데이터 부족: {len(data_3min) if data_3min is not None else 0}개 (최소 5개 필요)")
+                return
+                
+            current_time = now_kst()
+            last_3min_time = data_3min['datetime'].iloc[-1] if not data_3min.empty else None
+            
+            self.logger.debug(f"📊 {stock_code} 매수판단 - 현재: {current_time.strftime('%H:%M:%S')}, "
+                            f"마지막 완성된 3분봉: {last_3min_time.strftime('%H:%M:%S') if last_3min_time else 'None'} "
+                            f"(총 {len(data_3min)}개 3분봉)")
+            
+            # 매매 판단 엔진으로 매수 신호 확인 (완성된 3분봉 데이터 사용)
+            buy_signal, buy_reason = await self.decision_engine.analyze_buy_decision(trading_stock, data_3min)
             
             self.logger.debug(f"💡 {stock_code} 매수 판단 결과: signal={buy_signal}, reason='{buy_reason}'")
             
-            # 🆕 signal_replay와 일관성 검증 (디버깅용)
+            # 🆕 signal_replay와 일관성 검증 (완성된 3분봉 기준)
             if hasattr(self.decision_engine, 'verify_signal_consistency'):
                 try:
-                    # 3분봉 데이터로 변환
-                    from core.timeframe_converter import TimeFrameConverter
-                    data_3min = TimeFrameConverter.convert_to_3min_data(combined_data)
-                    if data_3min is not None and not data_3min.empty:
-                        verification_result = self.decision_engine.verify_signal_consistency(stock_code, data_3min)
-                        
-                        # 실제 매수 신호와 검증 결과 비교
-                        verified_signal = verification_result.get('has_signal', False)
-                        if buy_signal != verified_signal:
-                            self.logger.warning(
-                                f"⚠️ 신호 불일치 감지: {stock_code}({stock_name})\n"
-                                f"  - 실제 매수 신호: {buy_signal} ({buy_reason})\n"
-                                f"  - 검증 신호: {verified_signal} ({verification_result.get('signal_types', [])})\n"
-                                f"  - 미충족 조건: {verification_result.get('unmet_conditions', [])}"
-                            )
-                        else:
-                            self.logger.debug(
-                                f"✅ 신호 일치 확인: {stock_code} signal={buy_signal}"
-                            )
+                    # 이미 완성된 3분봉으로 변환된 data_3min 사용
+                    verification_result = self.decision_engine.verify_signal_consistency(stock_code, data_3min)
+                    
+                    # 실제 매수 신호와 검증 결과 비교
+                    verified_signal = verification_result.get('has_signal', False)
+                    if buy_signal != verified_signal:
+                        self.logger.warning(
+                            f"⚠️ 신호 불일치 감지: {stock_code}({stock_name})\n"
+                            f"  - 실제 매수 신호: {buy_signal} ({buy_reason})\n"
+                            f"  - 검증 신호: {verified_signal} ({verification_result.get('signal_types', [])})\n"
+                            f"  - 미충족 조건: {verification_result.get('unmet_conditions', [])}\n"
+                            f"  - 3분봉 개수: {len(data_3min)}개 (마지막: {last_3min_time.strftime('%H:%M:%S') if last_3min_time else 'None'})"
+                        )
+                    else:
+                        self.logger.debug(
+                            f"✅ 신호 일치 확인: {stock_code} signal={buy_signal} (완성된 3분봉 {len(data_3min)}개 기준)"
+                        )
                 except Exception as e:
                     self.logger.debug(f"신호 일관성 검증 오류: {e}")
             
@@ -347,9 +360,9 @@ class DayTradingBot:
                     return
                 
                 if success:
-                    # 가상 매수 실행 (전략에서 이미 3분봉 확정을 확인했음)
+                    # 가상 매수 실행 (완성된 3분봉 기준으로 확정된 신호)
                     try:
-                        await self.decision_engine.execute_virtual_buy(trading_stock, combined_data, buy_reason)
+                        await self.decision_engine.execute_virtual_buy(trading_stock, data_3min, buy_reason)
                         # 상태를 POSITIONED로 반영하여 이후 매도 판단 루프에 포함
                         try:
                             self.trading_manager._change_stock_state(stock_code, StockState.POSITIONED, "가상 매수 체결")
@@ -836,8 +849,15 @@ class DayTradingBot:
             await self.telegram.notify_error("Condition Search", e)
     
     async def _update_intraday_data(self):
-        """장중 종목 실시간 데이터 업데이트 (15초마다)"""
+        """장중 종목 실시간 데이터 업데이트 (완성된 분봉만 수집)"""
         try:
+            from utils.korean_time import now_kst
+            current_time = now_kst()
+            
+            # 🆕 완성된 봉만 수집하는 것을 로깅
+            self.logger.debug(f"🔄 실시간 데이터 업데이트 시작: {current_time.strftime('%H:%M:%S')} "
+                            f"(완성된 분봉만 수집)")
+            
             # 모든 선정 종목의 실시간 데이터 업데이트
             await self.intraday_manager.batch_update_realtime_data()
             

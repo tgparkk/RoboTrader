@@ -575,19 +575,28 @@ class IntradayStockManager:
     
     async def _get_latest_minute_bar(self, stock_code: str, current_time: datetime) -> Optional[pd.DataFrame]:
         """
-        최신 분봉 1개 수집
+        완성된 최신 분봉 1개 수집 (미완성 봉 제외)
         
         Args:
             stock_code: 종목코드
             current_time: 현재 시간
             
         Returns:
-            pd.DataFrame: 최신 분봉 1개 또는 None
+            pd.DataFrame: 완성된 최신 분봉 1개 또는 None
         """
         try:
-            target_hour = current_time.strftime("%H%M%S")
+            from datetime import timedelta
             
-            # 분봉 API로 현재까지 데이터 조회
+            # 🆕 완성된 마지막 분봉 시간 계산
+            # 현재 시각이 10:01:30이면 10:00분봉(10:00:00~10:00:59)을 요청
+            # 현재 진행중인 분의 이전 분이 완성된 마지막 분봉
+            current_minute_start = current_time.replace(second=0, microsecond=0)
+            last_completed_minute = current_minute_start - timedelta(minutes=1)
+            target_hour = last_completed_minute.strftime("%H%M%S")
+            
+            self.logger.debug(f"📊 {stock_code} 완성된 분봉 요청: {target_hour} (현재: {current_time.strftime('%H%M%S')})")
+            
+            # 분봉 API로 완성된 데이터 조회
             div_code = get_div_code_for_stock(stock_code)
             
             result = get_inquire_time_itemchartprice(
@@ -605,8 +614,13 @@ class IntradayStockManager:
             if chart_df.empty:
                 return None
             
-            # 최신 1개 데이터만 선택 (매수판단용으로 최신 분봉 데이터 사용)
+            # 요청한 시간의 완성된 분봉 데이터만 선택
             latest_data = chart_df.tail(1).copy()
+            
+            # 로깅: 실제 수집된 데이터 시간 확인
+            if 'time' in latest_data.columns and not latest_data.empty:
+                actual_time = str(latest_data['time'].iloc[0]).zfill(6)
+                self.logger.debug(f"✅ {stock_code} 완성된 분봉 수집: {actual_time} (요청: {target_hour})")
             
             return latest_data
             
