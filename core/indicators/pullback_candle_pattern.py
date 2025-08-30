@@ -253,9 +253,9 @@ class PullbackCandlePattern:
             has_bearish_restriction = PullbackCandlePattern.check_bearish_volume_restriction(data, baseline_volumes)
             bisector_volume_ok = PullbackCandlePattern.check_bisector_breakout_volume(data)
             
-            # 회피 조건 처리 (일부만 적용)
-            if has_selling_pressure and has_bearish_restriction:
-                # 두 조건이 모두 충족될 때만 회피
+            # 회피 조건 처리 (강화된 버전 - 하나만 있어도 회피)
+            if has_selling_pressure or has_bearish_restriction:
+                # 하나의 조건만 충족되어도 회피
                 avoid_result = PullbackUtils.handle_avoid_conditions(
                     has_selling_pressure, has_bearish_restriction, bisector_volume_ok,
                     current, volume_analysis, bisector_line, data, debug, logger
@@ -322,24 +322,38 @@ class PullbackCandlePattern:
     
     @staticmethod
     def check_bearish_volume_restriction(data: pd.DataFrame, baseline_volumes: pd.Series) -> bool:
-        """음봉 거래량 제한 확인"""
+        """음봉 거래량 제한 확인 (엄격한 조건만 적용)"""
         if len(data) < 2:
             return False
         
         try:
-            # 당일 최대 음봉 거래량 찾기
-            today_data = data.copy()  # 단순화
-            bearish_candles = today_data[today_data['close'] < today_data['open']]
-            
-            if len(bearish_candles) == 0:
-                return False
-            
-            max_bearish_volume = bearish_candles['volume'].max()
             current_volume = data['volume'].iloc[-1]
             current_is_bullish = data['close'].iloc[-1] > data['open'].iloc[-1]
             
-            # 현재 양봉이고 최대 음봉 거래량보다 작으면 제한
-            return current_is_bullish and current_volume <= max_bearish_volume
+            # 현재 양봉이 아니면 제한 없음
+            if not current_is_bullish:
+                return False
+            
+            # 최근 15봉 내에서만 확인 (더 짧은 윈도우)
+            recent_data = data.tail(16)  # 현재봉 + 과거 15봉
+            recent_bearish = recent_data[recent_data['close'] < recent_data['open']]
+            
+            if len(recent_bearish) == 0:
+                return False
+            
+            # 최근 15봉 내 최대 음봉 거래량
+            max_recent_bearish_volume = recent_bearish['volume'].max()
+            
+            # 베이스라인 거래량 기준
+            baseline_volume = baseline_volumes.iloc[-1] if len(baseline_volumes) > 0 else current_volume
+            
+            # 더 엄격한 조건: 음봉 거래량이 베이스라인의 2배 이상이고, 
+            # 현재 양봉 거래량이 그보다 작을 때만 제한
+            if max_recent_bearish_volume > baseline_volume * 2.0:
+                return current_volume <= max_recent_bearish_volume
+            
+            return False
+            
         except:
             return False
     

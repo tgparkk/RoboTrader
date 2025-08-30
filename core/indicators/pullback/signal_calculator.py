@@ -26,6 +26,17 @@ class SignalCalculator:
         confidence = 0
         signal_type = SignalType.WAIT
         
+        # 거래량회복 필수 조건 체크
+        if not volume_recovers:
+            return SignalStrength(
+                signal_type=SignalType.AVOID,
+                confidence=0,
+                target_profit=0.01,
+                reasons=["거래량회복필수조건미충족"],
+                volume_ratio=volume_analysis.volume_ratio,
+                bisector_status=bisector_status
+            )
+        
         # 기본 조건들 점수화
         if is_recovery_candle:
             confidence += 20
@@ -69,7 +80,7 @@ class SignalCalculator:
         if confidence >= 80:
             signal_type = SignalType.STRONG_BUY
             target_profit = 0.025  # 2.5%
-        elif confidence >= 60:
+        elif confidence >= 65:
             signal_type = SignalType.CAUTIOUS_BUY
             target_profit = 0.02   # 2.0%
         elif confidence >= 40:
