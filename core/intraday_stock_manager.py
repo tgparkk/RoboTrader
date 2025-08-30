@@ -253,8 +253,9 @@ class IntradayStockManager:
                 # 시간 컬럼이 없으면 전체 데이터 사용
                 filtered_data = historical_data.copy()
             
-            # 과거 29일 일봉 데이터 수집 (가격박스 계산용)
-            daily_data = await PriceBox.collect_daily_data_for_price_box(stock_code, self.logger)
+            # 과거 29일 일봉 데이터 수집 (가격박스 계산용) - 임시 비활성화
+            # daily_data = await PriceBox.collect_daily_data_for_price_box(stock_code, self.logger)
+            daily_data = pd.DataFrame()  # 빈 데이터프레임으로 대체
             
             # 메모리에 저장
             with self._lock:

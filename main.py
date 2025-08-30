@@ -782,7 +782,6 @@ class DayTradingBot:
             # 결과가 있으면 알림 발송
             self.logger.debug(f"🔍 조건검색 전체 결과: {len(all_condition_results)}개 종목")
             if all_condition_results:
-                #await self._notify_condition_search_results(all_condition_results)
                 
                 # 🆕 장중 선정 종목 관리자에 추가 (과거 분봉 데이터 포함)
                 self.logger.debug(f"🎯 장중 선정 종목 관리자에 {len(all_condition_results)}개 종목 추가 시작")
@@ -836,56 +835,6 @@ class DayTradingBot:
             self.logger.error(f"❌ 장중 조건검색 체크 오류: {e}")
             await self.telegram.notify_error("Condition Search", e)
     
-    async def _notify_condition_search_results(self, stock_results):
-        """조건검색 결과 알림"""
-        try:
-            # 알림 메시지 생성
-            message_lines = ["🔥 장중 조건검색 급등주 발견!"]
-            message_lines.append(f"📊 발견 시간: {now_kst().strftime('%H:%M:%S')}")
-            message_lines.append("")
-            
-            for i, stock_data in enumerate(stock_results[:5], 1):  # 상위 5개만
-                code = stock_data.get('code', '')
-                name = stock_data.get('name', '')
-                price = stock_data.get('price', '')
-                change_rate = stock_data.get('chgrate', '')
-                
-                message_lines.append(
-                    f"{i}. {code} {name}\n"
-                    f"   💰 현재가: {price}원\n"
-                    f"   📈 등락률: {change_rate}%"
-                )
-            
-            if len(stock_results) > 5:
-                message_lines.append(f"... 외 {len(stock_results) - 5}개 종목")
-            
-            alert_message = "\n".join(message_lines)
-            
-            # 텔레그램 알림 제거 - 조건검색 결과는 로그로만 기록
-            # await self.telegram.notify_urgent_signal(alert_message)
-            
-            # 개별 종목별 상세 정보 텔레그램 알림 제거
-            # for stock_data in stock_results[:3]:
-            #     code = stock_data.get('code', '')
-            #     name = stock_data.get('name', '')
-            #     price = stock_data.get('price', '')
-            #     change_rate = stock_data.get('chgrate', '')
-            #     volume = stock_data.get('acml_vol', '')
-            #     
-            #     await self.telegram.notify_signal_detected({
-            #         'stock_code': code,
-            #         'stock_name': name,
-            #         'signal_type': '조건검색',
-            #         'price': price,
-            #         'change_rate': change_rate,
-            #         'volume': volume
-            #     })
-            
-            self.logger.info(f"📱 조건검색 결과 알림 완료: {len(stock_results)}개 종목")
-            
-        except Exception as e:
-            self.logger.error(f"❌ 조건검색 결과 알림 오류: {e}")
-
     async def _update_intraday_data(self):
         """장중 종목 실시간 데이터 업데이트 (15초마다)"""
         try:
