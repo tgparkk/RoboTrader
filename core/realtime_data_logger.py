@@ -70,10 +70,16 @@ class RealtimeDataLogger:
                         else:
                             candle_time = 'N/A'
                         
+                        # API 원본 시간 데이터 추출
+                        api_date = row.get('date', row.get('stck_bsop_date', 'N/A'))  # 영업일자
+                        api_time = row.get('time', row.get('stck_cntg_hour', 'N/A'))  # 체결시간
+                        
                         line = (
                             f"{timestamp} | "
                             f"종목={stock_code} | "
                             f"캔들시간={candle_time} | "
+                            f"API영업일자={api_date} | "
+                            f"API체결시간={str(api_time).zfill(6)} | "
                             f"시가={row.get('open', 0):,} | "
                             f"고가={row.get('high', 0):,} | "
                             f"저가={row.get('low', 0):,} | "
@@ -203,6 +209,11 @@ class RealtimeDataLogger:
                     last_candle = minute_data.iloc[-1]
                     summary_parts.append(f"분봉={len(minute_data)}건")
                     summary_parts.append(f"종가={last_candle.get('close', 0):,}")
+                    
+                    # API 원본 시간 정보 추가
+                    api_date = last_candle.get('date', last_candle.get('stck_bsop_date', 'N/A'))
+                    api_time = last_candle.get('time', last_candle.get('stck_cntg_hour', 'N/A'))
+                    summary_parts.append(f"API시간={api_date}_{str(api_time).zfill(6)}")
                 
                 if price_data:
                     summary_parts.append(f"현재가={price_data.get('current_price', 0):,}")
