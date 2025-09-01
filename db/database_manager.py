@@ -260,7 +260,8 @@ class DatabaseManager:
                 if new_candidates > 0:
                     self.logger.info(f"✅ 새로운 후보 종목 {new_candidates}개 저장 완료")
                     if duplicate_candidates > 0:
-                        self.logger.info(f"   중복 제외: {duplicate_candidates}개 (당일 이미 저장됨)")
+                        #self.logger.info(f"   중복 제외: {duplicate_candidates}개 (당일 이미 저장됨)")
+                        pass
                     self.logger.info(f"   전체 후보: {len(candidates)}개, 날짜: {selection_date.strftime('%Y-%m-%d %H:%M:%S')}")
                 else:
                     self.logger.info(f"📝 모든 후보 종목이 당일 이미 저장되어 있음 ({len(candidates)}개 모두 중복)")

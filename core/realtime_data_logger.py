@@ -121,7 +121,7 @@ class RealtimeDataLogger:
                 with open(file_path, 'a', encoding='utf-8') as f:
                     f.write(line)
                 
-                self.logger.debug(f"📄 {stock_code} 현재가 데이터 저장 -> {filename}")
+                #self.logger.debug(f"📄 {stock_code} 현재가 데이터 저장 -> {filename}")
                 
         except Exception as e:
             self.logger.error(f"❌ {stock_code} 현재가 데이터 로깅 오류: {e}")

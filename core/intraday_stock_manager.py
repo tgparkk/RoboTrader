@@ -496,9 +496,15 @@ class IntradayStockManager:
             latest_minute_data = await self._get_latest_minute_bar(stock_code, current_time)
             
             if latest_minute_data is None:
-                # 최신 데이터 수집 실패 - 기존 데이터 유지
-                self.logger.debug(f"📊 {stock_code} 최신 분봉 수집 실패, 기존 데이터 유지")
-                return True
+                # 장초반 구간에서 실시간 업데이트 실패 시 전체 재수집 시도
+                current_hour = current_time.strftime("%H%M")
+                if current_hour <= "0910":  # 09:10 이전
+                    self.logger.warning(f"⚠️ {stock_code} 장초반 실시간 업데이트 실패, 전체 재수집 시도")
+                    return await self._collect_historical_data(stock_code)
+                else:
+                    # 장초반이 아니면 최신 데이터 수집 실패 - 기존 데이터 유지
+                    self.logger.debug(f"📊 {stock_code} 최신 분봉 수집 실패, 기존 데이터 유지")
+                    return True
             
             # 4. 기존 realtime_data에 최신 데이터 추가/업데이트
             with self._lock:

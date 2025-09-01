@@ -650,11 +650,17 @@ class TradingDecisionEngine:
             if data_3min is None or data_3min.empty or 'datetime' not in data_3min.columns:
                 return False
             
-            from utils.korean_time import now_kst
+            from utils.korean_time import now_kst, KST
             import pandas as pd
             
             current_time = now_kst()
             last_candle_time = pd.to_datetime(data_3min['datetime'].iloc[-1])
+            
+            # timezone 통일: last_candle_time을 KST로 변환
+            if last_candle_time.tz is None:
+                last_candle_time = last_candle_time.tz_localize(KST)
+            elif last_candle_time.tz != KST:
+                last_candle_time = last_candle_time.tz_convert(KST)
             
             # signal_replay.py와 동일한 방식: 라벨 + 3분 경과 후 확정
             # 라벨(ts_3min)은 구간 시작 시각이므로 [라벨, 라벨+2분]을 포함하고,
