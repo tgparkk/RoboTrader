@@ -75,7 +75,7 @@ from core.realtime_data_logger import log_intraday_data'''
                     signal_data = None
                     if trading_stock in selected_stocks and combined_data is not None and len(combined_data) >= 5:
                         try:
-                            buy_signal, buy_reason = await self.decision_engine.analyze_buy_decision(trading_stock, combined_data)
+                            buy_signal, buy_reason, buy_info = await self.decision_engine.analyze_buy_decision(trading_stock, combined_data)
                             
                             # 3분봉 신호 분석
                             from core.timeframe_converter import TimeFrameConverter

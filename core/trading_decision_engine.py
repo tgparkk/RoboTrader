@@ -50,33 +50,35 @@ class TradingDecisionEngine:
         
         self.logger.info("🧠 매매 판단 엔진 초기화 완료")
     
-    async def analyze_buy_decision(self, trading_stock, combined_data) -> Tuple[bool, str]:
+    async def analyze_buy_decision(self, trading_stock, combined_data) -> Tuple[bool, str, dict]:
         """
-        매수 판단 분석 (전략별 적절한 시간프레임 사용)
+        매수 판단 분석 (가격, 수량 계산 포함)
         
         Args:
             trading_stock: 거래 종목 객체
             combined_data: 1분봉 데이터 (기본 데이터)
             
         Returns:
-            Tuple[매수신호여부, 매수사유]
+            Tuple[매수신호여부, 매수사유, 매수정보딕셔너리]
+            매수정보: {'buy_price': float, 'quantity': int, 'max_buy_amount': float}
         """
         try:
             stock_code = trading_stock.stock_code
+            buy_info = {'buy_price': 0, 'quantity': 0, 'max_buy_amount': 0}
             
             if combined_data is None or len(combined_data) < 10:
-                return False, "데이터 부족"
+                return False, "데이터 부족", buy_info
             
             # 보유 종목 여부 확인 - 이미 보유 중인 종목은 매수하지 않음
             if self._is_already_holding(stock_code):
-                return False, f"이미 보유 중인 종목 (매수 제외)"
+                return False, f"이미 보유 중인 종목 (매수 제외)", buy_info
             
             # 당일 손실 2회 이상이면 신규 매수 차단 (해제됨)
             # try:
             #     if self.db_manager and hasattr(self.db_manager, 'get_today_real_loss_count'):
             #         today_losses = self.db_manager.get_today_real_loss_count(stock_code)
             #         if today_losses >= 2:
-            #             return False, "당일 손실 2회 초과(매수 제한)"
+            #             return False, "당일 손실 2회 초과(매수 제한)", buy_info
             # except Exception:
             #     # 조회 실패 시 차단하지 않음
             #     pass
@@ -84,13 +86,74 @@ class TradingDecisionEngine:
             # 전략 4: 눌림목 캔들패턴 매수 신호 (3분봉 사용)
             signal_result, reason = self._check_pullback_candle_buy_signal(combined_data)
             if signal_result:
-                return True, f"눌림목캔들패턴: {reason}"
+                # 매수 신호 발생 시 가격과 수량 미리 계산
+                buy_price = self._calculate_buy_price(combined_data)
+                max_buy_amount = self._get_max_buy_amount()
+                quantity = int(max_buy_amount // buy_price) if buy_price > 0 else 0
+                
+                if quantity > 0:
+                    buy_info = {
+                        'buy_price': buy_price,
+                        'quantity': quantity,
+                        'max_buy_amount': max_buy_amount
+                    }
+                    return True, f"눌림목캔들패턴: {reason}", buy_info
+                else:
+                    return False, "수량 계산 실패", buy_info
             
-            return False, f"매수 조건 미충족 (눌림목패턴: {reason})" if reason else "매수 조건 미충족"
+            return False, f"매수 조건 미충족 (눌림목패턴: {reason})" if reason else "매수 조건 미충족", buy_info
             
         except Exception as e:
             self.logger.error(f"❌ {trading_stock.stock_code} 매수 판단 오류: {e}")
-            return False, f"오류: {e}"
+            return False, f"오류: {e}", {'buy_price': 0, 'quantity': 0, 'max_buy_amount': 0}
+    
+    def _calculate_buy_price(self, combined_data) -> float:
+        """매수가 계산 (3/5가 또는 현재가)"""
+        try:
+            current_price = combined_data['close'].iloc[-1]
+            
+            # 3/5가 계산 시도
+            try:
+                from core.price_calculator import PriceCalculator
+                from core.time_frame_converter import TimeFrameConverter
+                
+                data_3min = TimeFrameConverter.convert_to_3min_data(combined_data)
+                three_fifths_price, entry_low = PriceCalculator.calculate_three_fifths_price(data_3min, self.logger)
+                
+                if three_fifths_price is not None:
+                    self.logger.debug(f"🎯 3/5가 계산 성공: {three_fifths_price:,.0f}원")
+                    return three_fifths_price
+                else:
+                    self.logger.debug(f"⚠️ 3/5가 계산 실패 → 현재가 사용: {current_price:,.0f}원")
+                    return current_price
+                    
+            except Exception as e:
+                self.logger.debug(f"3/5가 계산 오류: {e} → 현재가 사용")
+                return current_price
+                
+        except Exception as e:
+            self.logger.error(f"❌ 매수가 계산 오류: {e}")
+            return 0
+    
+    def _get_max_buy_amount(self) -> float:
+        """최대 매수 가능 금액 조회 (계좌 잔고의 10%)"""
+        max_buy_amount = 500000  # 기본값
+        
+        try:
+            if self.api_manager:
+                account_info = self.api_manager.get_account_balance()
+                if account_info and hasattr(account_info, 'available_amount'):
+                    available_balance = float(account_info.available_amount)
+                    max_buy_amount = min(5000000, available_balance * 0.1)  # 최대 500만원
+                    self.logger.debug(f"💰 계좌 가용금액: {available_balance:,.0f}원, 투자금액: {max_buy_amount:,.0f}원")
+                elif hasattr(account_info, 'total_balance'):
+                    total_balance = float(account_info.total_balance)
+                    max_buy_amount = min(5000000, total_balance * 0.1)  # 최대 500만원
+                    self.logger.debug(f"💰 총 자산: {total_balance:,.0f}원, 투자금액: {max_buy_amount:,.0f}원")
+        except Exception as e:
+            self.logger.warning(f"⚠️ 계좌 잔고 조회 실패: {e}, 기본값 사용")
+        
+        return max_buy_amount
     
     async def analyze_sell_decision(self, trading_stock, combined_data) -> Tuple[bool, str]:
         """
@@ -152,67 +215,17 @@ class TradingDecisionEngine:
             self.logger.error(f"❌ {trading_stock.stock_code} 매도 판단 오류: {e}")
             return False, f"오류: {e}"
     
-    async def execute_real_buy(self, trading_stock, combined_data, buy_reason, buy_price=None):
-        """실제 매수 주문 실행"""
+    async def execute_real_buy(self, trading_stock, buy_reason, buy_price, quantity):
+        """실제 매수 주문 실행 (사전 계산된 가격, 수량 사용)"""
         try:
             stock_code = trading_stock.stock_code
-            stock_name = trading_stock.stock_name
-            
-            # buy_price가 지정된 경우 사용, 아니면 3/5가 계산 로직 사용
-            if buy_price is not None:
-                current_price = buy_price
-                self.logger.debug(f"📋 {stock_code} 지정된 매수가로 주문: {current_price:,.0f}원")
-            else:
-                current_price = combined_data['close'].iloc[-1]
-                self.logger.debug(f"📋 {stock_code} 현재가로 주문 (기본값): {current_price:,.0f}원")
-                
-                # 3/5가 계산 (별도 클래스 사용)
-                try:
-                    from core.price_calculator import PriceCalculator
-                    data_3min = TimeFrameConverter.convert_to_3min_data(combined_data)
-                    
-                    three_fifths_price, entry_low = PriceCalculator.calculate_three_fifths_price(data_3min, self.logger)
-                    
-                    if three_fifths_price is not None:
-                        current_price = three_fifths_price
-                        self.logger.debug(f"🎯 3/5가로 주문: {stock_code} @{current_price:,.0f}원")
-                        
-                        # 진입 저가 저장
-                        if entry_low is not None:
-                            try:
-                                setattr(trading_stock, '_entry_low', entry_low)
-                            except Exception:
-                                pass
-                    else:
-                        self.logger.debug(f"⚠️ 3/5가 계산 실패 → 현재가 사용: {current_price:,.0f}원")
-                        
-                except Exception as e:
-                    self.logger.debug(f"3/5가 계산 오류: {e} → 현재가 사용")
-                    # 계산 실패 시 현재가 유지
-            
-            # 실제 매수 주문 수량 계산 (계좌 잔고의 10% 사용)
-            max_buy_amount = 500000  # 기본값 (API 조회 실패시)
-            
-            try:
-                if self.api_manager:
-                    account_info = self.api_manager.get_account_balance()
-                    if account_info and hasattr(account_info, 'available_amount'):
-                        # 계좌 가용금액의 10%를 종목당 투자금액으로 설정
-                        available_balance = float(account_info.available_amount)
-                        max_buy_amount = min(5000000, available_balance * 0.1)  # 최대 500만원
-                        self.logger.debug(f"💰 {stock_code} 계좌 가용금액: {available_balance:,.0f}원, 투자금액: {max_buy_amount:,.0f}원")
-                    elif hasattr(account_info, 'total_balance'):
-                        # total_balance 만 사용 가능한 경우
-                        total_balance = float(account_info.total_balance)
-                        max_buy_amount = min(5000000, total_balance * 0.1)  # 최대 500만원
-                        self.logger.debug(f"💰 {stock_code} 총 자산: {total_balance:,.0f}원, 투자금액: {max_buy_amount:,.0f}원")
-            except Exception as e:
-                self.logger.warning(f"⚠️ 계좌 잔고 조회 실패: {e}, 기본값 사용")
-            
-            quantity = int(max_buy_amount // current_price)
             
             if quantity <= 0:
                 self.logger.warning(f"⚠️ {stock_code} 매수 주문 실패: 수량 0")
+                return False
+            
+            if buy_price <= 0:
+                self.logger.warning(f"⚠️ {stock_code} 매수 주문 실패: 가격 0")
                 return False
             
             # 실제 매수 주문 실행
@@ -220,13 +233,13 @@ class TradingDecisionEngine:
             if hasattr(self, 'trading_manager') and isinstance(self.trading_manager, TradingStockManager):
                 success = await self.trading_manager.execute_buy_order(
                     stock_code=stock_code,
-                    price=current_price,
+                    price=buy_price,
                     quantity=quantity,
                     reason=buy_reason
                 )
                 
                 if success:
-                    self.logger.info(f"🔥 {stock_code} 실제 매수 주문 완료: {quantity}주 @{current_price:,.0f}원")
+                    self.logger.info(f"🔥 {stock_code} 실제 매수 주문 완료: {quantity}주 @{buy_price:,.0f}원")
                     return True
                 else:
                     self.logger.error(f"❌ {stock_code} 실제 매수 주문 실패")

@@ -41,6 +41,7 @@ from utils.korean_time import KST
 from core.indicators.pullback_candle_pattern import PullbackCandlePattern, SignalType
 from api.kis_api_manager import KISAPIManager
 from visualization.data_processor import DataProcessor
+from core.trading_decision_engine import TradingDecisionEngine
 
 
 try:
@@ -150,10 +151,48 @@ def get_target_profit_from_signal_strength(sig_improved: pd.DataFrame, index: in
         return 0.015  # 기본값 1.5%
 
 
+async def calculate_trading_signals_using_decision_engine(
+    stock_code: str, 
+    df_3min: pd.DataFrame, 
+    *, 
+    logger: Optional[logging.Logger] = None
+) -> Tuple[bool, str, dict]:
+    """실시간과 동일한 trading_decision_engine을 사용한 매수 판단 (일관성 보장)"""
+    try:
+        if logger is None:
+            logger = setup_logger(__name__)
+            
+        # TradingDecisionEngine 초기화 (시뮬레이션용 - DB 없이)
+        api_manager = KISAPIManager()  # 계좌 조회용
+        decision_engine = TradingDecisionEngine(
+            db_manager=None,  # 시뮬레이션에서는 DB 사용하지 않음
+            api_manager=api_manager
+        )
+        
+        # 가상의 trading_stock 객체 생성
+        class MockTradingStock:
+            def __init__(self, code):
+                self.stock_code = code
+                self.stock_name = f"종목_{code}"
+        
+        trading_stock = MockTradingStock(stock_code)
+        
+        # 실시간과 동일한 매수 판단 로직 사용 (3분봉 전달)
+        buy_signal, buy_reason, buy_info = await decision_engine.analyze_buy_decision(
+            trading_stock, df_3min
+        )
+        
+        return buy_signal, buy_reason, buy_info
+        
+    except Exception as e:
+        if logger:
+            logger.error(f"TradingDecisionEngine 매수 판단 오류: {e}")
+        return False, f"오류: {e}", {'buy_price': 0, 'quantity': 0, 'max_buy_amount': 0}
+
 def calculate_trading_signals_once(df_3min: pd.DataFrame, *, debug_logs: bool = False, 
                                  logger: Optional[logging.Logger] = None,
                                  log_level: int = logging.INFO) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """3분봉 데이터에 대해 한 번만 신호를 계산하여 재사용.
+    """3분봉 데이터에 대해 한 번만 신호를 계산하여 재사용. (기존 호환성 유지)
     
     모든 함수에서 공통으로 사용하는 신호 계산 함수
     09시 이전 데이터는 PullbackCandlePattern 내부에서 제외
@@ -270,7 +309,7 @@ async def fetch_and_prepare_3min(stock_code: str, target_date: str) -> Optional[
     return df_3min
 
 
-def evaluate_signals_at_times(
+async def evaluate_signals_at_times(
     df_3min: pd.DataFrame,
     target_date: str,
     times: List[str],
@@ -279,6 +318,7 @@ def evaluate_signals_at_times(
     logger: Optional[logging.Logger] = None,
     debug_logs: bool = True,
     log_level: int = logging.INFO,
+    use_decision_engine: bool = False,
 ) -> List[Dict[str, object]]:
     """지정 시각들에서 눌림목 매수신호 ON/OFF와 미충족 사유를 평가."""
     results: List[Dict[str, object]] = []
@@ -296,43 +336,85 @@ def evaluate_signals_at_times(
     if logger:
         logger._stock_code = stock_code
     
-    # 공통 신호 계산 함수 사용
-    signals, signals_improved = calculate_trading_signals_once(df_3min, debug_logs=debug_logs, logger=logger, log_level=log_level)
-    for t in times:
-        row_idx = locate_row_for_time(df_3min, target_date, t)
-        if row_idx is None:
-            results.append({
-                "time": t,
-                "has_signal": False,
-                "signal_types": [],
-                "unmet_conditions": ["시각 매칭 실패"],
-            })
-            continue
+    # decision_engine 사용 옵션 (실시간과 동일한 로직)
+    if use_decision_engine:
+        # 각 시각별로 해당 시점까지의 데이터로 매수 판단
+        for t in times:
+            try:
+                # 해당 시각까지의 3분봉 데이터 추출
+                time_dt = pd.to_datetime(f"{target_date} {t}")
+                mask = df_3min.index <= time_dt
+                data_until_time = df_3min[mask]
+                
+                if len(data_until_time) < 5:
+                    results.append({
+                        "time": t,
+                        "has_signal": False,
+                        "signal_types": [],
+                        "unmet_conditions": ["데이터 부족"],
+                        "buy_info": None
+                    })
+                    continue
+                
+                # decision_engine을 통한 매수 판단 (3분봉 사용 - 실시간과 동일)
+                buy_signal, buy_reason, buy_info = await calculate_trading_signals_using_decision_engine(
+                    stock_code, data_until_time, logger=logger  # data_until_time은 3분봉
+                )
+                
+                results.append({
+                    "time": t,
+                    "has_signal": buy_signal,
+                    "signal_types": ["decision_engine"] if buy_signal else [],
+                    "unmet_conditions": [] if buy_signal else [buy_reason],
+                    "buy_info": buy_info if buy_signal else None
+                })
+                
+            except Exception as e:
+                results.append({
+                    "time": t,
+                    "has_signal": False,
+                    "signal_types": [],
+                    "unmet_conditions": [f"오류: {e}"],
+                    "buy_info": None
+                })
+    else:
+        # 기존 패턴 매칭 방식 (호환성 유지)
+        signals, signals_improved = calculate_trading_signals_once(df_3min, debug_logs=debug_logs, logger=logger, log_level=log_level)
+        for t in times:
+            row_idx = locate_row_for_time(df_3min, target_date, t)
+            if row_idx is None:
+                results.append({
+                    "time": t,
+                    "has_signal": False,
+                    "signal_types": [],
+                    "unmet_conditions": ["시각 매칭 실패"],
+                })
+                continue
 
-        buy1 = bool(signals.get("buy_pullback_pattern", pd.Series([False]*len(df_3min))).iloc[row_idx]) if not signals.empty else False
-        buy2 = bool(signals.get("buy_bisector_recovery", pd.Series([False]*len(df_3min))).iloc[row_idx]) if not signals.empty else False
-        has_signal = buy1 or buy2
-        signal_types = []
-        if buy1:
-            signal_types.append("buy_pullback_pattern")
-        if buy2:
-            signal_types.append("buy_bisector_recovery")
+            buy1 = bool(signals.get("buy_pullback_pattern", pd.Series([False]*len(df_3min))).iloc[row_idx]) if not signals.empty else False
+            buy2 = bool(signals.get("buy_bisector_recovery", pd.Series([False]*len(df_3min))).iloc[row_idx]) if not signals.empty else False
+            has_signal = buy1 or buy2
+            signal_types = []
+            if buy1:
+                signal_types.append("buy_pullback_pattern")
+            if buy2:
+                signal_types.append("buy_bisector_recovery")
 
-        if has_signal:
-            results.append({
-                "time": t,
-                "has_signal": True,
-                "signal_types": signal_types,
-                "unmet_conditions": [],
-            })
-        else:
-            unmet = []  # 조건 분석 기능은 추후 구현
-            results.append({
-                "time": t,
-                "has_signal": False,
-                "signal_types": [],
-                "unmet_conditions": unmet,
-            })
+            if has_signal:
+                results.append({
+                    "time": t,
+                    "has_signal": True,
+                    "signal_types": signal_types,
+                    "unmet_conditions": [],
+                })
+            else:
+                unmet = []  # 조건 분석 기능은 추후 구현
+                results.append({
+                    "time": t,
+                    "has_signal": False,
+                    "signal_types": [],
+                    "unmet_conditions": unmet,
+                })
 
     return results
 
@@ -902,7 +984,7 @@ async def run(
         try:
             # 1분봉과 3분봉 데이터를 모두 가져오기
             df_1min, df_3min = await fetch_and_prepare_data(code, date_str)
-            evals = evaluate_signals_at_times(
+            evals = await evaluate_signals_at_times(
                 df_3min,
                 date_str,
                 times_map.get(code, []),

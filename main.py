@@ -316,9 +316,11 @@ class DayTradingBot:
             #                f"(총 {len(data_3min)}개 3분봉)")
             
             # 매매 판단 엔진으로 매수 신호 확인 (완성된 3분봉 데이터 사용)
-            buy_signal, buy_reason = await self.decision_engine.analyze_buy_decision(trading_stock, data_3min)
+            buy_signal, buy_reason, buy_info = await self.decision_engine.analyze_buy_decision(trading_stock, data_3min)
             
             self.logger.debug(f"💡 {stock_code} 매수 판단 결과: signal={buy_signal}, reason='{buy_reason}'")
+            if buy_signal and buy_info:
+                self.logger.debug(f"💰 {stock_code} 매수 정보: 가격={buy_info['buy_price']:,.0f}원, 수량={buy_info['quantity']:,}주, 투자금={buy_info['max_buy_amount']:,.0f}원")
             
             # 🆕 signal_replay와 일관성 검증 (완성된 3분봉 기준)
             #if hasattr(self.decision_engine, 'verify_signal_consistency'):
@@ -343,7 +345,7 @@ class DayTradingBot:
             #    except Exception as e:
             #        self.logger.debug(f"신호 일관성 검증 오류: {e}")
             
-            if buy_signal:
+            if buy_signal and buy_info.get('quantity', 0) > 0:
                 self.logger.info(f"🚀 {stock_code}({stock_name}) 매수 신호 발생: {buy_reason}")
                 
                 # 🆕 매수 전 종목 상태 확인
@@ -362,7 +364,12 @@ class DayTradingBot:
                 if success:
                     # 실제 매수 실행 (완성된 3분봉 기준으로 확정된 신호)
                     try:
-                        await self.decision_engine.execute_real_buy(trading_stock, data_3min, buy_reason)
+                        await self.decision_engine.execute_real_buy(
+                            trading_stock, 
+                            buy_reason, 
+                            buy_info['buy_price'], 
+                            buy_info['quantity']
+                        )
                         # 상태는 주문 처리 로직에서 자동으로 변경됨 (BUYING -> POSITIONED)
                         self.logger.info(f"🔥 실제 매수 주문 완료: {stock_code}({stock_name}) - {buy_reason}")
                     except Exception as e:

@@ -164,7 +164,7 @@ class RealtimeSignalLogger:
                         continue
                     
                     # main.py와 동일한 매매 판단 엔진 사용
-                    buy_signal, buy_reason = await self.decision_engine.analyze_buy_decision(trading_stock, combined_data)
+                    buy_signal, buy_reason, buy_info = await self.decision_engine.analyze_buy_decision(trading_stock, combined_data)
                     
                     # 3분봉 데이터로 변환하여 신호 분석 (signal_replay.py와 동일)
                     data_3min = TimeFrameConverter.convert_to_3min_data(combined_data)
