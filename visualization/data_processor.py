@@ -325,7 +325,7 @@ class DataProcessor:
             data = data.set_index('datetime')
             
             # 3분봉으로 리샘플링
-            resampled = data.resample('3T').agg({
+            resampled = data.resample('3min').agg({
                 'open': 'first',
                 'high': 'max', 
                 'low': 'min',

@@ -88,7 +88,7 @@ class RealtimeDataLogger:
                         )
                         f.write(line)
                 
-                self.logger.debug(f"📄 {stock_code} 분봉 데이터 저장: {len(minute_data)}건 -> {filename}")
+                #self.logger.debug(f"📄 {stock_code} 분봉 데이터 저장: {len(minute_data)}건 -> {filename}")
                 
         except Exception as e:
             self.logger.error(f"❌ {stock_code} 분봉 데이터 로깅 오류: {e}")

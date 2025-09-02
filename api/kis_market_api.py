@@ -702,7 +702,7 @@ def get_psearch_result(user_id: str, seq: str, tr_cont: str = "") -> Optional[pd
             
             if output_data:
                 result_df = pd.DataFrame(output_data)
-                logger.info(f"✅ 종목조건검색조회 성공: {len(result_df)}건 (seq={seq})")
+                #logger.debug(f"✅ 종목조건검색조회 성공: {len(result_df)}건 (seq={seq})")
                 return result_df
             else:
                 logger.warning(f"⚠️ 종목조건검색조회: 조건에 맞는 종목 없음 (seq={seq})")

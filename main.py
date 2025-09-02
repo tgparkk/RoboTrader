@@ -253,7 +253,7 @@ class DayTradingBot:
             
             # 매수 판단: 선정된 종목들
             if selected_stocks:
-                self.logger.debug(f"🔍 매수 판단 대상 {len(selected_stocks)}개 종목: {[f'{s.stock_code}({s.stock_name})' for s in selected_stocks]}")
+                #self.logger.debug(f"🔍 매수 판단 대상 {len(selected_stocks)}개 종목: {[f'{s.stock_code}({s.stock_name})' for s in selected_stocks]}")
                 for trading_stock in selected_stocks:
                     await self._analyze_buy_decision(trading_stock)
             else:

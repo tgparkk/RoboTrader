@@ -114,7 +114,7 @@ class TimeFrameConverter:
             df = df.set_index('datetime')
             
             # floor 방식으로 3분봉 경계 계산 (signal_replay와 동일)
-            df['floor_3min'] = df.index.floor('3T')
+            df['floor_3min'] = df.index.floor('3min')
             
             # 3분 구간별로 그룹핑하여 OHLCV 계산
             resampled = df.groupby('floor_3min').agg({

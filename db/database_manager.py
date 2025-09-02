@@ -253,7 +253,7 @@ class DatabaseManager:
                         existing_stocks.add(candidate.code)  # 추가된 종목을 세트에 추가
                     else:
                         duplicate_candidates += 1
-                        self.logger.debug(f"📝 {candidate.code}({candidate.name}) 당일 이미 저장됨 - 중복 제외")
+                        #self.logger.debug(f"📝 {candidate.code}({candidate.name}) 당일 이미 저장됨 - 중복 제외")
                 
                 conn.commit()
                 

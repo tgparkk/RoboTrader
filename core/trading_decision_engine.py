@@ -64,7 +64,7 @@ class TradingDecisionEngine:
         try:
             stock_code = trading_stock.stock_code
             
-            if combined_data is None or len(combined_data) < 30:
+            if combined_data is None or len(combined_data) < 10:
                 return False, "데이터 부족"
             
             # 보유 종목 여부 확인 - 이미 보유 중인 종목은 매수하지 않음
@@ -638,7 +638,30 @@ class TradingDecisionEngine:
             if signals['buy_bisector_recovery'].iloc[-1]:
                 return True, "이등분선 회복"
             
-            return False, ""
+            # 실패 이유를 상세히 분석
+            failure_reasons = []
+            
+            # 신호 컬럼별 상태 확인
+            if 'buy_pullback_pattern' in signals.columns:
+                if not signals['buy_pullback_pattern'].iloc[-1]:
+                    failure_reasons.append("눌림목패턴 불충족")
+            
+            if 'buy_bisector_recovery' in signals.columns:
+                if not signals['buy_bisector_recovery'].iloc[-1]:
+                    failure_reasons.append("이등분선 회복 불충족")
+            
+            # 추가 상세 정보 (있는 경우)
+            if 'signal_type' in signals.columns:
+                signal_type = signals['signal_type'].iloc[-1]
+                if signal_type and signal_type != '':
+                    failure_reasons.append(f"신호타입: {signal_type}")
+            
+            if 'confidence' in signals.columns:
+                confidence = signals['confidence'].iloc[-1]
+                if pd.notna(confidence):
+                    failure_reasons.append(f"신뢰도: {confidence:.3f}")
+            
+            return False, " | ".join(failure_reasons) if failure_reasons else "신호 조건 미충족"
             
         except Exception as e:
             self.logger.error(f"❌ 눌림목 캔들패턴 매수 신호 확인 오류: {e}")

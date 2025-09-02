@@ -573,7 +573,7 @@ class IntradayStockManager:
                         self.logger.debug(f"❌ {stock_code} 시작 시간 문제: {start_hour}시 (09시 아님)")
                         return False
             
-            self.logger.debug(f"✅ {stock_code} 기본 데이터 충분: {data_count}개")
+            #self.logger.debug(f"✅ {stock_code} 기본 데이터 충분: {data_count}개")
             return True
             
         except Exception as e:
@@ -601,7 +601,7 @@ class IntradayStockManager:
             last_completed_minute = current_minute_start - timedelta(minutes=1)
             target_hour = last_completed_minute.strftime("%H%M%S")
             
-            self.logger.debug(f"📊 {stock_code} 완성된 분봉 요청: {target_hour} (현재: {current_time.strftime('%H%M%S')})")
+            #self.logger.debug(f"📊 {stock_code} 완성된 분봉 요청: {target_hour} (현재: {current_time.strftime('%H%M%S')})")
             
             # 분봉 API로 완성된 데이터 조회
             div_code = get_div_code_for_stock(stock_code)
@@ -679,8 +679,8 @@ class IntradayStockManager:
                 'update_time': now_kst()
             }
             
-            self.logger.debug(f"📈 {stock_code} 현재가 조회 완료 (매도용): {current_price_info['current_price']:,.0f}원 "
-                            f"({current_price_info['change_rate']:+.2f}%)")
+            #self.logger.debug(f"📈 {stock_code} 현재가 조회 완료 (매도용): {current_price_info['current_price']:,.0f}원 "
+            #                f"({current_price_info['change_rate']:+.2f}%)")
             
             return current_price_info
             
@@ -761,7 +761,7 @@ class IntradayStockManager:
                 self.logger.error(f"📊 {stock_code} 과거 데이터만 사용: {len(combined_data)}건")
             else:
                 combined_data = pd.concat([historical_data, realtime_data], ignore_index=True)
-                self.logger.debug(f"📊 {stock_code} 과거+실시간 데이터 결합: {len(historical_data)}+{len(realtime_data)}={len(combined_data)}건")
+                #self.logger.debug(f"📊 {stock_code} 과거+실시간 데이터 결합: {len(historical_data)}+{len(realtime_data)}={len(combined_data)}건")
             
             if combined_data.empty:
                 return None
@@ -774,7 +774,8 @@ class IntradayStockManager:
                 combined_data = combined_data.drop_duplicates(subset=['time']).sort_values('time').reset_index(drop=True)
             
             if before_count != len(combined_data):
-                self.logger.debug(f"📊 {stock_code} 중복 제거: {before_count} → {len(combined_data)}건")
+                #self.logger.debug(f"📊 {stock_code} 중복 제거: {before_count} → {len(combined_data)}건")
+                pass
             
             # 완성된 봉 필터링은 TimeFrameConverter.convert_to_3min_data()에서 처리됨
             

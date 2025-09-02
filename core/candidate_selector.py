@@ -490,7 +490,7 @@ class CandidateSelector:
             # DataFrame을 딕셔너리 리스트로 변환
             result_list = result_df.to_dict('records')
             
-            self.logger.debug(f"✅ 종목조건검색조회 성공: {len(result_list)}개 종목 발견 (seq={seq})")
+            #self.logger.debug(f"✅ 종목조건검색조회 성공: {len(result_list)}개 종목 발견 (seq={seq})")
             
             # 결과 요약 로그
             for i, stock in enumerate(result_list[:5]):  # 상위 5개만 로그

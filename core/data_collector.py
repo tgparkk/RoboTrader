@@ -121,7 +121,7 @@ class RealTimeDataCollector:
                 stock = self.stocks[stock_code]
                 stock.add_ohlcv(ohlcv)
                 
-                self.logger.debug(f"데이터 수집 완료: {stock_code} - 가격: {price_data.current_price:,.0f}원")
+                #self.logger.debug(f"데이터 수집 완료: {stock_code} - 가격: {price_data.current_price:,.0f}원")
             
         except Exception as e:
             self.logger.error(f"종목 데이터 수집 실패 {stock_code}: {e}")
