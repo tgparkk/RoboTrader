@@ -41,6 +41,8 @@ class SignalStrength:
     reasons: List[str]         # 신호 근거
     volume_ratio: float        # 거래량 비율
     bisector_status: BisectorStatus  # 이등분선 상태
+    buy_price: float = 0.0     # 매수 권장가격 (3/5가 등)
+    entry_low: float = 0.0     # 진입 저가 (손절 기준)
 
 
 @dataclass

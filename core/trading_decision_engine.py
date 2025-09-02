@@ -83,11 +83,19 @@ class TradingDecisionEngine:
             #     # 조회 실패 시 차단하지 않음
             #     pass
             
+            # 🆕 현재 처리 중인 종목 코드 저장 (디버깅용)
+            self._current_stock_code = stock_code
+            
             # 전략 4: 눌림목 캔들패턴 매수 신호 (3분봉 사용)
-            signal_result, reason = self._check_pullback_candle_buy_signal(combined_data)
-            if signal_result:
-                # 매수 신호 발생 시 가격과 수량 미리 계산
-                buy_price = self._calculate_buy_price(combined_data)
+            signal_result, reason, price_info = self._check_pullback_candle_buy_signal(combined_data)
+            if signal_result and price_info:
+                # 매수 신호 발생 시 가격과 수량 계산
+                buy_price = price_info['buy_price']
+                if buy_price <= 0:
+                    # 3/5가 계산 실패시 현재가 사용
+                    buy_price = combined_data['close'].iloc[-1]
+                    self.logger.debug(f"⚠️ 3/5가 계산 실패, 현재가 사용: {buy_price:,.0f}원")
+                
                 max_buy_amount = self._get_max_buy_amount()
                 quantity = int(max_buy_amount // buy_price) if buy_price > 0 else 0
                 
@@ -95,8 +103,15 @@ class TradingDecisionEngine:
                     buy_info = {
                         'buy_price': buy_price,
                         'quantity': quantity,
-                        'max_buy_amount': max_buy_amount
+                        'max_buy_amount': max_buy_amount,
+                        'entry_low': price_info.get('entry_low', 0),  # 손절 기준
+                        'target_profit': price_info.get('target_profit', 0.015)  # 목표 수익률
                     }
+                    
+                    # 🆕 목표 수익률 저장
+                    if hasattr(trading_stock, 'target_profit_rate'):
+                        trading_stock.target_profit_rate = price_info.get('target_profit', 0.015)
+                    
                     return True, f"눌림목캔들패턴: {reason}", buy_info
                 else:
                     return False, "수량 계산 실패", buy_info
@@ -108,14 +123,16 @@ class TradingDecisionEngine:
             return False, f"오류: {e}", {'buy_price': 0, 'quantity': 0, 'max_buy_amount': 0}
     
     def _calculate_buy_price(self, combined_data) -> float:
-        """매수가 계산 (3/5가 또는 현재가)"""
+        """매수가 계산 (3/5가 또는 현재가)
+        
+        @deprecated: generate_improved_signals에서 직접 계산하도록 변경됨
+        """
         try:
             current_price = combined_data['close'].iloc[-1]
             
             # 3/5가 계산 시도
             try:
                 from core.price_calculator import PriceCalculator
-                from core.time_frame_converter import TimeFrameConverter
                 
                 data_3min = TimeFrameConverter.convert_to_3min_data(combined_data)
                 three_fifths_price, entry_low = PriceCalculator.calculate_three_fifths_price(data_3min, self.logger)
@@ -619,81 +636,72 @@ class TradingDecisionEngine:
     
     
 
-    def _check_pullback_candle_buy_signal(self, data) -> Tuple[bool, str]:
-        """전략 4: 눌림목 캔들패턴 매수 신호 확인 (3분봉 기준)"""
+    def _check_pullback_candle_buy_signal(self, data) -> Tuple[bool, str, Optional[Dict[str, float]]]:
+        """전략 4: 눌림목 캔들패턴 매수 신호 확인 (3분봉 기준)
+        
+        Returns:
+            Tuple[bool, str, Optional[Dict]]: (신호여부, 사유, 가격정보)
+            가격정보: {'buy_price': float, 'entry_low': float, 'target_profit': float}
+        """
         try:
-            from core.indicators.pullback_candle_pattern import PullbackCandlePattern
+            from core.indicators.pullback_candle_pattern import PullbackCandlePattern, SignalType
             
             # 필요한 컬럼 확인
             required_cols = ['open', 'high', 'low', 'close', 'volume']
             if not all(col in data.columns for col in required_cols):
-                return False, "필요한 데이터 컬럼 부족"
+                return False, "필요한 데이터 컬럼 부족", None
             
             # 1분봉 데이터를 3분봉으로 변환
             data_3min = TimeFrameConverter.convert_to_3min_data(data)
             if data_3min is None or len(data_3min) < 5:
                 self.logger.warning(f"📊 3분봉 데이터 부족: {len(data_3min) if data_3min is not None else 0}개 (최소 5개 필요)")
-                return False, f"3분봉 데이터 부족 ({len(data_3min) if data_3min is not None else 0}/5)"
-            
-            # 눌림목 캔들패턴 신호 계산 (3분봉 기준, signal_replay.py와 동일 설정)
-            signals = PullbackCandlePattern.generate_trading_signals(
-                data_3min,
-                enable_candle_shrink_expand=False,  # ✅ signal_replay.py와 일치
-                enable_divergence_precondition=False,  # ✅ signal_replay.py와 일치
-                enable_overhead_supply_filter=True,
-                use_improved_logic=True,  # ✅ 개선된 로직 사용으로 신호 강도 정보 포함
-                candle_expand_multiplier=1.10,
-                overhead_lookback=10,
-                overhead_threshold_hits=2,
-            )
-            
-            if signals.empty:
-                return False, "신호 계산 실패"
-            
-            # 🆕 신호 상태 디버깅 (signal_replay와 비교용)
-            self._log_signal_debug_info(data_3min, signals)
+                return False, f"3분봉 데이터 부족 ({len(data_3min) if data_3min is not None else 0}/5)", None
             
             # 🆕 3분봉 확정 확인 (signal_replay 방식)
-            # 현재 시간과 마지막 3분봉 시간을 비교하여 확정 여부 확인
             if not self._is_candle_confirmed(data_3min):
-                return False, "3분봉 미확정"
+                return False, "3분봉 미확정", None
             
-            # 매수 조건 1: 눌림목 캔들패턴 매수 신호
-            if signals['buy_pullback_pattern'].iloc[-1]:
-                return True, "눌림목 패턴 (거래량증가+캔들확대)"
+            # 🆕 개선된 신호 생성 로직 사용 (3/5가 계산 포함)
+            signal_strength = PullbackCandlePattern.generate_improved_signals(
+                data_3min,
+                stock_code=getattr(self, '_current_stock_code', 'UNKNOWN'),
+                debug=True
+            )
             
-            # 매수 조건 2: 이등분선 회복 패턴
-            if signals['buy_bisector_recovery'].iloc[-1]:
-                return True, "이등분선 회복"
+            if signal_strength is None:
+                return False, "신호 계산 실패", None
             
-            # 실패 이유를 상세히 분석
-            failure_reasons = []
+            # 매수 신호 확인
+            if signal_strength.signal_type in [SignalType.STRONG_BUY, SignalType.CAUTIOUS_BUY]:
+                # 신호 이유 생성
+                reasons = ' | '.join(signal_strength.reasons)
+                signal_desc = f"{signal_strength.signal_type.value} (신뢰도: {signal_strength.confidence:.0f}%)"
+                
+                # 가격 정보 생성
+                price_info = {
+                    'buy_price': signal_strength.buy_price,
+                    'entry_low': signal_strength.entry_low,
+                    'target_profit': signal_strength.target_profit
+                }
+                
+                self.logger.info(f"📊 매수 신호 발생: {signal_desc} - {reasons}")
+                self.logger.info(f"💰 매수가격: {signal_strength.buy_price:,.0f}원, 진입저가: {signal_strength.entry_low:,.0f}원")
+                
+                return True, f"{signal_desc} - {reasons}", price_info
             
-            # 신호 컬럼별 상태 확인
-            if 'buy_pullback_pattern' in signals.columns:
-                if not signals['buy_pullback_pattern'].iloc[-1]:
-                    failure_reasons.append("눌림목패턴 불충족")
-            
-            if 'buy_bisector_recovery' in signals.columns:
-                if not signals['buy_bisector_recovery'].iloc[-1]:
-                    failure_reasons.append("이등분선 회복 불충족")
-            
-            # 추가 상세 정보 (있는 경우)
-            if 'signal_type' in signals.columns:
-                signal_type = signals['signal_type'].iloc[-1]
-                if signal_type and signal_type != '':
-                    failure_reasons.append(f"신호타입: {signal_type}")
-            
-            if 'confidence' in signals.columns:
-                confidence = signals['confidence'].iloc[-1]
-                if pd.notna(confidence):
-                    failure_reasons.append(f"신뢰도: {confidence:.3f}")
-            
-            return False, " | ".join(failure_reasons) if failure_reasons else "신호 조건 미충족"
+            # 매수 신호가 아닌 경우
+            if signal_strength.signal_type == SignalType.AVOID:
+                reasons = ' | '.join(signal_strength.reasons)
+                return False, f"회피신호: {reasons}", None
+            elif signal_strength.signal_type == SignalType.WAIT:
+                reasons = ' | '.join(signal_strength.reasons)
+                return False, f"대기신호: {reasons}", None
+            else:
+                return False, "신호 조건 미충족", None
             
         except Exception as e:
             self.logger.error(f"❌ 눌림목 캔들패턴 매수 신호 확인 오류: {e}")
-            return False, ""
+            return False, "", None
     
     def _is_candle_confirmed(self, data_3min) -> bool:
         """3분봉 확정 여부 확인 (signal_replay.py와 완전히 동일한 방식)"""

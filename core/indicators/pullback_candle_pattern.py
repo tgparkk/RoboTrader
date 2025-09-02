@@ -287,6 +287,34 @@ class PullbackCandlePattern:
                 signal_strength.confidence *= 0.95  # 0.9 → 0.95로 완화
                 signal_strength.reasons.append("눌림목품질부족(-)")
             
+            # 매수 신호 발생시 3/5가 계산
+            if signal_strength.signal_type in [SignalType.STRONG_BUY, SignalType.CAUTIOUS_BUY]:
+                # 가장 최근 매수 신호 캔들 찾기
+                last_buy_idx = len(data) - 1  # 기본값: 현재 캔들
+                
+                # 진짜 신호 캔들 찾기 (현재 캔들이 회복 캔들이라면)
+                if is_recovery_candle and volume_recovers:
+                    # 현재 캔들이 신호 캔들
+                    sig_high = float(data['high'].iloc[-1])
+                    sig_low = float(data['low'].iloc[-1])
+                    
+                    # 3/5 구간 가격 (60% 지점) 계산
+                    three_fifths_price = sig_low + (sig_high - sig_low) * 0.6
+                    
+                    if three_fifths_price > 0 and sig_low <= three_fifths_price <= sig_high:
+                        signal_strength.buy_price = three_fifths_price
+                        signal_strength.entry_low = sig_low
+                        if debug and logger:
+                            logger.info(f"📊 3/5가 계산 완료: {three_fifths_price:,.0f}원 (H:{sig_high:,.0f}, L:{sig_low:,.0f})")
+                    else:
+                        # 3/5가 계산 실패시 현재가 사용
+                        signal_strength.buy_price = float(current['close'])
+                        signal_strength.entry_low = float(current['low'])
+                else:
+                    # 신호 캔들을 찾을 수 없으면 현재가 사용
+                    signal_strength.buy_price = float(current['close'])
+                    signal_strength.entry_low = float(current['low'])
+            
             return signal_strength
             
         except Exception as e:
