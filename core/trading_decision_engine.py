@@ -42,7 +42,7 @@ class TradingDecisionEngine:
         self.intraday_manager = intraday_manager
         
         # 가상 매매 설정
-        self.is_virtual_mode = True  # 🆕 가상매매 모드 여부 (현재는 가상매매만 지원)
+        self.is_virtual_mode = False  # 🆕 가상매매 모드 여부 (False: 실제매매, True: 가상매매)
         
         # 🆕 가상매매 관리자 초기화
         from core.virtual_trading_manager import VirtualTradingManager
@@ -152,6 +152,93 @@ class TradingDecisionEngine:
             self.logger.error(f"❌ {trading_stock.stock_code} 매도 판단 오류: {e}")
             return False, f"오류: {e}"
     
+    async def execute_real_buy(self, trading_stock, combined_data, buy_reason, buy_price=None):
+        """실제 매수 주문 실행"""
+        try:
+            stock_code = trading_stock.stock_code
+            stock_name = trading_stock.stock_name
+            
+            # buy_price가 지정된 경우 사용, 아니면 3/5가 계산 로직 사용
+            if buy_price is not None:
+                current_price = buy_price
+                self.logger.debug(f"📋 {stock_code} 지정된 매수가로 주문: {current_price:,.0f}원")
+            else:
+                current_price = combined_data['close'].iloc[-1]
+                self.logger.debug(f"📋 {stock_code} 현재가로 주문 (기본값): {current_price:,.0f}원")
+                
+                # 3/5가 계산 (별도 클래스 사용)
+                try:
+                    from core.price_calculator import PriceCalculator
+                    data_3min = TimeFrameConverter.convert_to_3min_data(combined_data)
+                    
+                    three_fifths_price, entry_low = PriceCalculator.calculate_three_fifths_price(data_3min, self.logger)
+                    
+                    if three_fifths_price is not None:
+                        current_price = three_fifths_price
+                        self.logger.debug(f"🎯 3/5가로 주문: {stock_code} @{current_price:,.0f}원")
+                        
+                        # 진입 저가 저장
+                        if entry_low is not None:
+                            try:
+                                setattr(trading_stock, '_entry_low', entry_low)
+                            except Exception:
+                                pass
+                    else:
+                        self.logger.debug(f"⚠️ 3/5가 계산 실패 → 현재가 사용: {current_price:,.0f}원")
+                        
+                except Exception as e:
+                    self.logger.debug(f"3/5가 계산 오류: {e} → 현재가 사용")
+                    # 계산 실패 시 현재가 유지
+            
+            # 실제 매수 주문 수량 계산 (계좌 잔고의 10% 사용)
+            max_buy_amount = 500000  # 기본값 (API 조회 실패시)
+            
+            try:
+                if self.api_manager:
+                    account_info = self.api_manager.get_account_balance()
+                    if account_info and hasattr(account_info, 'available_amount'):
+                        # 계좌 가용금액의 10%를 종목당 투자금액으로 설정
+                        available_balance = float(account_info.available_amount)
+                        max_buy_amount = min(5000000, available_balance * 0.1)  # 최대 500만원
+                        self.logger.debug(f"💰 {stock_code} 계좌 가용금액: {available_balance:,.0f}원, 투자금액: {max_buy_amount:,.0f}원")
+                    elif hasattr(account_info, 'total_balance'):
+                        # total_balance 만 사용 가능한 경우
+                        total_balance = float(account_info.total_balance)
+                        max_buy_amount = min(5000000, total_balance * 0.1)  # 최대 500만원
+                        self.logger.debug(f"💰 {stock_code} 총 자산: {total_balance:,.0f}원, 투자금액: {max_buy_amount:,.0f}원")
+            except Exception as e:
+                self.logger.warning(f"⚠️ 계좌 잔고 조회 실패: {e}, 기본값 사용")
+            
+            quantity = int(max_buy_amount // current_price)
+            
+            if quantity <= 0:
+                self.logger.warning(f"⚠️ {stock_code} 매수 주문 실패: 수량 0")
+                return False
+            
+            # 실제 매수 주문 실행
+            from core.trading_stock_manager import TradingStockManager
+            if hasattr(self, 'trading_manager') and isinstance(self.trading_manager, TradingStockManager):
+                success = await self.trading_manager.execute_buy_order(
+                    stock_code=stock_code,
+                    price=current_price,
+                    quantity=quantity,
+                    reason=buy_reason
+                )
+                
+                if success:
+                    self.logger.info(f"🔥 {stock_code} 실제 매수 주문 완료: {quantity}주 @{current_price:,.0f}원")
+                    return True
+                else:
+                    self.logger.error(f"❌ {stock_code} 실제 매수 주문 실패")
+                    return False
+            else:
+                self.logger.error(f"❌ TradingStockManager 참조 오류")
+                return False
+            
+        except Exception as e:
+            self.logger.error(f"❌ {trading_stock.stock_code} 실제 매수 처리 오류: {e}")
+            return False
+    
     async def execute_virtual_buy(self, trading_stock, combined_data, buy_reason, buy_price=None):
         """가상 매수 실행"""
         try:
@@ -251,6 +338,54 @@ class TradingDecisionEngine:
             
         except Exception as e:
             self.logger.error(f"❌ 가상 매수 실행 오류: {e}")
+    
+    async def execute_real_sell(self, trading_stock, combined_data, sell_reason):
+        """실제 매도 주문 실행"""
+        try:
+            stock_code = trading_stock.stock_code
+            stock_name = trading_stock.stock_name
+            
+            # 실시간 현재가 사용 (매도 실행용)
+            current_price_info = self.intraday_manager.get_cached_current_price(stock_code)
+            
+            if current_price_info is not None:
+                current_price = current_price_info['current_price']
+                self.logger.debug(f"📈 {stock_code} 실시간 현재가로 매도 주문: {current_price:,.0f}원")
+            else:
+                # 현재가 정보 없으면 분봉 데이터의 마지막 가격 사용 (폴백)
+                current_price = combined_data['close'].iloc[-1]
+                self.logger.warning(f"📋 {stock_code} 분봉 데이터로 매도 주문: {current_price:,.0f}원 (실시간 현재가 없음)")
+            
+            # 현재 보유 포지션 정보 확인
+            if not trading_stock.position or trading_stock.position.quantity <= 0:
+                self.logger.warning(f"⚠️ {stock_code} 매도 주문 실패: 보유 포지션 없음")
+                return False
+            
+            quantity = trading_stock.position.quantity
+            
+            # 실제 매도 주문 실행
+            from core.trading_stock_manager import TradingStockManager
+            if hasattr(self, 'trading_manager') and isinstance(self.trading_manager, TradingStockManager):
+                success = await self.trading_manager.execute_sell_order(
+                    stock_code=stock_code,
+                    price=current_price,
+                    quantity=quantity,
+                    reason=sell_reason
+                )
+                
+                if success:
+                    self.logger.info(f"📉 {stock_code} 실제 매도 주문 완료: {quantity}주 @{current_price:,.0f}원")
+                    return True
+                else:
+                    self.logger.error(f"❌ {stock_code} 실제 매도 주문 실패")
+                    return False
+            else:
+                self.logger.error(f"❌ TradingStockManager 참조 오류")
+                return False
+            
+        except Exception as e:
+            self.logger.error(f"❌ {trading_stock.stock_code} 실제 매도 처리 오류: {e}")
+            return False
     
     async def execute_virtual_sell(self, trading_stock, combined_data, sell_reason):
         """가상 매도 실행"""

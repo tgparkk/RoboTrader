@@ -59,6 +59,10 @@ class TradingStockManager:
         self.is_monitoring = False
         self.monitor_interval = 10  # 10초마다 상태 체크
         
+        # 재거래 설정
+        self.enable_re_trading = True  # 매도 완료 후 재거래 허용
+        self.re_trading_wait_minutes = 0  # 매도 완료 후 재거래까지 대기 시간(분) - 즉시 재거래
+        
         self.logger.info("🎯 종목 거래 상태 통합 관리자 초기화 완료")
         # 주문 관리자에 역참조 등록 (정정 시 주문ID 동기화용)
         try:
@@ -471,6 +475,10 @@ class TradingStockManager:
                         
                         self.logger.info(f"✅ {trading_stock.stock_code} 매도 완료")
                         
+                        # 매도 완료 후 재거래 스케줄링
+                        if self.enable_re_trading:
+                            asyncio.create_task(self._schedule_re_trading(trading_stock))
+                        
                     elif order.status in [OrderStatus.CANCELLED, OrderStatus.FAILED]:
                         # 매도 실패 - 매도 후보로 되돌림
                         with self._lock:
@@ -500,6 +508,63 @@ class TradingStockManager:
                         
         except Exception as e:
             self.logger.error(f"❌ 포지션 현재가 업데이트 오류: {e}")
+    
+    async def _schedule_re_trading(self, trading_stock: TradingStock):
+        """매도 완료된 종목의 재거래 스케줄링"""
+        try:
+            stock_code = trading_stock.stock_code
+            stock_name = trading_stock.stock_name
+            
+            # 대기 시간 계산
+            wait_seconds = self.re_trading_wait_minutes * 60
+            
+            if wait_seconds > 0:
+                self.logger.info(f"🔄 {stock_code}({stock_name}) 재거래 스케줄: {self.re_trading_wait_minutes}분 후")
+                # 지정된 시간만큼 대기
+                await asyncio.sleep(wait_seconds)
+            else:
+                self.logger.info(f"🔄 {stock_code}({stock_name}) 즉시 재거래 시작")
+            
+            # 장 마감 시간 체크 (재거래는 시간 제한 없음)
+            # if not is_market_open():
+            #     self.logger.info(f"⏰ {stock_code} 재거래 취소 - 장 마감")
+            #     return
+            
+            # 종목이 여전히 COMPLETED 상태인지 확인 (중간에 제거되거나 다른 상태로 변경될 수 있음)
+            with self._lock:
+                if stock_code not in self.trading_stocks:
+                    self.logger.info(f"⚠️ {stock_code} 재거래 취소 - 종목이 관리 목록에서 제거됨")
+                    return
+                
+                current_stock = self.trading_stocks[stock_code]
+                if current_stock.state != StockState.COMPLETED:
+                    self.logger.info(f"⚠️ {stock_code} 재거래 취소 - 상태 변경됨 (현재: {current_stock.state.value})")
+                    return
+                
+                # SELECTED 상태로 변경하여 재거래 준비
+                current_stock.selected_time = now_kst()
+                current_stock.selection_reason = f"재거래 (이전: {trading_stock.selection_reason})"
+                # 포지션/주문 정보는 이미 정리됨
+                self._change_stock_state(stock_code, StockState.SELECTED, "자동 재거래 시작")
+            
+            # IntradayStockManager에 다시 추가
+            success = await self.intraday_manager.add_selected_stock(
+                stock_code, stock_name, f"재거래 (이전: {trading_stock.selection_reason})"
+            )
+            
+            if success:
+                self.logger.info(f"🔄 {stock_code}({stock_name}) 재거래 시작")
+            else:
+                # 실패 시 다시 COMPLETED 상태로 되돌림
+                with self._lock:
+                    if stock_code in self.trading_stocks:
+                        self._change_stock_state(stock_code, StockState.COMPLETED, "재거래 시작 실패")
+                self.logger.warning(f"⚠️ {stock_code} 재거래 시작 실패")
+                
+        except asyncio.CancelledError:
+            self.logger.info(f"🔄 {trading_stock.stock_code} 재거래 스케줄 취소됨")
+        except Exception as e:
+            self.logger.error(f"❌ {trading_stock.stock_code} 재거래 스케줄링 오류: {e}")
     
     def _register_stock(self, trading_stock: TradingStock):
         """종목 등록"""
@@ -675,6 +740,27 @@ class TradingStockManager:
         """모니터링 중단"""
         self.is_monitoring = False
         self.logger.info("🔍 종목 상태 모니터링 중단")
+    
+    def set_re_trading_config(self, enable: bool, wait_minutes: int = 5):
+        """
+        재거래 설정 변경
+        
+        Args:
+            enable: 재거래 활성화 여부
+            wait_minutes: 매도 완료 후 재거래까지 대기 시간(분)
+        """
+        self.enable_re_trading = enable
+        self.re_trading_wait_minutes = max(0, wait_minutes)  # 최소 0분 (즉시 가능)
+        
+        status = "활성화" if enable else "비활성화"
+        self.logger.info(f"🔄 재거래 설정 변경: {status}, 대기시간: {self.re_trading_wait_minutes}분")
+    
+    def get_re_trading_config(self) -> Dict[str, Any]:
+        """재거래 설정 조회"""
+        return {
+            "enable_re_trading": self.enable_re_trading,
+            "re_trading_wait_minutes": self.re_trading_wait_minutes
+        }
     
     def remove_stock(self, stock_code: str, reason: str = "") -> bool:
         """종목 제거"""
