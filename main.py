@@ -321,27 +321,27 @@ class DayTradingBot:
             self.logger.debug(f"💡 {stock_code} 매수 판단 결과: signal={buy_signal}, reason='{buy_reason}'")
             
             # 🆕 signal_replay와 일관성 검증 (완성된 3분봉 기준)
-            if hasattr(self.decision_engine, 'verify_signal_consistency'):
-                try:
-                    # 이미 완성된 3분봉으로 변환된 data_3min 사용
-                    verification_result = self.decision_engine.verify_signal_consistency(stock_code, data_3min)
-                    
-                    # 실제 매수 신호와 검증 결과 비교
-                    verified_signal = verification_result.get('has_signal', False)
-                    if buy_signal != verified_signal:
-                        self.logger.warning(
-                            f"⚠️ 신호 불일치 감지: {stock_code}({stock_name})\n"
-                            f"  - 실제 매수 신호: {buy_signal} ({buy_reason})\n"
-                            f"  - 검증 신호: {verified_signal} ({verification_result.get('signal_types', [])})\n"
-                            f"  - 미충족 조건: {verification_result.get('unmet_conditions', [])}\n"
-                            f"  - 3분봉 개수: {len(data_3min)}개 (마지막: {last_3min_time.strftime('%H:%M:%S') if last_3min_time else 'None'})"
-                        )
-                    else:
-                        self.logger.debug(
-                            f"✅ 신호 일치 확인: {stock_code} signal={buy_signal} (완성된 3분봉 {len(data_3min)}개 기준)"
-                        )
-                except Exception as e:
-                    self.logger.debug(f"신호 일관성 검증 오류: {e}")
+            #if hasattr(self.decision_engine, 'verify_signal_consistency'):
+            #    try:
+            #        # 이미 완성된 3분봉으로 변환된 data_3min 사용
+            #        verification_result = self.decision_engine.verify_signal_consistency(stock_code, data_3min)
+            #        
+            #        # 실제 매수 신호와 검증 결과 비교
+            #        verified_signal = verification_result.get('has_signal', False)
+            #        if buy_signal != verified_signal:
+            #            self.logger.warning(
+            #                f"⚠️ 신호 불일치 감지: {stock_code}({stock_name})\n"
+            #                f"  - 실제 매수 신호: {buy_signal} ({buy_reason})\n"
+            #                f"  - 검증 신호: {verified_signal} ({verification_result.get('signal_types', [])})\n"
+            #                f"  - 미충족 조건: {verification_result.get('unmet_conditions', [])}\n"
+            #                f"  - 3분봉 개수: {len(data_3min)}개 (마지막: {last_3min_time.strftime('%H:%M:%S') if last_3min_time else 'None'})"
+            #            )
+            #        else:
+            #            self.logger.debug(
+            #                f"✅ 신호 일치 확인: {stock_code} signal={buy_signal} (완성된 3분봉 {len(data_3min)}개 기준)"
+            #            )
+            #    except Exception as e:
+            #        self.logger.debug(f"신호 일관성 검증 오류: {e}")
             
             if buy_signal:
                 self.logger.info(f"🚀 {stock_code}({stock_name}) 매수 신호 발생: {buy_reason}")
@@ -396,7 +396,7 @@ class DayTradingBot:
             
             # 분봉 데이터 가져오기
             combined_data = self.intraday_manager.get_combined_chart_data(stock_code)
-            if combined_data is None or len(combined_data) < 30:
+            if combined_data is None or len(combined_data) < 15:
                 return
             
             # 매매 판단 엔진으로 매도 신호 확인
@@ -413,7 +413,7 @@ class DayTradingBot:
                 if success:
                     # 실제 매도 주문 실행
                     try:
-                        await self.decision_engine.execute_real_sell(trading_stock, combined_data, sell_reason)
+                        await self.decision_engine.execute_real_sell(trading_stock, sell_reason)
                         self.logger.info(f"📉 실제 매도 주문 완료: {stock_code}({stock_name}) - {sell_reason}")
                     except Exception as e:
                         self.logger.error(f"❌ 실제 매도 처리 오류: {e}")
@@ -499,7 +499,7 @@ class DayTradingBot:
                             continue
                             
                         # 실제 매도 실행
-                        await self.decision_engine.execute_real_sell(trading_stock, combined_data, sell_reason)
+                        await self.decision_engine.execute_real_sell(trading_stock, sell_reason)
                         
                         # [기존 가상매매 코드 - 주석처리]
                         # await self.decision_engine.execute_virtual_sell(trading_stock, combined_data, sell_reason)
@@ -530,7 +530,7 @@ class DayTradingBot:
                     
                     if sell_signal:
                         self.logger.info(f"📉 전략 기반 매도 신호: {stock_code}({stock_name}) - {sell_reason}")
-                        await self.decision_engine.execute_real_sell(trading_stock, combined_data, sell_reason)
+                        await self.decision_engine.execute_real_sell(trading_stock, sell_reason)
                         
                         # [기존 가상매매 코드 - 주석처리]
                         # await self.decision_engine.execute_virtual_sell(trading_stock, combined_data, sell_reason)
@@ -727,7 +727,7 @@ class DayTradingBot:
                         continue
                     
                     # 실제 매도 실행 (EOD - End of Day)
-                    await self.decision_engine.execute_real_sell(trading_stock, combined_data, "EOD")
+                    await self.decision_engine.execute_real_sell(trading_stock, "EOD")
                     
                     # [기존 가상매매 코드 - 주석처리]
                     # await self.decision_engine.execute_virtual_sell(trading_stock, combined_data, "EOD")

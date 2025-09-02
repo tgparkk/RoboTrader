@@ -304,84 +304,69 @@ class TradingDecisionEngine:
             
             if buy_record_id:
                     
-                    # 가상 포지션 정보를 trading_stock에 저장
-                    trading_stock.set_virtual_buy_info(buy_record_id, current_price, quantity)
-                    
-                    # 신호 강도에 따른 목표수익률 설정
-                    if "눌림목" in buy_reason:
-                        try:
-                            target_rate = self._get_target_profit_rate(data_3min, buy_reason)
-                            trading_stock.target_profit_rate = target_rate
-                            self.logger.info(f"📊 목표수익률 설정: {target_rate*100:.0f}% ({buy_reason})")
-                        except Exception as e:
-                            self.logger.warning(f"목표수익률 설정 실패, 기본값 사용: {e}")
-                            trading_stock.target_profit_rate = 0.02
-                    
-                    # 포지션 상태로 변경 (가상)
-                    trading_stock.set_position(quantity, current_price)
-                    
-                    # 총 매수금액 계산
-                    total_cost = quantity * current_price
-                    
-                    self.logger.info(f"🎯 가상 매수 완료: {stock_code}({stock_name}) "
-                                   f"{quantity}주 @{current_price:,.0f}원 총 {total_cost:,.0f}원")
-                    
-                    # 텔레그램 알림
-                    if self.telegram:
-                        await self.telegram.notify_signal_detected({
-                            'stock_code': stock_code,
-                            'stock_name': stock_name,
-                            'signal_type': '🔴 매수',
-                            'price': current_price,
-                            'reason': f"{strategy} - {buy_reason}"
-                        })
-            
+                # 가상 포지션 정보를 trading_stock에 저장
+                trading_stock.set_virtual_buy_info(buy_record_id, current_price, quantity)
+                
+                # 신호 강도에 따른 목표수익률 설정
+                if "눌림목" in buy_reason:
+                    try:
+                        target_rate = self._get_target_profit_rate(data_3min, buy_reason)
+                        trading_stock.target_profit_rate = target_rate
+                        self.logger.info(f"📊 목표수익률 설정: {target_rate*100:.0f}% ({buy_reason})")
+                    except Exception as e:
+                        self.logger.warning(f"목표수익률 설정 실패, 기본값 사용: {e}")
+                        trading_stock.target_profit_rate = 0.02
+                
+                # 포지션 상태로 변경 (가상)
+                trading_stock.set_position(quantity, current_price)
+                
+                # 총 매수금액 계산
+                total_cost = quantity * current_price
+                
+                self.logger.info(f"🎯 가상 매수 완료: {stock_code}({stock_name}) "
+                                f"{quantity}주 @{current_price:,.0f}원 총 {total_cost:,.0f}원")
+                
+                # 텔레그램 알림
+                if self.telegram:
+                    await self.telegram.notify_signal_detected({
+                        'stock_code': stock_code,
+                        'stock_name': stock_name,
+                        'signal_type': '🔴 매수',
+                        'price': current_price,
+                        'reason': f"{strategy} - {buy_reason}"
+                    })
+        
         except Exception as e:
             self.logger.error(f"❌ 가상 매수 실행 오류: {e}")
     
-    async def execute_real_sell(self, trading_stock, combined_data, sell_reason):
-        """실제 매도 주문 실행"""
+    async def execute_real_sell(self, trading_stock, sell_reason):
+        """실제 매도 주문 실행 (판단 로직 제외, 주문만 처리)"""
         try:
             stock_code = trading_stock.stock_code
             stock_name = trading_stock.stock_name
             
-            # 실시간 현재가 사용 (매도 실행용)
-            current_price_info = self.intraday_manager.get_cached_current_price(stock_code)
-            
-            if current_price_info is not None:
-                current_price = current_price_info['current_price']
-                self.logger.debug(f"📈 {stock_code} 실시간 현재가로 매도 주문: {current_price:,.0f}원")
-            else:
-                # 현재가 정보 없으면 분봉 데이터의 마지막 가격 사용 (폴백)
-                current_price = combined_data['close'].iloc[-1]
-                self.logger.warning(f"📋 {stock_code} 분봉 데이터로 매도 주문: {current_price:,.0f}원 (실시간 현재가 없음)")
-            
-            # 현재 보유 포지션 정보 확인
+            # 보유 포지션 확인
             if not trading_stock.position or trading_stock.position.quantity <= 0:
                 self.logger.warning(f"⚠️ {stock_code} 매도 주문 실패: 보유 포지션 없음")
                 return False
             
             quantity = trading_stock.position.quantity
             
-            # 실제 매도 주문 실행
-            from core.trading_stock_manager import TradingStockManager
-            if hasattr(self, 'trading_manager') and isinstance(self.trading_manager, TradingStockManager):
-                success = await self.trading_manager.execute_sell_order(
-                    stock_code=stock_code,
-                    price=current_price,
-                    quantity=quantity,
-                    reason=sell_reason
-                )
-                
-                if success:
-                    self.logger.info(f"📉 {stock_code} 실제 매도 주문 완료: {quantity}주 @{current_price:,.0f}원")
-                    return True
-                else:
-                    self.logger.error(f"❌ {stock_code} 실제 매도 주문 실패")
-                    return False
+            # 시장가 매도 주문 실행
+            success = await self.trading_manager.execute_sell_order(
+                stock_code=stock_code,
+                quantity=quantity,
+                price=0,  # 시장가 (가격 미지정)
+                reason=sell_reason,
+                market=True  # 시장가 주문 플래그
+            )
+            
+            if success:
+                self.logger.info(f"📉 {stock_code}({stock_name}) 시장가 매도 주문 완료: {quantity}주 - {sell_reason}")
             else:
-                self.logger.error(f"❌ TradingStockManager 참조 오류")
-                return False
+                self.logger.error(f"❌ {stock_code} 시장가 매도 주문 실패")
+            
+            return success
             
         except Exception as e:
             self.logger.error(f"❌ {trading_stock.stock_code} 실제 매도 처리 오류: {e}")
@@ -510,19 +495,7 @@ class TradingDecisionEngine:
                 return True, f"신호강도별손절 {loss_rate*100:.1f}% (기준: -{stop_loss_rate*100:.1f}%)"
             
             # 매수 사유에 따른 추가 기술적 손절 조건 (신호강도별 손절과 병행)
-            if "가격박스" in trading_stock.selection_reason:
-                technical_stop, technical_reason = self._check_price_box_stop_loss(data, buy_price, current_price)
-                if technical_stop:
-                    return True, f"기술적손절: {technical_reason}"
-            elif "다중볼린저밴드" in trading_stock.selection_reason:
-                technical_stop, technical_reason = self._check_multi_bollinger_stop_loss(data, buy_price, current_price)
-                if technical_stop:
-                    return True, f"기술적손절: {technical_reason}"
-            elif "볼린저밴드" in trading_stock.selection_reason:
-                technical_stop, technical_reason = self._check_bollinger_stop_loss(data, buy_price, current_price, trading_stock)
-                if technical_stop:
-                    return True, f"기술적손절: {technical_reason}"
-            elif "눌림목캔들패턴" in trading_stock.selection_reason:
+            if "눌림목캔들패턴" in trading_stock.selection_reason:
                 technical_stop, technical_reason = self._check_pullback_candle_stop_loss(trading_stock, data, buy_price, current_price)
                 if technical_stop:
                     return True, f"기술적손절: {technical_reason}"
@@ -533,99 +506,6 @@ class TradingDecisionEngine:
             self.logger.error(f"❌ 손절 조건 확인 오류: {e}")
             return False, ""
     
-    def _check_price_box_stop_loss(self, data, buy_price, current_price) -> Tuple[bool, str]:
-        """가격박스 전략 손절 조건"""
-        try:
-            from core.indicators.price_box import PriceBox
-            from core.indicators.bisector_line import BisectorLine
-            
-            # 박스중심선 이탈
-            box_signals = PriceBox.generate_trading_signals(data['close'])
-            if current_price < box_signals['center_line'].iloc[-1]:
-                return True, "박스중심선 이탈"
-            
-            # 이등분선 이탈
-            bisector_signals = BisectorLine.generate_trading_signals(data)
-            if not bisector_signals['bullish_zone'].iloc[-1]:
-                return True, "이등분선 이탈"
-            
-            # 직전저점(첫 마디 저점) 이탈 - 간단히 최근 10개 중 최저점으로 대체
-            if len(data) >= 10:
-                recent_low = data['low'].iloc[-10:].min()
-                if current_price < recent_low:
-                    return True, "직전저점 이탈"
-            
-            return False, ""
-            
-        except Exception as e:
-            self.logger.error(f"❌ 가격박스 손절 조건 확인 오류: {e}")
-            return False, ""
-    
-    def _check_bollinger_stop_loss(self, data, buy_price, current_price, trading_stock) -> Tuple[bool, str]:
-        """볼린저밴드 전략 손절 조건"""
-        try:
-            from core.indicators.bollinger_bands import BollingerBands
-            
-            bb_signals = BollingerBands.generate_trading_signals(data['close'])
-            
-            # 매수 사유별 손절
-            if "상한선 돌파" in trading_stock.selection_reason:
-                # 돌파 양봉의 저가 이탈 또는 중심선 이탈
-                if current_price < bb_signals['sma'].iloc[-1]:
-                    return True, "볼린저 중심선 이탈"
-                    
-                # 돌파 양봉 저가 찾기 (최근 10개 중)
-                for i in range(max(0, len(data)-10), len(data)):
-                    if bb_signals['upper_breakout'].iloc[i]:
-                        breakout_low = data['low'].iloc[i]
-                        if current_price < breakout_low:
-                            return True, "돌파 양봉 저가 이탈"
-                        break
-                        
-            elif "하한선 지지" in trading_stock.selection_reason:
-                # 지지 캔들 저가 이탈
-                for i in range(max(0, len(data)-10), len(data)):
-                    if (bb_signals['lower_touch'].iloc[i] or bb_signals['oversold'].iloc[i]):
-                        support_low = data['low'].iloc[i]
-                        if current_price < support_low:
-                            return True, "지지 캔들 저가 이탈"
-                        break
-            
-            return False, ""
-            
-        except Exception as e:
-            self.logger.error(f"❌ 볼린저밴드 손절 조건 확인 오류: {e}")
-            return False, ""
-    
-    def _check_multi_bollinger_stop_loss(self, data, buy_price, current_price) -> Tuple[bool, str]:
-        """다중 볼린저밴드 전략 손절 조건 (5분봉 기준)"""
-        try:
-            from core.indicators.multi_bollinger_bands import MultiBollingerBands
-            
-            # 1분봉 데이터를 5분봉으로 변환
-            data_5min = TimeFrameConverter.convert_to_5min_data_hts_style(data)
-            if data_5min is None or len(data_5min) < 20:
-                return False, "5분봉 데이터 부족"
-            
-            prices = data_5min['close']
-            volume_data = data_5min['volume'] if 'volume' in data_5min.columns else None
-            
-            # 다중 볼린저밴드 신호 계산 (5분봉 기준)
-            signals = MultiBollingerBands.generate_trading_signals(prices, volume_data)
-            
-            # 손절 조건 1: 이등분선 이탈
-            if signals['stop_bisector'].iloc[-1]:
-                return True, "이등분선 이탈"
-            
-            # 손절 조건 2: 중심선(20기간 SMA) 이탈
-            if signals['stop_center'].iloc[-1]:
-                return True, "중심선 이탈"
-            
-            return False, ""
-            
-        except Exception as e:
-            self.logger.error(f"❌ 다중볼린저밴드 손절 조건 확인 오류: {e}")
-            return False, ""
     
     def _get_target_profit_rate(self, data_3min: pd.DataFrame, signal_type: str) -> float:
         """신호 강도에 따른 목표수익률 계산"""
