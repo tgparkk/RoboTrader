@@ -710,13 +710,10 @@ class KISAPIManager:
                     if filled_qty != expected_filled:
                         self.logger.warning(f"⚠️ 체결량 불일치 감지: {order_id} - "
                                           f"체결내역: {filled_qty}주, 계산값: {expected_filled}주")
-                        # 🚨 핵심 수정: 실제 체결량을 우선하되, 0이면 계산값 사용
-                        if filled_qty == 0 and expected_filled > 0:
-                            self.logger.info(f"📊 체결량 0이므로 잔여량 기준 계산값 사용: {expected_filled}주")
-                            filled_qty = expected_filled
-                        else:
-                            self.logger.info(f"📊 실제 체결 내역 우선 사용: {filled_qty}주")
-                            # 실제 체결량이 0이 아니면 그대로 사용
+                        # 🚨 핵심 수정: 실제 체결 내역만 신뢰 (계산값 사용 금지)
+                        # 실제 체결 내역이 없으면 무조건 체결량 0
+                        self.logger.info(f"📊 실제 체결 내역 기준: {filled_qty}주 (계산값 {expected_filled}주는 무시)")
+                        # filled_qty는 그대로 유지 (실제 체결 내역 기준)
                         
                 except (ValueError, TypeError) as e:
                     self.logger.error(f"❌ 미체결 주문 수량 파싱 오류: {order_id} - {e}")

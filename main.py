@@ -244,20 +244,34 @@ class DayTradingBot:
             from core.models import StockState
             
             selected_stocks = self.trading_manager.get_stocks_by_state(StockState.SELECTED)
-            buy_candidates = self.trading_manager.get_stocks_by_state(StockState.BUY_CANDIDATE)
             positioned_stocks = self.trading_manager.get_stocks_by_state(StockState.POSITIONED)
-            # 포지션 상태 진단 로그 (1회성 아님)
-            self.logger.debug(
-                f"📦 상태요약: SELECTED={len(selected_stocks)} BUY_CANDIDATE={len(buy_candidates)} POSITIONED={len(positioned_stocks)}"
+            buy_pending_stocks = self.trading_manager.get_stocks_by_state(StockState.BUY_PENDING)
+            sell_pending_stocks = self.trading_manager.get_stocks_by_state(StockState.SELL_PENDING)
+            
+            self.logger.info(
+                f"📦 종목 상태 현황:\n"
+                f"  - SELECTED: {len(selected_stocks)}개 (매수 판단 대상)\n"
+                f"  - COMPLETED: {len(completed_stocks)}개 (재거래 가능)\n"
+                f"  - BUY_PENDING: {len(buy_pending_stocks)}개 (매수 주문 중)\n"
+                f"  - POSITIONED: {len(positioned_stocks)}개 (보유중)\n"
+                f"  - SELL_PENDING: {len(sell_pending_stocks)}개 (매도 주문 중)"
             )
             
-            # 매수 판단: 선정된 종목들
-            if selected_stocks:
-                #self.logger.debug(f"🔍 매수 판단 대상 {len(selected_stocks)}개 종목: {[f'{s.stock_code}({s.stock_name})' for s in selected_stocks]}")
-                for trading_stock in selected_stocks:
+            # 매수 주문 중인 종목 상세 정보
+            if buy_pending_stocks:
+                for stock in buy_pending_stocks:
+                    self.logger.info(f"  📊 매수 체결 대기: {stock.stock_code}({stock.stock_name}) - 주문ID: {stock.current_order_id}")
+            
+            # 매수 판단: 선정된 종목들 + 재거래 가능한 완료 종목들
+            completed_stocks = self.trading_manager.get_stocks_by_state(StockState.COMPLETED)
+            buy_decision_candidates = selected_stocks + completed_stocks
+            
+            if buy_decision_candidates:
+                self.logger.debug(f"🔍 매수 판단 대상: SELECTED={len(selected_stocks)}개, COMPLETED={len(completed_stocks)}개 (총 {len(buy_decision_candidates)}개)")
+                for trading_stock in buy_decision_candidates:
                     await self._analyze_buy_decision(trading_stock)
             else:
-                self.logger.debug("📊 매수 판단 대상 종목 없음 (SELECTED 상태 종목 없음)")
+                self.logger.debug("📊 매수 판단 대상 종목 없음 (SELECTED + COMPLETED 상태 종목 없음)")
             
             # 🆕 가상매매 vs 실제거래 모드에 따른 매도 로직 분리
             if self.decision_engine.is_virtual_mode:
@@ -357,27 +371,17 @@ class DayTradingBot:
                 if current_stock:
                     self.logger.debug(f"🔍 매수 전 상태 확인: {stock_code} 현재상태={current_stock.state.value}")
                 
-                # 매수 후보로 변경
-                success = self.trading_manager.move_to_buy_candidate(stock_code, buy_reason)
-                if success:
-                    self.logger.debug(f"✅ {stock_code} 매수 후보로 변경 성공")
-                else:
-                    self.logger.warning(f"❌ {stock_code} 매수 후보로 변경 실패")
-                    return
-                
-                if success:
-                    # 실제 매수 실행 (완성된 3분봉 기준으로 확정된 신호)
-                    try:
-                        await self.decision_engine.execute_real_buy(
-                            trading_stock, 
-                            buy_reason, 
-                            buy_info['buy_price'], 
-                            buy_info['quantity']
-                        )
-                        # 상태는 주문 처리 로직에서 자동으로 변경됨 (BUYING -> POSITIONED)
-                        self.logger.info(f"🔥 실제 매수 주문 완료: {stock_code}({stock_name}) - {buy_reason}")
-                    except Exception as e:
-                        self.logger.error(f"❌ 실제 매수 처리 오류: {e}")
+                try:
+                    await self.decision_engine.execute_real_buy(
+                        trading_stock, 
+                        buy_reason, 
+                        buy_info['buy_price'], 
+                        buy_info['quantity']
+                    )
+                    # 상태는 주문 처리 로직에서 자동으로 변경됨 (SELECTED -> BUY_PENDING -> POSITIONED)
+                    self.logger.info(f"🔥 실제 매수 주문 완료: {stock_code}({stock_name}) - {buy_reason}")
+                except Exception as e:
+                    self.logger.error(f"❌ 실제 매수 처리 오류: {e}")
                     
                     # [기존 가상매매 코드 - 주석처리]
                     # try:
@@ -392,7 +396,8 @@ class DayTradingBot:
                     #     self.logger.error(f"❌ 가상 매수 처리 오류: {e}")
                     
             else:
-                self.logger.debug(f"📊 {stock_code}({stock_name}) 매수 신호 없음")
+                #self.logger.debug(f"📊 {stock_code}({stock_name}) 매수 신호 없음")
+                pass
                         
         except Exception as e:
             self.logger.error(f"❌ {trading_stock.stock_code} 매수 판단 오류: {e}")
@@ -630,7 +635,7 @@ class DayTradingBot:
                         if chart_generation_count >= 1:
                             self.logger.info("✅ 장 마감 후 차트 생성 완료 (1회 실행 완료)")
                 
-                # 30분마다 시스템 상태 로그 # 30초 대기로 변경
+                # 시스템 모니터링 루프 대기 (30초 주기)
                 await asyncio.sleep(30)  
                 
                 # 30분마다 시스템 상태 로깅
@@ -898,9 +903,9 @@ class DayTradingBot:
             
             # 🆕 완성된 봉만 수집하는 것을 로깅
             self.logger.debug(f"🔄 실시간 데이터 업데이트 시작: {current_time.strftime('%H:%M:%S')} "
-                            f"(완성된 분봉만 수집)")
+                            f"(모든 관리 종목 - 재거래 대응)")
             
-            # 모든 선정 종목의 실시간 데이터 업데이트
+            # 모든 관리 종목의 실시간 데이터 업데이트 (재거래를 위해 COMPLETED, FAILED 상태도 포함)
             await self.intraday_manager.batch_update_realtime_data()
             
         except Exception as e:

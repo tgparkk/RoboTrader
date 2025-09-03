@@ -7,7 +7,7 @@ from typing import Dict, List, Optional, Tuple, Any
 import threading
 from collections import defaultdict
 
-from .models import TradingStock, StockState, OrderType, OrderStatus
+from .models import TradingStock, StockState, OrderType, OrderStatus, Order
 from .intraday_stock_manager import IntradayStockManager
 from .data_collector import RealTimeDataCollector
 from .order_manager import OrderManager
@@ -57,11 +57,10 @@ class TradingStockManager:
         
         # 모니터링 설정
         self.is_monitoring = False
-        self.monitor_interval = 10  # 10초마다 상태 체크
+        self.monitor_interval = 3  # 3초마다 상태 체크 (체결 확인 빠르게)
         
         # 재거래 설정
-        self.enable_re_trading = True  # 매도 완료 후 재거래 허용
-        self.re_trading_wait_minutes = 0  # 매도 완료 후 재거래까지 대기 시간(분) - 즉시 재거래
+        self.enable_re_trading = True  # 매도 완료 후 재거래 허용 (COMPLETED 상태에서 직접 매수 판단)
         
         self.logger.info("🎯 종목 거래 상태 통합 관리자 초기화 완료")
         # 주문 관리자에 역참조 등록 (정정 시 주문ID 동기화용)
@@ -149,42 +148,7 @@ class TradingStockManager:
             self.logger.error(f"❌ {stock_code} 종목 추가 오류: {e}")
             return False
     
-    def move_to_buy_candidate(self, stock_code: str, reason: str = "") -> bool:
-        """
-        선정된 종목을 매수 후보로 변경
-        
-        Args:
-            stock_code: 종목코드
-            reason: 변경 사유
-            
-        Returns:
-            bool: 변경 성공 여부
-        """
-        try:
-            with self._lock:
-                if stock_code not in self.trading_stocks:
-                    self.logger.warning(f"⚠️ {stock_code}: 관리 중이지 않은 종목")
-                    return False
-                
-                trading_stock = self.trading_stocks[stock_code]
-                
-                # 상태 검증
-                if trading_stock.state != StockState.SELECTED:
-                    self.logger.warning(f"⚠️ {stock_code}: 선정 상태가 아님 (현재: {trading_stock.state.value})")
-                    return False
-                
-                # 상태 변경
-                self._change_stock_state(stock_code, StockState.BUY_CANDIDATE, reason)
-                
-                # 데이터 수집기에 후보 종목으로 추가
-                self.data_collector.add_candidate_stock(stock_code, trading_stock.stock_name)
-                
-                self.logger.info(f"📈 {stock_code} 매수 후보로 변경: {reason}")
-                return True
-                
-        except Exception as e:
-            self.logger.error(f"❌ {stock_code} 매수 후보 변경 오류: {e}")
-            return False
+
     
     async def execute_buy_order(self, stock_code: str, quantity: int, 
                                price: float, reason: str = "") -> bool:
@@ -208,13 +172,16 @@ class TradingStockManager:
                 
                 trading_stock = self.trading_stocks[stock_code]
                 
-                # 상태 검증
-                if trading_stock.state != StockState.BUY_CANDIDATE:
-                    self.logger.warning(f"⚠️ {stock_code}: 매수 후보 상태가 아님 (현재: {trading_stock.state.value})")
+                # 상태 검증 (SELECTED 또는 COMPLETED에서 직접 매수 가능)
+                if trading_stock.state not in [StockState.SELECTED, StockState.COMPLETED]:
+                    self.logger.warning(f"⚠️ {stock_code}: 매수 가능 상태가 아님 (현재: {trading_stock.state.value})")
                     return False
                 
                 # 매수 주문 중 상태로 변경
                 self._change_stock_state(stock_code, StockState.BUY_PENDING, f"매수 주문: {reason}")
+                
+                # 데이터 수집기에 후보 종목으로 추가 (실시간 모니터링)
+                self.data_collector.add_candidate_stock(stock_code, trading_stock.stock_name)
             
             # 매수 주문 실행
             order_id = await self.order_manager.place_buy_order(stock_code, quantity, price)
@@ -227,17 +194,20 @@ class TradingStockManager:
                 self.logger.info(f"📈 {stock_code} 매수 주문 성공: {order_id}")
                 return True
             else:
-                # 주문 실패 시 매수 후보로 되돌림
+                # 주문 실패 시 원래 상태로 되돌림 (SELECTED 또는 COMPLETED)
                 with self._lock:
-                    self._change_stock_state(stock_code, StockState.BUY_CANDIDATE, "매수 주문 실패")
+                    # 원래 상태 추정: 재거래면 COMPLETED, 신규면 SELECTED
+                    original_state = StockState.COMPLETED if "재거래" in reason else StockState.SELECTED
+                    self._change_stock_state(stock_code, original_state, "매수 주문 실패")
                 return False
                 
         except Exception as e:
             self.logger.error(f"❌ {stock_code} 매수 주문 오류: {e}")
-            # 오류 시 매수 후보로 되돌림
+            # 오류 시 원래 상태로 되돌림
             with self._lock:
                 if stock_code in self.trading_stocks:
-                    self._change_stock_state(stock_code, StockState.BUY_CANDIDATE, f"매수 주문 오류: {e}")
+                    original_state = StockState.COMPLETED if "재거래" in reason else StockState.SELECTED
+                    self._change_stock_state(stock_code, original_state, f"매수 주문 오류: {e}")
             return False
     
     def move_to_sell_candidate(self, stock_code: str, reason: str = "") -> bool:
@@ -259,9 +229,9 @@ class TradingStockManager:
                 
                 trading_stock = self.trading_stocks[stock_code]
                 
-                # 상태 검증
-                if trading_stock.state != StockState.POSITIONED:
-                    self.logger.warning(f"⚠️ {stock_code}: 포지션 상태가 아님 (현재: {trading_stock.state.value})")
+                # 상태 검증 (POSITIONED 또는 SELL_CANDIDATE에서 매도 시도 가능)
+                if trading_stock.state not in [StockState.POSITIONED, StockState.SELL_CANDIDATE]:
+                    self.logger.warning(f"⚠️ {stock_code}: 매도 가능 상태가 아님 (현재: {trading_stock.state.value})")
                     return False
                 
                 # 포지션 확인
@@ -354,6 +324,8 @@ class TradingStockManager:
     async def _monitor_stock_states(self):
         """종목 상태 모니터링"""
         try:
+            self.logger.debug("🔄 종목 상태 모니터링 실행")
+            
             # 주문 완료 확인
             await self._check_order_completions()
             
@@ -385,11 +357,17 @@ class TradingStockManager:
             if not trading_stock.current_order_id:
                 return
             
+            self.logger.debug(f"🔍 매수 주문 체결 확인 시작: {trading_stock.stock_code} - 주문ID: {trading_stock.current_order_id}")
+            
             # 주문 관리자에서 완료된 주문 확인
             completed_orders = self.order_manager.get_completed_orders()
+            self.logger.debug(f"📋 전체 완료 주문 수: {len(completed_orders)}")
+            
             for order in completed_orders:
                 if (order.order_id == trading_stock.current_order_id and 
                     order.stock_code == trading_stock.stock_code):
+                    
+                    self.logger.info(f"✅ 매칭된 완료 주문 발견: {order.order_id} - 상태: {order.status.value}")
                     
                     if order.status == OrderStatus.FILLED:
                         # 매수 완료 - 포지션 상태로 변경
@@ -423,9 +401,11 @@ class TradingStockManager:
                         # 매수 실패 - 매수 후보로 되돌림
                         with self._lock:
                             trading_stock.clear_current_order()
+                            # 매수 실패 시 원래 상태로 복귀
+                            original_state = StockState.COMPLETED if "재거래" in trading_stock.selection_reason else StockState.SELECTED
                             self._change_stock_state(
                                 trading_stock.stock_code, 
-                                StockState.BUY_CANDIDATE, 
+                                original_state, 
                                 f"매수 실패: {order.status.value}"
                             )
                     
@@ -475,9 +455,9 @@ class TradingStockManager:
                         
                         self.logger.info(f"✅ {trading_stock.stock_code} 매도 완료")
                         
-                        # 매도 완료 후 재거래 스케줄링
+                        # 매도 완료 후 즉시 재거래 준비 (COMPLETED 상태 유지)
                         if self.enable_re_trading:
-                            asyncio.create_task(self._schedule_re_trading(trading_stock))
+                            self.logger.info(f"🔄 {trading_stock.stock_code} 즉시 재거래 준비 완료 (COMPLETED 상태 유지)")
                         
                     elif order.status in [OrderStatus.CANCELLED, OrderStatus.FAILED]:
                         # 매도 실패 - 매도 후보로 되돌림
@@ -509,62 +489,7 @@ class TradingStockManager:
         except Exception as e:
             self.logger.error(f"❌ 포지션 현재가 업데이트 오류: {e}")
     
-    async def _schedule_re_trading(self, trading_stock: TradingStock):
-        """매도 완료된 종목의 재거래 스케줄링"""
-        try:
-            stock_code = trading_stock.stock_code
-            stock_name = trading_stock.stock_name
-            
-            # 대기 시간 계산
-            wait_seconds = self.re_trading_wait_minutes * 60
-            
-            if wait_seconds > 0:
-                self.logger.info(f"🔄 {stock_code}({stock_name}) 재거래 스케줄: {self.re_trading_wait_minutes}분 후")
-                # 지정된 시간만큼 대기
-                await asyncio.sleep(wait_seconds)
-            else:
-                self.logger.info(f"🔄 {stock_code}({stock_name}) 즉시 재거래 시작")
-            
-            # 장 마감 시간 체크 (재거래는 시간 제한 없음)
-            # if not is_market_open():
-            #     self.logger.info(f"⏰ {stock_code} 재거래 취소 - 장 마감")
-            #     return
-            
-            # 종목이 여전히 COMPLETED 상태인지 확인 (중간에 제거되거나 다른 상태로 변경될 수 있음)
-            with self._lock:
-                if stock_code not in self.trading_stocks:
-                    self.logger.info(f"⚠️ {stock_code} 재거래 취소 - 종목이 관리 목록에서 제거됨")
-                    return
-                
-                current_stock = self.trading_stocks[stock_code]
-                if current_stock.state != StockState.COMPLETED:
-                    self.logger.info(f"⚠️ {stock_code} 재거래 취소 - 상태 변경됨 (현재: {current_stock.state.value})")
-                    return
-                
-                # SELECTED 상태로 변경하여 재거래 준비
-                current_stock.selected_time = now_kst()
-                current_stock.selection_reason = f"재거래 (이전: {trading_stock.selection_reason})"
-                # 포지션/주문 정보는 이미 정리됨
-                self._change_stock_state(stock_code, StockState.SELECTED, "자동 재거래 시작")
-            
-            # IntradayStockManager에 다시 추가
-            success = await self.intraday_manager.add_selected_stock(
-                stock_code, stock_name, f"재거래 (이전: {trading_stock.selection_reason})"
-            )
-            
-            if success:
-                self.logger.info(f"🔄 {stock_code}({stock_name}) 재거래 시작")
-            else:
-                # 실패 시 다시 COMPLETED 상태로 되돌림
-                with self._lock:
-                    if stock_code in self.trading_stocks:
-                        self._change_stock_state(stock_code, StockState.COMPLETED, "재거래 시작 실패")
-                self.logger.warning(f"⚠️ {stock_code} 재거래 시작 실패")
-                
-        except asyncio.CancelledError:
-            self.logger.info(f"🔄 {trading_stock.stock_code} 재거래 스케줄 취소됨")
-        except Exception as e:
-            self.logger.error(f"❌ {trading_stock.stock_code} 재거래 스케줄링 오류: {e}")
+
     
     def _register_stock(self, trading_stock: TradingStock):
         """종목 등록"""
@@ -636,9 +561,7 @@ class TradingStockManager:
             log_parts.append(f"선정시간: {trading_stock.selected_time.strftime('%H:%M:%S')}")
             
             # 상태별 특별 정보
-            if new_state == StockState.BUY_CANDIDATE:
-                log_parts.append("🎯 매수 신호 발생 - 주문 대기 중")
-            elif new_state == StockState.BUY_PENDING:
+            if new_state == StockState.BUY_PENDING:
                 log_parts.append("⏳ 매수 주문 실행됨 - 체결 대기 중")
             elif new_state == StockState.POSITIONED:
                 log_parts.append("✅ 매수 체결 완료 - 포지션 보유 중")
@@ -677,6 +600,89 @@ class TradingStockManager:
                     self.logger.debug(f"🔄 {stock_code} 현재 주문ID 업데이트: {new_order_id}")
         except Exception as e:
             self.logger.warning(f"⚠️ 현재 주문ID 업데이트 실패({stock_code}): {e}")
+    
+    async def on_order_filled(self, order: 'Order'):
+        """주문 체결 시 즉시 호출되는 콜백 메서드"""
+        try:
+            from .models import OrderType, OrderStatus
+            
+            self.logger.info(f"🔔 주문 체결 콜백 수신: {order.order_id} - {order.stock_code} ({order.order_type.value})")
+            
+            with self._lock:
+                if order.stock_code not in self.trading_stocks:
+                    self.logger.warning(f"⚠️ 체결 콜백: 관리되지 않는 종목 {order.stock_code}")
+                    return
+                
+                trading_stock = self.trading_stocks[order.stock_code]
+                
+                if order.order_type == OrderType.BUY:
+                    # 매수 체결
+                    if trading_stock.state == StockState.BUY_PENDING:
+                        trading_stock.set_position(order.quantity, order.price)
+                        trading_stock.clear_current_order()
+                        self._change_stock_state(
+                            trading_stock.stock_code, 
+                            StockState.POSITIONED, 
+                            f"매수 체결 (콜백): {order.quantity}주 @{order.price:,.0f}원"
+                        )
+                        
+                        # 실거래 매수 기록 저장
+                        try:
+                            from db.database_manager import DatabaseManager
+                            db = DatabaseManager()
+                            db.save_real_buy(
+                                stock_code=trading_stock.stock_code,
+                                stock_name=trading_stock.stock_name,
+                                price=float(order.price),
+                                quantity=int(order.quantity),
+                                strategy=trading_stock.selection_reason,
+                                reason="체결(콜백)"
+                            )
+                        except Exception as db_err:
+                            self.logger.warning(f"⚠️ 실거래 매수 기록 저장 실패: {db_err}")
+                        
+                        self.logger.info(f"✅ 매수 체결 처리 완료 (콜백): {trading_stock.stock_code}")
+                    else:
+                        self.logger.warning(f"⚠️ 예상치 못한 상태에서 매수 체결: {trading_stock.state.value}")
+                
+                elif order.order_type == OrderType.SELL:
+                    # 매도 체결
+                    if trading_stock.state == StockState.SELL_PENDING:
+                        trading_stock.clear_position()
+                        trading_stock.clear_current_order()
+                        self._change_stock_state(
+                            trading_stock.stock_code, 
+                            StockState.COMPLETED, 
+                            f"매도 체결 (콜백): {order.quantity}주 @{order.price:,.0f}원"
+                        )
+                        
+                        # 실거래 매도 기록 저장
+                        try:
+                            from db.database_manager import DatabaseManager
+                            db = DatabaseManager()
+                            buy_id = db.get_last_open_real_buy(trading_stock.stock_code)
+                            db.save_real_sell(
+                                stock_code=trading_stock.stock_code,
+                                stock_name=trading_stock.stock_name,
+                                price=float(order.price),
+                                quantity=int(order.quantity),
+                                strategy=trading_stock.selection_reason,
+                                reason="체결(콜백)",
+                                buy_record_id=buy_id
+                            )
+                        except Exception as db_err:
+                            self.logger.warning(f"⚠️ 실거래 매도 기록 저장 실패: {db_err}")
+                        
+                        self.logger.info(f"✅ 매도 체결 처리 완료 (콜백): {trading_stock.stock_code}")
+                        
+                        # 매도 완료 후 즉시 재거래 준비 (COMPLETED 상태 유지)
+                        if self.enable_re_trading:
+                            self.logger.info(f"🔄 {trading_stock.stock_code} 즉시 재거래 준비 완료 (COMPLETED 상태 유지)")
+                    else:
+                        self.logger.warning(f"⚠️ 예상치 못한 상태에서 매도 체결: {trading_stock.state.value}")
+                        
+        except Exception as e:
+            self.logger.error(f"❌ 주문 체결 콜백 처리 오류: {e}")
     
     def get_portfolio_summary(self) -> Dict[str, Any]:
         """포트폴리오 전체 현황"""
@@ -741,25 +747,22 @@ class TradingStockManager:
         self.is_monitoring = False
         self.logger.info("🔍 종목 상태 모니터링 중단")
     
-    def set_re_trading_config(self, enable: bool, wait_minutes: int = 5):
+    def set_re_trading_config(self, enable: bool):
         """
         재거래 설정 변경
         
         Args:
-            enable: 재거래 활성화 여부
-            wait_minutes: 매도 완료 후 재거래까지 대기 시간(분)
+            enable: 재거래 활성화 여부 (COMPLETED 상태에서 직접 매수 판단)
         """
         self.enable_re_trading = enable
-        self.re_trading_wait_minutes = max(0, wait_minutes)  # 최소 0분 (즉시 가능)
         
         status = "활성화" if enable else "비활성화"
-        self.logger.info(f"🔄 재거래 설정 변경: {status}, 대기시간: {self.re_trading_wait_minutes}분")
+        self.logger.info(f"🔄 재거래 설정 변경: {status} (즉시 재거래 방식)")
     
     def get_re_trading_config(self) -> Dict[str, Any]:
         """재거래 설정 조회"""
         return {
-            "enable_re_trading": self.enable_re_trading,
-            "re_trading_wait_minutes": self.re_trading_wait_minutes
+            "enable_re_trading": self.enable_re_trading
         }
     
     def remove_stock(self, stock_code: str, reason: str = "") -> bool:

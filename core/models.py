@@ -26,13 +26,12 @@ class PositionType(Enum):
 
 class StockState(Enum):
     """종목 거래 상태"""
-    SELECTED = "selected"           # 조건검색으로 선정됨
-    BUY_CANDIDATE = "buy_candidate" # 매수 후보
+    SELECTED = "selected"           # 조건검색으로 선정됨 (매수 판단 대상)
     BUY_PENDING = "buy_pending"     # 매수 주문 중
     POSITIONED = "positioned"       # 매수 완료 (포지션 보유)
     SELL_CANDIDATE = "sell_candidate" # 매도 후보
     SELL_PENDING = "sell_pending"   # 매도 주문 중
-    COMPLETED = "completed"         # 거래 완료
+    COMPLETED = "completed"         # 거래 완료 (재거래 가능)
     FAILED = "failed"              # 거래 실패
 
 

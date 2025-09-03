@@ -185,7 +185,7 @@ class IntradayStockManager:
             target_date = selected_time.strftime("%Y%m%d")
             target_hour = selected_time.strftime("%H%M%S")
             
-            self.logger.info(f"📈 {stock_code} 당일 전체 데이터 수집 시작 (09:00 ~ {target_hour})")
+            #self.logger.info(f"📈 {stock_code} 당일 전체 데이터 수집 시작 (09:00 ~ {target_hour})")
             
             historical_data = await get_full_trading_day_data_async(
                 stock_code=stock_code,
@@ -786,6 +786,7 @@ class IntradayStockManager:
                 combined_data = combined_data.sort_values(['date', 'time']).reset_index(drop=True)
             
             # 데이터 수집 현황 로깅
+            '''
             if not combined_data.empty:
                 data_count = len(combined_data)
                 if 'time' in combined_data.columns:
@@ -794,6 +795,7 @@ class IntradayStockManager:
                     self.logger.debug(f"📊 {stock_code} 당일 전체 데이터: {data_count}건 ({start_time}~{end_time})")
                 else:
                     self.logger.debug(f"📊 {stock_code} 당일 전체 데이터: {data_count}건")
+            '''
             
             return combined_data
             

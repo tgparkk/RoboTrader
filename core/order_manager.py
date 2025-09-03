@@ -105,10 +105,12 @@ class OrderManager:
                 )
                 
                 # 미체결 관리에 추가
+                timeout_time = now_kst() + timedelta(seconds=timeout_seconds)
                 self.pending_orders[result.order_id] = order
-                self.order_timeouts[result.order_id] = now_kst() + timedelta(seconds=timeout_seconds)
+                self.order_timeouts[result.order_id] = timeout_time
                 
                 self.logger.info(f"✅ 매수 주문 성공: {result.order_id} - {stock_code} {quantity}주 @{price:,.0f}원")
+                self.logger.info(f"⏰ 타임아웃 설정: {timeout_seconds}초 후 ({timeout_time.strftime('%H:%M:%S')}에 취소)")
                 
                 # 텔레그램 알림
                 if self.telegram:
@@ -236,7 +238,7 @@ class OrderManager:
                     continue
                 
                 await self._monitor_pending_orders()
-                await asyncio.sleep(10)  # 10초마다 체크
+                await asyncio.sleep(3)  # 3초마다 체크 (체결 빠른 확인)
                 
             except Exception as e:
                 self.logger.error(f"주문 모니터링 중 오류: {e}")
@@ -247,17 +249,36 @@ class OrderManager:
         current_time = now_kst()
         orders_to_process = list(self.pending_orders.keys())
         
+        if orders_to_process:
+            self.logger.debug(f"🔍 미체결 주문 모니터링: {len(orders_to_process)}건 처리 중 ({current_time.strftime('%H:%M:%S')})")
+        
+        # 🆕 오탐지 복구: 최근 완료된 주문 중 실제 미체결인 것 확인
+        await self._check_false_positive_filled_orders(current_time)
+        
         for order_id in orders_to_process:
             try:
                 order = self.pending_orders[order_id]
                 timeout_time = self.order_timeouts.get(order_id)
                 
+                # 주문 상세 정보 로깅 (디버깅용)
+                elapsed_seconds = (current_time - order.timestamp).total_seconds()
+                remaining_seconds = (timeout_time - current_time).total_seconds() if timeout_time else 0
+                self.logger.debug(f"📊 주문 {order_id} ({order.stock_code}): "
+                                f"경과 {elapsed_seconds:.0f}초, 남은시간 {remaining_seconds:.0f}초")
+                
                 # 1. 체결 상태 확인
                 await self._check_order_status(order_id)
                 
-                # 2. 타임아웃 체크
+                # 주문이 처리되었으면 더 이상 확인하지 않음
+                if order_id not in self.pending_orders:
+                    continue
+                
+                # 2. 타임아웃 체크 (5분 기준)
                 if timeout_time and current_time > timeout_time:
+                    self.logger.info(f"⏰ 시간 기반 타임아웃 감지: {order_id} ({order.stock_code}) "
+                                   f"- 경과시간: {(current_time - order.timestamp).total_seconds():.0f}초")
                     await self._handle_timeout(order_id)
+                    continue  # 취소된 주문은 더 이상 처리하지 않음
                 
                 # 2-1. 매수 주문의 3분봉 체크 (3봉 후 취소)
                 if order.order_type == OrderType.BUY and order.order_3min_candle_time:
@@ -270,6 +291,84 @@ class OrderManager:
                 
             except Exception as e:
                 self.logger.error(f"주문 모니터링 중 오류 {order_id}: {e}")
+    
+    async def _check_false_positive_filled_orders(self, current_time):
+        """오탐지된 체결 주문 복구 (최근 10분 이내 완료된 주문만 확인)"""
+        try:
+            if not self.completed_orders:
+                return
+            
+            # 최근 10분 이내 완료된 주문들만 확인
+            recent_completed = [
+                order for order in self.completed_orders[-10:]  # 최근 10건만
+                if (current_time - order.timestamp).total_seconds() <= 600  # 10분 이내
+                and order.status == OrderStatus.FILLED  # 체결로 처리된 것만
+                and order.order_type == OrderType.BUY  # 매수 주문만 (매도는 즉시 확인됨)
+            ]
+            
+            if not recent_completed:
+                return
+            
+            self.logger.debug(f"🔍 오탐지 복구 체크: 최근 완료된 {len(recent_completed)}건 확인")
+            
+            for order in recent_completed:
+                # API에서 실제 상태 재확인
+                loop = asyncio.get_event_loop()
+                status_data = await loop.run_in_executor(
+                    self.executor,
+                    self.api_manager.get_order_status,
+                    order.order_id
+                )
+                
+                if status_data:
+                    # 실제로는 미체결인지 확인
+                    try:
+                        filled_qty = int(str(status_data.get('tot_ccld_qty', 0)).replace(',', '').strip() or 0)
+                        remaining_qty = int(str(status_data.get('rmn_qty', 0)).replace(',', '').strip() or 0)
+                        is_actual_unfilled = bool(status_data.get('actual_unfilled', False))
+                        cancelled = status_data.get('cncl_yn', 'N')
+                        
+                        # 오탐지 감지: 체결로 처리했지만 실제로는 미체결
+                        if (filled_qty == 0 or remaining_qty > 0 or is_actual_unfilled) and cancelled != 'Y':
+                            self.logger.warning(f"🚨 체결 오탐지 감지: {order.order_id} ({order.stock_code})")
+                            self.logger.warning(f"   - 실제 상태: 체결={filled_qty}, 잔여={remaining_qty}, 미체결={is_actual_unfilled}")
+                            
+                            # pending_orders로 복구
+                            await self._restore_false_positive_order(order, current_time)
+                            
+                    except Exception as parse_err:
+                        self.logger.debug(f"오탐지 체크 파싱 오류 {order.order_id}: {parse_err}")
+                        
+        except Exception as e:
+            self.logger.error(f"❌ 오탐지 복구 체크 오류: {e}")
+    
+    async def _restore_false_positive_order(self, order, current_time):
+        """오탐지된 주문을 pending_orders로 복구"""
+        try:
+            # completed_orders에서 제거
+            if order in self.completed_orders:
+                self.completed_orders.remove(order)
+            
+            # pending_orders로 복구
+            order.status = OrderStatus.PENDING
+            self.pending_orders[order.order_id] = order
+            
+            # 타임아웃 재설정 (남은 시간 계산)
+            elapsed_seconds = (current_time - order.timestamp).total_seconds()
+            remaining_timeout = max(30, 180 - elapsed_seconds)  # 최소 30초는 남겨둠
+            self.order_timeouts[order.order_id] = current_time + timedelta(seconds=remaining_timeout)
+            
+            self.logger.warning(f"🔄 오탐지 주문 복구: {order.order_id} ({order.stock_code}) "
+                              f"- 남은 타임아웃: {remaining_timeout:.0f}초")
+            
+            # 텔레그램 알림
+            if self.telegram:
+                await self.telegram.notify_system_status(
+                    f"오탐지 복구: {order.stock_code} 주문 {order.order_id} 복구됨"
+                )
+                
+        except Exception as e:
+            self.logger.error(f"❌ 오탐지 주문 복구 실패 {order.order_id}: {e}")
     
     async def _check_order_status(self, order_id: str):
         """주문 상태 확인"""
@@ -288,6 +387,15 @@ class OrderManager:
             )
             
             if status_data:
+                # 🆕 원본 데이터 로깅 (체결 판단 오류 디버깅용)
+                self.logger.info(f"📊 주문 상태 원본 데이터 [{order_id}]:\n"
+                               f"  - tot_ccld_qty(체결수량): {status_data.get('tot_ccld_qty')}\n"
+                               f"  - rmn_qty(잔여수량): {status_data.get('rmn_qty')}\n" 
+                               f"  - ord_qty(주문수량): {status_data.get('ord_qty')}\n"
+                               f"  - cncl_yn(취소여부): {status_data.get('cncl_yn')}\n"
+                               f"  - actual_unfilled: {status_data.get('actual_unfilled')}\n"
+                               f"  - status_unknown: {status_data.get('status_unknown')}")
+                
                 # 방어적 파싱 (쉼표/공백 등 제거)
                 try:
                     filled_qty = int(str(status_data.get('tot_ccld_qty', 0)).replace(',', '').strip() or 0)
@@ -300,6 +408,10 @@ class OrderManager:
                 cancelled = status_data.get('cncl_yn', 'N')
                 is_actual_unfilled = bool(status_data.get('actual_unfilled', False))
                 is_status_unknown = bool(status_data.get('status_unknown', False))
+                
+                self.logger.info(f"📊 파싱 결과 [{order_id}]: "
+                               f"filled={filled_qty}, remaining={remaining_qty}, "
+                               f"order_qty={order.quantity}, cancelled={cancelled}")
                 
                 # 상태 업데이트
                 order.filled_quantity = filled_qty
@@ -315,11 +427,54 @@ class OrderManager:
                 elif is_actual_unfilled:
                     # 실제 미체결 플래그가 명시된 경우 대기 유지
                     self.logger.debug(f"🔍 실제 미체결 상태: {order_id} - 잔여 {remaining_qty}")
-                elif remaining_qty == 0 and filled_qty >= order.quantity and filled_qty > 0:
-                    # 전량 체결 확정
+                elif remaining_qty == 0 and filled_qty == order.quantity and filled_qty > 0:
+                    # 🚨 초엄격 체결 확인 조건 (오탐지 방지 강화)
+                    # 1. 잔여수량 정확히 0
+                    # 2. 체결수량이 주문수량과 정확히 일치
+                    # 3. 체결수량이 0보다 큼
+                    # 4. actual_unfilled 플래그가 없음
+                    # 5. API 주문수량 일치 확인
+                    # 6. 취소 여부 재확인
+                    
+                    # 기본 검증
+                    if filled_qty != order.quantity:
+                        self.logger.warning(f"⚠️ 체결수량 불일치로 체결 판정 보류: 주문 {order.quantity}주, 체결 {filled_qty}주")
+                        return
+                    
+                    # API 응답의 주문수량 확인
+                    api_ord_qty = 0
+                    try:
+                        api_ord_qty = int(str(status_data.get('ord_qty', 0)).replace(',', '').strip() or 0)
+                    except:
+                        pass
+                    
+                    if api_ord_qty > 0 and api_ord_qty != order.quantity:
+                        self.logger.warning(f"⚠️ API 주문수량 불일치로 체결 판정 보류: 로컬 {order.quantity}주, API {api_ord_qty}주")
+                        return
+                    
+                    # 🆕 추가 안전 검증: 취소 여부 재확인
+                    cancelled = status_data.get('cncl_yn', 'N')
+                    if cancelled == 'Y':
+                        self.logger.warning(f"⚠️ 취소된 주문으로 체결 판정 보류: {order_id}")
+                        return
+                    
+                    # 🆕 추가 안전 검증: 실제 미체결 플래그 재확인
+                    is_actual_unfilled = bool(status_data.get('actual_unfilled', False))
+                    if is_actual_unfilled:
+                        self.logger.warning(f"⚠️ 실제 미체결 플래그로 체결 판정 보류: {order_id}")
+                        return
+                    
                     order.status = OrderStatus.FILLED
                     self._move_to_completed(order_id)
-                    self.logger.info(f"✅ 주문 완전 체결: {order_id} ({order.stock_code})")
+                    self.logger.info(f"✅ 주문 완전 체결 확정: {order_id} ({order.stock_code}) - {filled_qty}주")
+                    
+                    # 🆕 TradingStockManager에 즉시 알림 (콜백)
+                    if self.trading_manager:
+                        try:
+                            self.logger.info(f"📞 TradingStockManager에 체결 알림: {order_id}")
+                            await self.trading_manager.on_order_filled(order)
+                        except Exception as callback_err:
+                            self.logger.error(f"❌ 체결 콜백 오류: {callback_err}")
                     
                     # 텔레그램 체결 알림
                     if self.telegram:
@@ -331,25 +486,38 @@ class OrderManager:
                             'price': order.price
                         })
                 elif filled_qty > 0 and remaining_qty > 0:
-                    order.status = OrderStatus.PARTIAL
-                    self.logger.info(f"🔄 주문 부분 체결: {order_id} - {filled_qty}/{order.quantity} (잔여 {remaining_qty})")
+                    # 부분 체결 확인
+                    if filled_qty + remaining_qty == order.quantity:
+                        order.status = OrderStatus.PARTIAL
+                        self.logger.info(f"🔄 주문 부분 체결: {order_id} - {filled_qty}/{order.quantity} (잔여 {remaining_qty})")
+                    else:
+                        self.logger.warning(f"⚠️ 수량 불일치: 체결({filled_qty}) + 잔여({remaining_qty}) ≠ 주문({order.quantity})")
                 else:
-                    self.logger.debug(f"⏳ 주문 대기: {order_id} - 체결 {filled_qty}, 잔여 {remaining_qty}")
+                    # 그 외의 경우는 모두 미체결로 처리
+                    self.logger.debug(f"⏳ 주문 대기 (미체결): {order_id} - 체결 {filled_qty}, 잔여 {remaining_qty}")
                 
         except Exception as e:
             self.logger.error(f"주문 상태 확인 실패 {order_id}: {e}")
     
     async def _handle_timeout(self, order_id: str):
-        """타임아웃 처리"""
+        """타임아웃 처리 (5분 기준)"""
         try:
             if order_id not in self.pending_orders:
+                self.logger.warning(f"⚠️ 타임아웃 처리할 주문이 없음: {order_id}")
                 return
             
             order = self.pending_orders[order_id]
-            self.logger.warning(f"⏰ 주문 타임아웃: {order_id} ({order.stock_code})")
+            elapsed_time = (now_kst() - order.timestamp).total_seconds()
+            self.logger.warning(f"⏰ 5분 타임아웃 처리: {order_id} ({order.stock_code}) "
+                              f"- 경과시간: {elapsed_time:.0f}초")
             
             # 미체결 주문 취소
-            await self.cancel_order(order_id)
+            cancel_success = await self.cancel_order(order_id)
+            
+            if cancel_success:
+                self.logger.info(f"✅ 타임아웃 취소 성공: {order_id}")
+            else:
+                self.logger.error(f"❌ 타임아웃 취소 실패: {order_id}")
             
         except Exception as e:
             self.logger.error(f"타임아웃 처리 실패 {order_id}: {e}")
@@ -473,14 +641,24 @@ class OrderManager:
             self.logger.error(f"가격 정정 실패 {order_id}: {e}")
     
     def _move_to_completed(self, order_id: str):
-        """완료된 주문으로 이동"""
+        """완료된 주문으로 이동 (오탐지 방지 로깅 추가)"""
         if order_id in self.pending_orders:
             order = self.pending_orders.pop(order_id)
             self.completed_orders.append(order)
             
+            # 🆕 오탐지 추적을 위한 상세 로깅
+            elapsed_time = (now_kst() - order.timestamp).total_seconds()
+            self.logger.info(f"📋 주문 완료 처리: {order_id} ({order.stock_code}) "
+                           f"- 상태: {order.status.value}, 경과시간: {elapsed_time:.0f}초")
+            
             # 타임아웃 정보도 제거
             if order_id in self.order_timeouts:
                 del self.order_timeouts[order_id]
+                self.logger.debug(f"⏰ 타임아웃 정보 제거: {order_id}")
+            else:
+                self.logger.warning(f"⚠️ 타임아웃 정보 없음: {order_id}")
+        else:
+            self.logger.error(f"❌ 완료 처리할 주문이 없음: {order_id}")
     
     def get_pending_orders(self) -> List[Order]:
         """미체결 주문 목록 반환"""
