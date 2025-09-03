@@ -902,8 +902,8 @@ class DayTradingBot:
             current_time = now_kst()
             
             # 🆕 완성된 봉만 수집하는 것을 로깅
-            self.logger.debug(f"🔄 실시간 데이터 업데이트 시작: {current_time.strftime('%H:%M:%S')} "
-                            f"(모든 관리 종목 - 재거래 대응)")
+            #self.logger.debug(f"🔄 실시간 데이터 업데이트 시작: {current_time.strftime('%H:%M:%S')} "
+            #                f"(모든 관리 종목 - 재거래 대응)")
             
             # 모든 관리 종목의 실시간 데이터 업데이트 (재거래를 위해 COMPLETED, FAILED 상태도 포함)
             await self.intraday_manager.batch_update_realtime_data()
