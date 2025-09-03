@@ -96,7 +96,7 @@ class TradingDecisionEngine:
                     buy_price = combined_data['close'].iloc[-1]
                     self.logger.debug(f"⚠️ 3/5가 계산 실패, 현재가 사용: {buy_price:,.0f}원")
                 
-                max_buy_amount = self._get_max_buy_amount()
+                max_buy_amount = self._get_max_buy_amount(trading_stock.stock_code)
                 quantity = int(max_buy_amount // buy_price) if buy_price > 0 else 0
                 
                 if quantity > 0:
@@ -152,8 +152,13 @@ class TradingDecisionEngine:
             self.logger.error(f"❌ 매수가 계산 오류: {e}")
             return 0
     
-    def _get_max_buy_amount(self) -> float:
-        """최대 매수 가능 금액 조회 (계좌 잔고의 10%)"""
+    def _get_max_buy_amount(self, stock_code: str = "") -> float:
+        """최대 매수 가능 금액 조회"""
+        # 🆕 자금 관리 시스템 사용 (임시 주석 - 아직 연동 안됨)
+        # if hasattr(self, 'fund_manager') and self.fund_manager:
+        #     return self.fund_manager.get_max_buy_amount(stock_code)
+        
+        # 🆕 기존 방식 (현재 사용 중)
         max_buy_amount = 500000  # 기본값
         
         try:

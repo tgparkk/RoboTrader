@@ -172,10 +172,19 @@ class TradingStockManager:
                 
                 trading_stock = self.trading_stocks[stock_code]
                 
+                # 🆕 중복 매수 방지: 이미 매수 진행 중인지 확인
+                if trading_stock.is_buying:
+                    self.logger.warning(f"⚠️ {stock_code}: 이미 매수 진행 중 (중복 매수 방지)")
+                    return False
+                
                 # 상태 검증 (SELECTED 또는 COMPLETED에서 직접 매수 가능)
                 if trading_stock.state not in [StockState.SELECTED, StockState.COMPLETED]:
                     self.logger.warning(f"⚠️ {stock_code}: 매수 가능 상태가 아님 (현재: {trading_stock.state.value})")
                     return False
+                
+                # 🆕 매수 진행 플래그 설정
+                trading_stock.is_buying = True
+                trading_stock.order_processed = False  # 새 주문이므로 리셋
                 
                 # 매수 주문 중 상태로 변경
                 self._change_stock_state(stock_code, StockState.BUY_PENDING, f"매수 주문: {reason}")
@@ -196,6 +205,10 @@ class TradingStockManager:
             else:
                 # 주문 실패 시 원래 상태로 되돌림 (SELECTED 또는 COMPLETED)
                 with self._lock:
+                    trading_stock = self.trading_stocks[stock_code]
+                    # 🆕 매수 진행 플래그 리셋
+                    trading_stock.is_buying = False
+                    
                     # 원래 상태 추정: 재거래면 COMPLETED, 신규면 SELECTED
                     original_state = StockState.COMPLETED if "재거래" in reason else StockState.SELECTED
                     self._change_stock_state(stock_code, original_state, "매수 주문 실패")
@@ -615,9 +628,18 @@ class TradingStockManager:
                 
                 trading_stock = self.trading_stocks[order.stock_code]
                 
+                # 🆕 레이스 컨디션 방지: 이미 처리된 주문인지 확인
+                if trading_stock.order_processed:
+                    self.logger.debug(f"⚠️ 이미 처리된 주문 (중복 방지): {order.order_id}")
+                    return
+                
                 if order.order_type == OrderType.BUY:
                     # 매수 체결
                     if trading_stock.state == StockState.BUY_PENDING:
+                        # 🆕 체결 처리 플래그 설정
+                        trading_stock.order_processed = True
+                        trading_stock.is_buying = False  # 매수 완료
+                        
                         trading_stock.set_position(order.quantity, order.price)
                         trading_stock.clear_current_order()
                         self._change_stock_state(
@@ -648,6 +670,10 @@ class TradingStockManager:
                 elif order.order_type == OrderType.SELL:
                     # 매도 체결
                     if trading_stock.state == StockState.SELL_PENDING:
+                        # 🆕 체결 처리 플래그 설정
+                        trading_stock.order_processed = True
+                        trading_stock.is_selling = False  # 매도 완료
+                        
                         trading_stock.clear_position()
                         trading_stock.clear_current_order()
                         self._change_stock_state(

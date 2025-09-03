@@ -152,6 +152,11 @@ class TradingStock:
     last_update: datetime = field(default_factory=datetime.now)
     target_profit_rate: float = 0.015  # 목표수익률 (기본값 1.5%)
     
+    # 🆕 레이스 컨디션 방지 플래그
+    order_processed: bool = False  # 주문 체결 처리 완료 플래그
+    is_buying: bool = False        # 매수 진행 중 플래그
+    is_selling: bool = False       # 매도 진행 중 플래그
+    
     # 가상매매 관련 정보
     _virtual_buy_record_id: Optional[int] = None  # 가상 매수 기록 ID
     _virtual_buy_price: Optional[float] = None    # 가상 매수가
