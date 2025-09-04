@@ -66,7 +66,7 @@ class TradingDecisionEngine:
             stock_code = trading_stock.stock_code
             buy_info = {'buy_price': 0, 'quantity': 0, 'max_buy_amount': 0}
             
-            if combined_data is None or len(combined_data) < 10:
+            if combined_data is None or len(combined_data) < 15:
                 return False, "데이터 부족", buy_info
             
             # 보유 종목 여부 확인 - 이미 보유 중인 종목은 매수하지 않음
@@ -732,9 +732,11 @@ class TradingDecisionEngine:
             candle_end_time = last_candle_time + pd.Timedelta(minutes=3)
             is_confirmed = current_time >= candle_end_time
             
+            '''
             self.logger.debug(f"📊 3분봉 확정 체크 (signal_replay 방식): 마지막캔들={last_candle_time.strftime('%H:%M')}, "
                              f"확정시간={candle_end_time.strftime('%H:%M')}, 현재={current_time.strftime('%H:%M')}, "
                              f"확정여부={is_confirmed}")
+            '''
             
             return is_confirmed
             
