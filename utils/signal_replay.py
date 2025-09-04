@@ -116,6 +116,138 @@ def get_stocks_from_candidate_table(date_str: str) -> List[str]:
         return []
 
 
+def get_stocks_with_selection_date(date_str: str) -> Dict[str, str]:
+    """candidate_stocks 테이블에서 특정 날짜의 종목코드와 selection_date를 함께 조회
+    
+    Args:
+        date_str: YYYYMMDD 형식의 날짜
+        
+    Returns:
+        Dict[str, str]: {종목코드: selection_date} 매핑 (종목코드는 6자리 문자열, selection_date는 YYYY-MM-DD 형식)
+    """
+    try:
+        # 데이터베이스 파일 경로 설정
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        db_path = os.path.join(project_root, 'data', 'robotrader.db')
+        
+        if not os.path.exists(db_path):
+            logger.warning(f"데이터베이스 파일을 찾을 수 없음: {db_path}")
+            return {}
+        
+        # YYYYMMDD → YYYY-MM-DD 형식으로 변환
+        target_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+        
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT DISTINCT stock_code, selection_date 
+                FROM candidate_stocks 
+                WHERE DATE(selection_date) = ?
+                ORDER BY score DESC
+            ''', (target_date,))
+            
+            rows = cursor.fetchall()
+            stock_selection_map = {row[0].zfill(6): row[1] for row in rows}  # 6자리로 패딩
+            
+            logger.info(f"📅 {date_str} 날짜로 candidate_stocks에서 {len(stock_selection_map)}개 종목과 selection_date 조회")
+            return stock_selection_map
+            
+    except Exception as e:
+        logger.error(f"candidate_stocks 테이블 조회 실패: {e}")
+        return {}
+
+
+def calculate_selection_date_stats(all_trades: Dict[str, List[Dict[str, object]]], stock_selection_map: Dict[str, str], target_date_str: str) -> Dict[str, Dict[str, int]]:
+    """종목별 selection_date 이후 승패 통계 계산
+    
+    Args:
+        all_trades: 종목별 거래 정보
+        stock_selection_map: {종목코드: selection_date} 매핑 (YYYY-MM-DD HH:MM:SS 형식)
+        target_date_str: 분석 대상 날짜 (YYYYMMDD 형식)
+        
+    Returns:
+        Dict[str, Dict[str, int]]: {종목코드: {"wins": 승수, "losses": 패수}} 매핑
+    """
+    from datetime import datetime
+    
+    selection_date_stats = {}
+    
+    # target_date를 YYYY-MM-DD 형식으로 변환
+    target_date = f"{target_date_str[:4]}-{target_date_str[4:6]}-{target_date_str[6:8]}"
+    
+    for stock_code, trades in all_trades.items():
+        if stock_code not in stock_selection_map:
+            continue
+            
+        selection_datetime_str = stock_selection_map[stock_code]
+        wins = 0
+        losses = 0
+        
+        try:
+            # selection_date를 datetime으로 파싱
+            # 형식: "YYYY-MM-DD HH:MM:SS" 또는 "YYYY-MM-DD"
+            if ' ' in selection_datetime_str:
+                selection_datetime = datetime.strptime(selection_datetime_str, "%Y-%m-%d %H:%M:%S")
+                selection_date = selection_datetime.date().strftime("%Y-%m-%d")
+                selection_time = selection_datetime.time().strftime("%H:%M")
+            else:
+                selection_datetime = datetime.strptime(selection_datetime_str, "%Y-%m-%d")
+                selection_date = selection_datetime_str
+                selection_time = "00:00"  # 시간 정보가 없으면 자정으로 간주
+        except Exception as e:
+            logger.warning(f"⚠️ {stock_code} selection_date 파싱 오류: {selection_datetime_str} - {e}")
+            # 파싱 실패 시 모든 거래 포함 (보수적 접근)
+            selection_date = target_date
+            selection_time = "00:00"
+        
+        # 날짜 비교
+        if target_date < selection_date:
+            # 분석 대상 날짜가 selection_date보다 이전이면 모든 거래 제외
+            selection_date_stats[stock_code] = {"wins": 0, "losses": 0}
+            continue
+        elif target_date > selection_date:
+            # 분석 대상 날짜가 selection_date보다 이후면 모든 거래 포함
+            for trade in trades:
+                # 09시 이전 거래는 승패 계산에서 제외
+                if trade.get('excluded_from_stats', False):
+                    continue
+                
+                try:
+                    profit_rate = float(trade.get('profit_rate', 0.0))
+                    if profit_rate > 0:
+                        wins += 1
+                    elif profit_rate < 0:
+                        losses += 1
+                except Exception:
+                    continue
+        else:
+            # target_date == selection_date인 경우: 당일 거래 중 selection 시간 이후만 포함
+            for trade in trades:
+                # 09시 이전 거래는 승패 계산에서 제외
+                if trade.get('excluded_from_stats', False):
+                    continue
+                
+                # 거래 시간이 selection 시간 이후인지 확인
+                buy_time = trade.get('buy_time', '')
+                if not buy_time or ':' not in buy_time:
+                    continue
+                    
+                try:
+                    # "HH:MM" 형식의 거래 시간과 selection 시간 비교
+                    if buy_time >= selection_time:
+                        profit_rate = float(trade.get('profit_rate', 0.0))
+                        if profit_rate > 0:
+                            wins += 1
+                        elif profit_rate < 0:
+                            losses += 1
+                except Exception:
+                    continue
+        
+        selection_date_stats[stock_code] = {"wins": wins, "losses": losses}
+    
+    return selection_date_stats
+
+
 def get_target_profit_from_signal_strength(sig_improved: pd.DataFrame, index: int) -> float:
     """신호 강도 정보에서 목표수익률 추출"""
     try:
@@ -1063,15 +1195,19 @@ def main():
     date_str: str = args.date.strip()
     
     # codes가 지정되지 않으면 candidate_stocks 테이블에서 조회
+    stock_selection_map: Dict[str, str] = {}  # {종목코드: selection_date} 매핑
     if args.codes:
         codes_input = args.codes
         codes: List[str] = [normalize_code(c) for c in codes_input.split(",") if str(c).strip()]
         # 중복 제거(입력 순서 유지)
         codes = list(dict.fromkeys(codes))
         logger.info(f"📝 명시적으로 지정된 종목: {len(codes)}개")
+        # 직접 지정된 종목의 경우에도 selection_date 정보 시도
+        stock_selection_map = get_stocks_with_selection_date(date_str)
     else:
-        # candidate_stocks 테이블에서 해당 날짜의 종목 조회
-        codes = get_stocks_from_candidate_table(date_str)
+        # candidate_stocks 테이블에서 해당 날짜의 종목과 selection_date 조회
+        stock_selection_map = get_stocks_with_selection_date(date_str)
+        codes = list(stock_selection_map.keys())
         if not codes:
             logger.error(f"❌ {date_str} 날짜에 해당하는 candidate_stocks가 없습니다.")
             print(f"\n❌ {date_str} 날짜에 해당하는 candidate_stocks가 없습니다.")
@@ -1163,9 +1299,27 @@ def main():
                     elif pr < 0:
                         total_losses += 1
             lines.append(f"=== 총 승패: {total_wins}승 {total_losses}패 ===")
+            
+            # selection_date 이후 승패 통계 계산 및 출력
+            if stock_selection_map:
+                selection_stats = calculate_selection_date_stats(all_trades, stock_selection_map, date_str)
+                selection_total_wins = sum(stats["wins"] for stats in selection_stats.values())
+                selection_total_losses = sum(stats["losses"] for stats in selection_stats.values())
+                lines.append(f"=== selection_date 이후 승패: {selection_total_wins}승 {selection_total_losses}패 ===")
+            
             lines.append("")
             for code in codes_union:
                 lines.append(f"=== {code} - {date_str} 눌림목(3분) 신호 재현 ===")
+                
+                # selection_date 정보 표시
+                if code in stock_selection_map:
+                    selection_datetime_str = stock_selection_map[code]
+                    # 시간 정보가 포함되어 있으면 표시, 없으면 날짜만 표시
+                    if ' ' in selection_datetime_str:
+                        lines.append(f"  selection_date: {selection_datetime_str}")
+                    else:
+                        lines.append(f"  selection_date: {selection_datetime_str} (시간 정보 없음)")
+                
                 # 종목별 승패 요약 (09시 이전 거래 제외)
                 code_wins = 0
                 code_losses = 0
@@ -1182,6 +1336,14 @@ def main():
                     elif pr < 0:
                         code_losses += 1
                 lines.append(f"  승패: {code_wins}승 {code_losses}패")
+                
+                # selection_date 이후 승패 (동일한 값이지만 명확성을 위해 표시)
+                if code in stock_selection_map and stock_selection_map:
+                    selection_stats = calculate_selection_date_stats(all_trades, stock_selection_map, date_str)
+                    if code in selection_stats:
+                        sel_wins = selection_stats[code]["wins"]
+                        sel_losses = selection_stats[code]["losses"]
+                        lines.append(f"  selection_date 이후 승패: {sel_wins}승 {sel_losses}패")
                 # 입력 시각 순서를 유지하여 출력
                 for t in times_map.get(code, []):
                     # 해당 시각의 레코드 찾기

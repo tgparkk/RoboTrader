@@ -247,6 +247,7 @@ class DayTradingBot:
             positioned_stocks = self.trading_manager.get_stocks_by_state(StockState.POSITIONED)
             buy_pending_stocks = self.trading_manager.get_stocks_by_state(StockState.BUY_PENDING)
             sell_pending_stocks = self.trading_manager.get_stocks_by_state(StockState.SELL_PENDING)
+            completed_stocks = self.trading_manager.get_stocks_by_state(StockState.COMPLETED)
             
             self.logger.info(
                 f"📦 종목 상태 현황:\n"
@@ -263,7 +264,6 @@ class DayTradingBot:
                     self.logger.info(f"  📊 매수 체결 대기: {stock.stock_code}({stock.stock_name}) - 주문ID: {stock.current_order_id}")
             
             # 매수 판단: 선정된 종목들 + 재거래 가능한 완료 종목들
-            completed_stocks = self.trading_manager.get_stocks_by_state(StockState.COMPLETED)
             buy_decision_candidates = selected_stocks + completed_stocks
             
             if buy_decision_candidates:
