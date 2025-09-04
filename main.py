@@ -69,33 +69,19 @@ class DayTradingBot:
         signal.signal(signal.SIGTERM, self._signal_handler)
 
     def _round_to_tick(self, price: float) -> float:
-        """KRX 정확한 호가단위에 맞게 반올림"""
+        """KRX 정확한 호가단위에 맞게 반올림 - kis_order_api 함수 사용"""
         try:
+            from api.kis_order_api import _round_to_krx_tick
+            
             if price <= 0:
                 return 0.0
             
-            # KRX 정확한 호가단위 테이블 (2024년 기준)
-            if price < 1000:
-                tick = 1
-            elif price < 5000:
-                tick = 5
-            elif price < 10000:
-                tick = 10
-            elif price < 50000:
-                tick = 50
-            elif price < 100000:
-                tick = 100
-            elif price < 500000:
-                tick = 500
-            else:
-                tick = 1000
-            
-            # 호가단위에 맞게 반올림
-            rounded_price = round(price / tick) * tick
+            original_price = price
+            rounded_price = _round_to_krx_tick(price)
             
             # 로깅으로 가격 조정 확인
-            if abs(rounded_price - price) >= tick * 0.1:  # 10% 이상 차이시에만 로깅
-                self.logger.debug(f"💰 호가단위 조정: {price:,.0f}원 → {rounded_price:,.0f}원 (틱: {tick}원)")
+            if abs(rounded_price - original_price) > 0:
+                self.logger.debug(f"💰 호가단위 조정: {original_price:,.0f}원 → {rounded_price:,.0f}원")
             
             return float(rounded_price)
             

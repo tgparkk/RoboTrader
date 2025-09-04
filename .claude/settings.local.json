@@ -13,7 +13,16 @@
       "Read(/C:\\GIT\\RoboTrader\\api/**)",
       "Read(/C:\\GIT\\RoboTrader\\api/**)",
       "Read(/C:\\GIT\\RoboTrader\\api/**)",
-      "Bash(del debug_cancel_order_fields.py)"
+      "Bash(del debug_cancel_order_fields.py)",
+      "Read(/C:\\GIT\\RoboTrader/**)",
+      "Read(/C:\\GIT\\RoboTrader/**)",
+      "Read(/C:\\GIT\\RoboTrader/**)",
+      "Read(/C:\\GIT\\RoboTrader/**)",
+      "Read(/C:\\GIT\\RoboTrader/**)",
+      "Read(/C:\\GIT\\RoboTrader/**)",
+      "Read(/C:\\GIT\\RoboTrader/**)",
+      "Read(/C:\\GIT\\RoboTrader\\core/**)",
+      "Read(/C:\\GIT\\RoboTrader\\core/**)"
     ],
     "deny": [],
     "ask": []
