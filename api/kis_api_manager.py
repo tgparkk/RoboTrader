@@ -560,10 +560,33 @@ class KISAPIManager:
             
             # 3단계: 주문 취소 실행
             self.logger.debug(f"🔍 3단계: 주문 취소 API 호출 중...")
+            
+            # KIS API 필드명 매핑 - 다양한 가능성 고려
+            ord_orgno = ""
+            orgn_odno = order_data.get('odno', '')  # 주문번호
+            
+            # 주문조직번호 필드 찾기 (우선순위 순)
+            possible_orgno_fields = ['krx_fwdg_ord_orgno', 'ord_orgno', 'orgn_odno']
+            for field in possible_orgno_fields:
+                if field in order_data and order_data[field]:
+                    ord_orgno = order_data[field]
+                    self.logger.debug(f"📋 주문조직번호 필드 사용: {field} = {ord_orgno}")
+                    break
+            
+            if not ord_orgno:
+                self.logger.error(f"❌ 주문조직번호를 찾을 수 없음: {order_id}")
+                self.logger.debug(f"📋 사용 가능한 필드: {list(order_data.keys())}")
+                return OrderResult(
+                    success=False,
+                    message="주문조직번호를 찾을 수 없어 취소할 수 없습니다"
+                )
+            
+            self.logger.debug(f"📋 취소 API 파라미터: ord_orgno={ord_orgno}, orgn_odno={orgn_odno}")
+            
             result = self._call_api_with_retry(
                 kis_order_api.get_order_rvsecncl,
-                order_data['orgn_odno'],  # 원주문번호
-                order_data['odno'],       # 주문번호
+                ord_orgno,                # 주문조직번호 (첫 번째 파라미터)
+                orgn_odno,                # 원주문번호 (두 번째 파라미터)
                 order_type,               # 주문구분
                 "02",                     # 취소구분
                 0,                        # 수량 (취소시 0)

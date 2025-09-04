@@ -158,7 +158,7 @@ class TimeFrameConverter:
                 logger.warning(f"시간 비교 오류로 필터링 생략: {compare_error}")
                 completed_data = resampled.copy()
             
-            logger.debug(f"📊 floor 방식 3분봉 변환: {len(data)}개 → {len(resampled)}개 (완성된 봉: {len(completed_data)}개)")
+            #logger.debug(f"📊 floor 방식 3분봉 변환: {len(data)}개 → {len(resampled)}개 (완성된 봉: {len(completed_data)}개)")
             
             return completed_data
             

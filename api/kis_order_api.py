@@ -12,6 +12,54 @@ from utils.korean_time import now_kst
 logger = setup_logger(__name__)
 
 
+def _round_to_krx_tick(price: float) -> int:
+    """KRX 정확한 호가단위에 맞게 반올림"""
+    if price <= 0:
+        return 0
+    
+    # KRX 정확한 호가단위 테이블
+    if price < 1000:
+        tick = 1
+    elif price < 5000:
+        tick = 5
+    elif price < 10000:
+        tick = 10
+    elif price < 50000:
+        tick = 50
+    elif price < 100000:
+        tick = 100
+    elif price < 500000:
+        tick = 500
+    else:
+        tick = 1000
+    
+    return int(round(price / tick) * tick)
+
+
+def _validate_tick_size(price: int) -> bool:
+    """호가단위 유효성 검증"""
+    if price <= 0:
+        return False
+    
+    # KRX 정확한 호가단위 테이블
+    if price < 1000:
+        tick = 1
+    elif price < 5000:
+        tick = 5
+    elif price < 10000:
+        tick = 10
+    elif price < 50000:
+        tick = 50
+    elif price < 100000:
+        tick = 100
+    elif price < 500000:
+        tick = 500
+    else:
+        tick = 1000
+    
+    return price % tick == 0
+
+
 def get_order_cash(ord_dv: str = "", itm_no: str = "", qty: int = 0, unpr: int = 0,
                    tr_cont: str = "", ord_dvsn: str = "00") -> Optional[pd.DataFrame]:
     """주식주문(현금) - 매수/매도
@@ -48,13 +96,21 @@ def get_order_cash(ord_dv: str = "", itm_no: str = "", qty: int = 0, unpr: int =
         logger.error("주문수량 확인 필요")
         return None
 
-    if unpr == 0:
-        logger.error("주문단가 확인 필요")
-        return None
-
     # 주문구분 검증 (기본값: 지정가)
     if ord_dvsn not in ("00", "01"):
         ord_dvsn = "00"
+    
+    # 시장가 주문(01)이 아닌 경우에만 가격 검증
+    if ord_dvsn != "01" and unpr == 0:
+        logger.error("지정가 주문시 주문단가 확인 필요")
+        return None
+    
+    # 지정가 주문인 경우에만 호가단위 검증
+    if ord_dvsn == "00" and unpr > 0:
+        if not _validate_tick_size(unpr):
+            corrected_price = _round_to_krx_tick(unpr)
+            logger.warning(f"⚠️ 호가단위 오류 방지: {unpr:,}원 → {corrected_price:,}원")
+            unpr = corrected_price
 
     params = {
         "CANO": kis.getTREnv().my_acct,         # 계좌번호 8자리

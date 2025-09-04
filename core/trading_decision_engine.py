@@ -198,7 +198,7 @@ class TradingDecisionEngine:
             
             if current_price_info is not None:
                 current_price = current_price_info['current_price']
-                self.logger.debug(f"📈 {stock_code} 캐시된 실시간 현재가 사용: {current_price:,.0f}원")
+                #self.logger.debug(f"📈 {stock_code} 캐시된 실시간 현재가 사용: {current_price:,.0f}원")
             else:
                 # 현재가 정보 없으면 분봉 데이터의 마지막 가격 사용 (폴백)
                 current_price = combined_data['close'].iloc[-1]

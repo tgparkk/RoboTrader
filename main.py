@@ -69,29 +69,38 @@ class DayTradingBot:
         signal.signal(signal.SIGTERM, self._signal_handler)
 
     def _round_to_tick(self, price: float) -> float:
-        """KRX 호가단위에 맞게 반올림 (최근가에 가장 가까운 합법 틱)"""
+        """KRX 정확한 호가단위에 맞게 반올림"""
         try:
             if price <= 0:
                 return 0.0
-            # 간단 테이블: 가격구간별 틱 (원)
-            # 실제 KRX 호가단위와 약간 다를 수 있으나 보수적으로 적용
-            brackets = [
-                (0, 1000, 1),
-                (1000, 5000, 5),
-                (5000, 10000, 10),
-                (10000, 50000, 50),
-                (50000, 100000, 100),
-                (100000, 500000, 500),
-                (500000, float('inf'), 1000),
-            ]
-            tick = 1
-            for low, high, t in brackets:
-                if low <= price < high:
-                    tick = t
-                    break
-            # 최근가에 가장 가까운 합법 틱
-            return round(price / tick) * tick
-        except Exception:
+            
+            # KRX 정확한 호가단위 테이블 (2024년 기준)
+            if price < 1000:
+                tick = 1
+            elif price < 5000:
+                tick = 5
+            elif price < 10000:
+                tick = 10
+            elif price < 50000:
+                tick = 50
+            elif price < 100000:
+                tick = 100
+            elif price < 500000:
+                tick = 500
+            else:
+                tick = 1000
+            
+            # 호가단위에 맞게 반올림
+            rounded_price = round(price / tick) * tick
+            
+            # 로깅으로 가격 조정 확인
+            if abs(rounded_price - price) >= tick * 0.1:  # 10% 이상 차이시에만 로깅
+                self.logger.debug(f"💰 호가단위 조정: {price:,.0f}원 → {rounded_price:,.0f}원 (틱: {tick}원)")
+            
+            return float(rounded_price)
+            
+        except Exception as e:
+            self.logger.error(f"❌ 호가단위 조정 오류: {e}")
             return float(int(price))
 
 
@@ -266,12 +275,19 @@ class DayTradingBot:
             # 매수 판단: 선정된 종목들 + 재거래 가능한 완료 종목들
             buy_decision_candidates = selected_stocks + completed_stocks
             
-            if buy_decision_candidates:
+            # 14시 이후 매수 금지 체크
+            current_time = now_kst()
+            is_after_2pm = current_time.hour >= 14
+            
+            if buy_decision_candidates and not is_after_2pm:
                 self.logger.debug(f"🔍 매수 판단 대상: SELECTED={len(selected_stocks)}개, COMPLETED={len(completed_stocks)}개 (총 {len(buy_decision_candidates)}개)")
                 for trading_stock in buy_decision_candidates:
                     await self._analyze_buy_decision(trading_stock)
             else:
-                self.logger.debug("📊 매수 판단 대상 종목 없음 (SELECTED + COMPLETED 상태 종목 없음)")
+                if is_after_2pm:
+                    self.logger.debug("📊 14시 이후이므로 매수 금지")
+                else:
+                    self.logger.debug("📊 매수 판단 대상 종목 없음 (SELECTED + COMPLETED 상태 종목 없음)")
             
             # 🆕 가상매매 vs 실제거래 모드에 따른 매도 로직 분리
             if self.decision_engine.is_virtual_mode:

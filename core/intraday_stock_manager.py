@@ -526,7 +526,7 @@ class IntradayStockManager:
                     self.selected_stocks[stock_code].realtime_data = updated_realtime
                     self.selected_stocks[stock_code].last_update = current_time
             
-            self.logger.debug(f"✅ {stock_code} 최신 분봉 1건 업데이트 완료")
+            #self.logger.debug(f"✅ {stock_code} 최신 분봉 1건 업데이트 완료")
             return True
             
         except Exception as e:
@@ -625,9 +625,11 @@ class IntradayStockManager:
             latest_data = chart_df.tail(1).copy()
             
             # 로깅: 실제 수집된 데이터 시간 확인
+            '''
             if 'time' in latest_data.columns and not latest_data.empty:
                 actual_time = str(latest_data['time'].iloc[0]).zfill(6)
                 self.logger.debug(f"✅ {stock_code} 완성된 분봉 수집: {actual_time} (요청: {target_hour})")
+            '''
             
             return latest_data
             
