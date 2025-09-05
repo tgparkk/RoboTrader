@@ -663,7 +663,7 @@ class TradingDecisionEngine:
             # ❌ 중복 검증 제거: 상위 함수에서 이미 길이 확인함
             data_3min = data  # main.py에서 이미 변환됨
             
-            # 🆕 3분봉 확정 확인 (signal_replay 방식)
+            # 🆕 3분봉 확정 확인 (signal_replay 방식) - 로그는 확정될 때만
             if not self._is_candle_confirmed(data_3min):
                 return False, "3분봉 미확정", None
             
@@ -690,8 +690,31 @@ class TradingDecisionEngine:
                     'target_profit': signal_strength.target_profit
                 }
                 
-                self.logger.info(f"📊 매수 신호 발생: {signal_desc} - {reasons}")
-                self.logger.info(f"💰 매수가격: {signal_strength.buy_price:,.0f}원, 진입저가: {signal_strength.entry_low:,.0f}원")
+                # 🆕 매수 신호 발생 상세 로깅 (데이터 정보 포함)
+                from utils.korean_time import now_kst
+                current_time = now_kst()
+                last_3min_time = data_3min['datetime'].iloc[-1]
+                data_count = len(data_3min)
+                
+                self.logger.info(f"🚀 매수 신호 발생!")
+                self.logger.info(f"📊 신호 발생 데이터:")
+                self.logger.info(f"  - 현재 시간: {current_time.strftime('%H:%M:%S')}")
+                self.logger.info(f"  - 3분봉 개수: {data_count}개")
+                self.logger.info(f"  - 신호 근거 3분봉: {last_3min_time}")
+                
+                # 최근 2개 봉 정보만 간단히
+                if data_count >= 2:
+                    for i in range(2):
+                        idx = -(2-i)
+                        row = data_3min.iloc[idx]
+                        self.logger.info(f"  - 3분봉[{i+1}]: {row['datetime'].strftime('%H:%M')} C:{row['close']:,.0f} V:{row['volume']:,}")
+                
+                self.logger.info(f"💡 신호 상세:")
+                self.logger.info(f"  - 신호 유형: {signal_desc}")
+                self.logger.info(f"  - 신호 이유: {reasons}")
+                self.logger.info(f"  - 매수 가격: {signal_strength.buy_price:,.0f}원 (3/5가)")
+                self.logger.info(f"  - 진입 저가: {signal_strength.entry_low:,.0f}원")
+                self.logger.info(f"  - 목표수익률: {signal_strength.target_profit:.1f}%")
                 
                 return True, f"{signal_desc} - {reasons}", price_info
             
@@ -733,193 +756,19 @@ class TradingDecisionEngine:
             candle_end_time = last_candle_time + pd.Timedelta(minutes=3)
             is_confirmed = current_time >= candle_end_time
             
-            '''
-            self.logger.debug(f"📊 3분봉 확정 체크 (signal_replay 방식): 마지막캔들={last_candle_time.strftime('%H:%M')}, "
-                             f"확정시간={candle_end_time.strftime('%H:%M')}, 현재={current_time.strftime('%H:%M')}, "
-                             f"확정여부={is_confirmed}")
-            '''
+            # 🆕 3분봉 확정될 때만 상세 로깅 (로그 길이 최적화)
+            if is_confirmed:
+                time_diff_sec = (current_time - candle_end_time).total_seconds()
+                
+                self.logger.info(f"📊 3분봉 확정 완료!")
+                self.logger.info(f"  - 확정된 3분봉: {last_candle_time.strftime('%H:%M:%S')} ~ {candle_end_time.strftime('%H:%M:%S')}")
+                self.logger.info(f"  - 현재 시간: {current_time.strftime('%H:%M:%S')} (확정 후 {time_diff_sec:.1f}초 경과)")
             
             return is_confirmed
             
         except Exception as e:
             self.logger.debug(f"3분봉 확정 확인 오류: {e}")
             return False
-    
-    def _log_signal_debug_info(self, data_3min: pd.DataFrame, signals: pd.DataFrame):
-        """신호 상태 디버깅 정보 로깅 (signal_replay와 비교용)"""
-        try:
-            if data_3min.empty or signals.empty:
-                return
-            
-            # 최근 캔들 정보
-            last_candle = data_3min.iloc[-1]
-            current_time = now_kst().strftime('%H:%M:%S')
-            
-            # 신호 상태
-            buy_pullback = bool(signals['buy_pullback_pattern'].iloc[-1])
-            buy_bisector = bool(signals['buy_bisector_recovery'].iloc[-1])
-            
-            # 이등분선 값
-            bisector_val = float(signals['bisector_line'].iloc[-1]) if 'bisector_line' in signals.columns else None
-            
-            # 디버깅 정보 로깅
-            bisector_str = f"{bisector_val:.0f}" if bisector_val is not None else "N/A"
-            self.logger.debug(
-                f"🔍 신호디버그 [{current_time}]:\n"
-                f"  - 3분봉 데이터: {len(data_3min)}개\n"
-                f"  - 최근캔들: O={last_candle['open']:.0f} H={last_candle['high']:.0f} "
-                f"L={last_candle['low']:.0f} C={last_candle['close']:.0f} V={last_candle['volume']:,.0f}\n"
-                f"  - 이등분선: {bisector_str}\n"
-                f"  - 매수신호: pullback={buy_pullback}, bisector_recovery={buy_bisector}"
-            )
-            
-        except Exception as e:
-            self.logger.debug(f"❌ 신호 디버깅 정보 로깅 오류: {e}")
-    
-    def verify_signal_consistency(self, stock_code: str, data_3min: pd.DataFrame, target_time: str = None) -> Dict[str, Any]:
-        """signal_replay.py와 동일한 방식으로 신호 확인하여 일관성 검증
-        
-        Args:
-            stock_code: 종목 코드
-            data_3min: 3분봉 데이터
-            target_time: 확인할 시간 (HH:MM 형식, None이면 최신)
-            
-        Returns:
-            Dict: 신호 확인 결과
-        """
-        try:
-            from core.indicators.pullback_candle_pattern import PullbackCandlePattern
-            
-            if data_3min is None or data_3min.empty:
-                return {'error': '데이터 없음'}
-            
-            # signal_replay와 동일한 방식으로 신호 계산
-            signals = PullbackCandlePattern.generate_trading_signals(
-                data_3min,
-                enable_candle_shrink_expand=False,  # ✅ signal_replay.py와 일치
-                enable_divergence_precondition=False,  # ✅ signal_replay.py와 일치
-                enable_overhead_supply_filter=True,
-                candle_expand_multiplier=1.10,
-                overhead_lookback=10,
-                overhead_threshold_hits=2,
-            )
-            
-            if signals.empty:
-                return {'error': '신호 계산 실패'}
-            
-            # 시간 지정이 없으면 최신 데이터 사용
-            if target_time is None:
-                idx = len(data_3min) - 1
-            else:
-                # target_time에 해당하는 인덱스 찾기 (signal_replay.py의 locate_row_for_time과 유사)
-                if 'datetime' in data_3min.columns:
-                    target_datetime = pd.Timestamp(f"2023-01-01 {target_time}:00")  # 임시 날짜
-                    time_diffs = (data_3min['datetime'] - target_datetime).abs()
-                    idx = int(time_diffs.idxmin())
-                else:
-                    idx = len(data_3min) - 1
-            
-            if idx < 0 or idx >= len(data_3min):
-                return {'error': '인덱스 범위 오류'}
-            
-            # signal_replay와 동일한 방식으로 신호 확인
-            buy_pullback = bool(signals['buy_pullback_pattern'].iloc[idx])
-            buy_bisector = bool(signals['buy_bisector_recovery'].iloc[idx])
-            has_signal = buy_pullback or buy_bisector
-            
-            signal_types = []
-            if buy_pullback:
-                signal_types.append("buy_pullback_pattern")
-            if buy_bisector:
-                signal_types.append("buy_bisector_recovery")
-            
-            # 미충족 조건 분석 (signal_replay의 analyze_unmet_conditions_at과 유사)
-            unmet_conditions = []
-            if not has_signal:
-                unmet_conditions = self._analyze_unmet_conditions(data_3min, idx)
-            
-            return {
-                'stock_code': stock_code,
-                'index': idx,
-                'time': target_time or 'latest',
-                'has_signal': has_signal,
-                'signal_types': signal_types,
-                'unmet_conditions': unmet_conditions,
-                'data_length': len(data_3min),
-                'candle_info': {
-                    'open': float(data_3min['open'].iloc[idx]),
-                    'high': float(data_3min['high'].iloc[idx]),
-                    'low': float(data_3min['low'].iloc[idx]),
-                    'close': float(data_3min['close'].iloc[idx]),
-                    'volume': float(data_3min['volume'].iloc[idx])
-                }
-            }
-            
-        except Exception as e:
-            return {'error': f'검증 오류: {e}'}
-    
-    def _analyze_unmet_conditions(self, data_3min: pd.DataFrame, idx: int) -> list:
-        """미충족 조건 분석 (signal_replay의 analyze_unmet_conditions_at과 유사)"""
-        try:
-            from core.indicators.bisector_line import BisectorLine
-            
-            unmet = []
-            
-            if idx < 0 or idx >= len(data_3min):
-                return ["인덱스 범위 오류"]
-            
-            # 이등분선 계산
-            bisector_line = BisectorLine.calculate_bisector_line(data_3min['high'], data_3min['low'])
-            
-            # 현재 캔들 정보
-            row = data_3min.iloc[idx]
-            current_open = float(row['open'])
-            current_close = float(row['close'])
-            current_volume = float(row['volume'])
-            
-            # 이등분선 관련
-            bl = float(bisector_line.iloc[idx]) if not pd.isna(bisector_line.iloc[idx]) else None
-            above_bisector = (bl is not None) and (current_close >= bl)
-            crosses_bisector_up = (bl is not None) and (current_open <= bl <= current_close)
-            
-            is_bullish = current_close > current_open
-            
-            # 저거래 조정 확인 (최근 2봉)
-            retrace_lookback = 2
-            low_vol_ratio = 0.25
-            
-            if idx >= retrace_lookback:
-                window = data_3min.iloc[idx - retrace_lookback:idx]
-                baseline_now = float(data_3min['volume'].iloc[max(0, idx - 50):idx + 1].max())
-                low_volume_all = bool((window['volume'] < baseline_now * low_vol_ratio).all()) if baseline_now > 0 else False
-                close_diff = window['close'].diff().fillna(0)
-                downtrend_all = bool((close_diff.iloc[1:] < 0).all()) if len(close_diff) >= 2 else False
-                is_low_volume_retrace = low_volume_all and downtrend_all
-            else:
-                is_low_volume_retrace = False
-            
-            # 거래량 회복 확인
-            if idx > 0:
-                max_low_vol = float(data_3min['volume'].iloc[max(0, idx - retrace_lookback):idx].max())
-                avg_recent_vol = float(data_3min['volume'].iloc[max(0, idx - 10):idx].mean())
-                volume_recovers = (current_volume > max_low_vol) or (current_volume > avg_recent_vol)
-            else:
-                volume_recovers = False
-            
-            # 미충족 항목 기록
-            if not is_low_volume_retrace:
-                unmet.append("저거래 하락 조정 미충족")
-            if not is_bullish:
-                unmet.append("회복 양봉 아님")
-            if not volume_recovers:
-                unmet.append("거래량 회복 미충족")
-            if not (above_bisector or crosses_bisector_up):
-                unmet.append("이등분선 지지/회복 미충족")
-            
-            return unmet
-            
-        except Exception as e:
-            return [f"분석 오류: {e}"]
     
     def _check_pullback_candle_stop_loss(self, trading_stock, data, buy_price, current_price) -> Tuple[bool, str]:
         """눌림목 캔들패턴 전략 손절 조건 (실시간 가격 + 3분봉 기준)"""

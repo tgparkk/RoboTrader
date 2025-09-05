@@ -52,6 +52,16 @@ from core.indicators.pullback_candle_pattern import PullbackCandlePattern, Signa
 from api.kis_api_manager import KISAPIManager
 from visualization.data_processor import DataProcessor
 from core.trading_decision_engine import TradingDecisionEngine
+from utils.signal_replay_utils import (
+    parse_times_mapping,
+    get_stocks_with_selection_date,
+    calculate_selection_date_stats,
+    get_target_profit_from_signal_strength,
+    locate_row_for_time,
+    to_csv_rows,
+    generate_chart_for_stock,
+    generate_timeline_analysis_log
+)
 
 
 try:
@@ -63,234 +73,6 @@ except Exception:
 
 logger = setup_logger(__name__)
 
-
-def parse_times_mapping(arg_value: str) -> Dict[str, List[str]]:
-    """파라미터 --times 파싱
-    형식: "034230=14:39;078520=11:33;107600=11:24,11:27,14:51;214450=12:00,14:39"
-    반환: {"034230": ["14:39"], "078520": ["11:33"], ...}
-    """
-    mapping: Dict[str, List[str]] = {}
-    if not arg_value:
-        return mapping
-    for part in arg_value.split(";"):
-        part = part.strip()
-        if not part:
-            continue
-        if "=" not in part:
-            continue
-        code, times_str = part.split("=", 1)
-        code = code.strip()
-        times_list = [t.strip() for t in times_str.split(",") if t.strip()]
-        if code and times_list:
-            mapping[code] = times_list
-    return mapping
-
-
-
-def get_stocks_with_selection_date(date_str: str) -> Dict[str, str]:
-    """candidate_stocks 테이블에서 특정 날짜의 종목코드와 selection_date를 함께 조회
-    
-    Args:
-        date_str: YYYYMMDD 형식의 날짜
-        
-    Returns:
-        Dict[str, str]: {종목코드: selection_date} 매핑 (종목코드는 6자리 문자열, selection_date는 YYYY-MM-DD 형식)
-    """
-    try:
-        # 데이터베이스 파일 경로 설정
-        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        db_path = os.path.join(project_root, 'data', 'robotrader.db')
-        
-        if not os.path.exists(db_path):
-            logger.warning(f"데이터베이스 파일을 찾을 수 없음: {db_path}")
-            return {}
-        
-        # YYYYMMDD → YYYY-MM-DD 형식으로 변환
-        target_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
-        
-        with sqlite3.connect(db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT DISTINCT stock_code, selection_date 
-                FROM candidate_stocks 
-                WHERE DATE(selection_date) = ?
-                ORDER BY score DESC
-            ''', (target_date,))
-            
-            rows = cursor.fetchall()
-            stock_selection_map = {row[0].zfill(6): row[1] for row in rows}  # 6자리로 패딩
-            
-            logger.info(f"📅 {date_str} 날짜로 candidate_stocks에서 {len(stock_selection_map)}개 종목과 selection_date 조회")
-            return stock_selection_map
-            
-    except Exception as e:
-        logger.error(f"candidate_stocks 테이블 조회 실패: {e}")
-        return {}
-
-
-def calculate_selection_date_stats(all_trades: Dict[str, List[Dict[str, object]]], stock_selection_map: Dict[str, str], target_date_str: str) -> Dict[str, Dict[str, int]]:
-    """종목별 selection_date 이후 승패 통계 계산
-    
-    Args:
-        all_trades: 종목별 거래 정보
-        stock_selection_map: {종목코드: selection_date} 매핑 (YYYY-MM-DD HH:MM:SS 형식)
-        target_date_str: 분석 대상 날짜 (YYYYMMDD 형식)
-        
-    Returns:
-        Dict[str, Dict[str, int]]: {종목코드: {"wins": 승수, "losses": 패수}} 매핑
-    """
-    from datetime import datetime
-    
-    selection_date_stats = {}
-    
-    # target_date를 YYYY-MM-DD 형식으로 변환
-    target_date = f"{target_date_str[:4]}-{target_date_str[4:6]}-{target_date_str[6:8]}"
-    
-    for stock_code, trades in all_trades.items():
-        if stock_code not in stock_selection_map:
-            continue
-            
-        selection_datetime_str = stock_selection_map[stock_code]
-        wins = 0
-        losses = 0
-        
-        try:
-            # selection_date를 datetime으로 파싱
-            # 형식: "YYYY-MM-DD HH:MM:SS" 또는 "YYYY-MM-DD"
-            if ' ' in selection_datetime_str:
-                selection_datetime = datetime.strptime(selection_datetime_str, "%Y-%m-%d %H:%M:%S")
-                selection_date = selection_datetime.date().strftime("%Y-%m-%d")
-                selection_time = selection_datetime.time().strftime("%H:%M")
-            else:
-                selection_datetime = datetime.strptime(selection_datetime_str, "%Y-%m-%d")
-                selection_date = selection_datetime_str
-                selection_time = "00:00"  # 시간 정보가 없으면 자정으로 간주
-        except Exception as e:
-            logger.warning(f"⚠️ {stock_code} selection_date 파싱 오류: {selection_datetime_str} - {e}")
-            # 파싱 실패 시 모든 거래 포함 (보수적 접근)
-            selection_date = target_date
-            selection_time = "00:00"
-        
-        # 날짜 비교
-        if target_date < selection_date:
-            # 분석 대상 날짜가 selection_date보다 이전이면 모든 거래 제외
-            selection_date_stats[stock_code] = {"wins": 0, "losses": 0}
-            continue
-        elif target_date > selection_date:
-            # 분석 대상 날짜가 selection_date보다 이후면 모든 거래 포함
-            for trade in trades:
-                # 09시 이전 거래는 승패 계산에서 제외
-                if trade.get('excluded_from_stats', False):
-                    continue
-                
-                try:
-                    profit_rate = float(trade.get('profit_rate', 0.0))
-                    if profit_rate > 0:
-                        wins += 1
-                    elif profit_rate < 0:
-                        losses += 1
-                except Exception:
-                    continue
-        else:
-            # target_date == selection_date인 경우: 당일 거래 중 selection 시간 이후만 포함
-            for trade in trades:
-                # 09시 이전 거래는 승패 계산에서 제외
-                if trade.get('excluded_from_stats', False):
-                    continue
-                
-                # 거래 시간이 selection 시간 이후인지 확인
-                buy_time = trade.get('buy_time', '')
-                if not buy_time or ':' not in buy_time:
-                    continue
-                    
-                try:
-                    # "HH:MM" 형식의 거래 시간과 selection 시간 비교
-                    if buy_time >= selection_time:
-                        profit_rate = float(trade.get('profit_rate', 0.0))
-                        if profit_rate > 0:
-                            wins += 1
-                        elif profit_rate < 0:
-                            losses += 1
-                except Exception:
-                    continue
-        
-        selection_date_stats[stock_code] = {"wins": wins, "losses": losses}
-    
-    return selection_date_stats
-
-
-def get_target_profit_from_signal_strength(sig_improved: pd.DataFrame, index: int) -> float:
-    """신호 강도 정보에서 목표수익률 추출"""
-    try:
-        if sig_improved is None or sig_improved.empty or index >= len(sig_improved):
-            logger.debug(f"신호 강도 정보 없음: empty={sig_improved is None or sig_improved.empty}, index={index}, len={len(sig_improved) if sig_improved is not None else 0}")
-            return 0.015  # 기본값 1.5%
-        
-        # 컬럼 정보 출력
-        logger.debug(f"신호 강도 컬럼: {list(sig_improved.columns) if sig_improved is not None else 'None'}")
-        
-        # 신호 강도 정보에서 목표수익률 확인
-        if 'signal_type' in sig_improved.columns:
-            signal_type = sig_improved.iloc[index]['signal_type']
-            logger.debug(f"신호 타입: {signal_type}")
-            if signal_type == SignalType.STRONG_BUY.value:
-                logger.debug("STRONG_BUY 신호 → 2.5% 목표수익률")
-                return 0.025  # 최고신호: 2.5%
-            elif signal_type == SignalType.CAUTIOUS_BUY.value:
-                logger.debug("CAUTIOUS_BUY 신호 → 2.0% 목표수익률")
-                return 0.02  # 중간신호: 2.0%
-        
-        # target_profit 컬럼이 있으면 직접 사용
-        if 'target_profit' in sig_improved.columns:
-            target = sig_improved.iloc[index]['target_profit']
-            if pd.notna(target) and target > 0:
-                logger.debug(f"target_profit 컬럼에서 {target*100:.0f}% 목표수익률 추출")
-                return float(target)
-                
-        logger.debug("기본값 1.5% 목표수익률 사용")
-        return 0.015  # 기본신호: 1.5%
-    except Exception as e:
-        logger.debug(f"목표수익률 추출 오류: {e}")
-        return 0.015  # 기본값 1.5%
-
-
-async def calculate_trading_signals_using_decision_engine(
-    stock_code: str, 
-    df_3min: pd.DataFrame, 
-    *, 
-    logger: Optional[logging.Logger] = None
-) -> Tuple[bool, str, dict]:
-    """실시간과 동일한 trading_decision_engine을 사용한 매수 판단 (일관성 보장)"""
-    try:
-        if logger is None:
-            logger = setup_logger(__name__)
-            
-        # TradingDecisionEngine 초기화 (시뮬레이션용 - DB 없이)
-        api_manager = KISAPIManager()  # 계좌 조회용
-        decision_engine = TradingDecisionEngine(
-            db_manager=None,  # 시뮬레이션에서는 DB 사용하지 않음
-            api_manager=api_manager
-        )
-        
-        # 가상의 trading_stock 객체 생성
-        class MockTradingStock:
-            def __init__(self, code):
-                self.stock_code = code
-                self.stock_name = f"종목_{code}"
-        
-        trading_stock = MockTradingStock(stock_code)
-        
-        # 실시간과 동일한 매수 판단 로직 사용 (3분봉 전달)
-        buy_signal, buy_reason, buy_info = await decision_engine.analyze_buy_decision(
-            trading_stock, df_3min
-        )
-        
-        return buy_signal, buy_reason, buy_info
-        
-    except Exception as e:
-        if logger:
-            logger.error(f"TradingDecisionEngine 매수 판단 오류: {e}")
-        return False, f"오류: {e}", {'buy_price': 0, 'quantity': 0, 'max_buy_amount': 0}
 
 def calculate_trading_signals_once(df_3min: pd.DataFrame, *, debug_logs: bool = False, 
                                  logger: Optional[logging.Logger] = None,
@@ -342,963 +124,348 @@ def calculate_trading_signals_once(df_3min: pd.DataFrame, *, debug_logs: bool = 
         if signals is not None and not signals.empty:
             has_signal_type = 'signal_type' in signals.columns
             has_target_profit = 'target_profit' in signals.columns
-            logger.debug(f"신호 강도 컬럼 확인: signal_type={has_signal_type}, target_profit={has_target_profit}")
-            if has_signal_type:
-                non_empty_signals = signals[signals['signal_type'] != '']
-                logger.debug(f"비어있지 않은 신호 개수: {len(non_empty_signals)}")
-                
-                # 📊 타임라인 로그: 각 시간대별 신호 상태 분석
-                if debug_logs and not signals.empty:
-                    generate_timeline_analysis_log(df_3min, signals, stock_code, logger, df_1min=None)
+            has_confidence = 'confidence' in signals.columns
+            
+            if has_signal_type or has_target_profit or has_confidence:
+                logger.debug(f"📊 {stock_code} 신호 강도 정보 포함: signal_type={has_signal_type}, target_profit={has_target_profit}, confidence={has_confidence}")
     
-    # signals를 두 번 반환 (기존 코드 호환성 유지)
+    # signals 자체에 signal_type, confidence, target_profit이 포함됨
+    # 기존의 sig_improved는 signals와 동일
     return signals, signals
 
 
-
-def locate_row_for_time(df_3min: pd.DataFrame, target_date: str, hhmm: str) -> Optional[int]:
-    """3분봉 DataFrame에서 특정 HH:MM 라벨의 행 인덱스를 찾는다.
-    - DataFrame은 'datetime' 컬럼을 가져야 한다(visualization.DataProcessor 기준).
-    - 없으면 None.
-    """
-    if df_3min is None or df_3min.empty or "datetime" not in df_3min.columns:
-        return None
-    try:
-        # target_date(YYYYMMDD) + HH:MM:00 → floor 3분으로 보정
-        date_str = f"{target_date[:4]}-{target_date[4:6]}-{target_date[6:8]}"
-        target_ts = pd.Timestamp(f"{date_str} {hhmm}:00")
-        target_floor = target_ts.floor("3T")
-        # 정확히 일치하는 라벨 우선
-        matches = df_3min.index[df_3min["datetime"] == target_floor].tolist()
-        if matches:
-            return matches[0]
-        # 근접(±2분) 검색: 가장 가까운 인덱스 선택
-        deltas = (df_3min["datetime"] - target_ts).abs()
-        nearest_idx = int(deltas.idxmin()) if len(deltas) > 0 else None
-        if nearest_idx is not None:
-            min_delta_sec = abs((df_3min.loc[nearest_idx, "datetime"] - target_ts).total_seconds())
-            if min_delta_sec <= 120:  # 2분 이내면 허용
-                return nearest_idx
-        return None
-    except Exception:
-        return None
-
-
-
-
-async def fetch_and_prepare_data(stock_code: str, target_date: str) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
-    """실데이터 1분봉을 조회 후 1분봉과 3분봉을 모두 반환. (성능 최적화)"""
-    start_time = time.time()
-    
-    from datetime import datetime
-    from utils.korean_time import now_kst
-    from api.kis_chart_api import get_realtime_minute_data
-    
-    # 오늘 날짜인 경우 실시간 데이터 사용, 과거 날짜는 기존 방식 사용
-    today_str = now_kst().strftime("%Y%m%d")
-    
-    try:
-        if target_date == today_str:
-            # 오늘 날짜면 전체 거래시간 실시간 데이터 사용 (분할 요청)
-            from api.kis_chart_api import get_full_trading_day_data
-            base_1min = get_full_trading_day_data(stock_code, target_date)
-        else:
-            # 과거 날짜는 기존 방식 사용
-            dp = DataProcessor()
-            base_1min = await dp.get_historical_chart_data(stock_code, target_date)
-        
-        if base_1min is None or base_1min.empty:
-            logger.error(f"{stock_code} {target_date} 1분봉 데이터 조회 실패")
-            return None, None
-        
-        # TimeFrameConverter를 사용한 3분봉 변환
-        from core.timeframe_converter import TimeFrameConverter
-        df_3min = TimeFrameConverter.convert_to_3min_data(base_1min)
-        if df_3min is None or df_3min.empty:
-            logger.error(f"{stock_code} {target_date} 3분봉 변환 실패")
-            return base_1min, None
-        
-        elapsed = time.time() - start_time
-        logger.debug(f"⚡ {stock_code} 데이터 조회 완료: {elapsed:.2f}초")
-        return base_1min, df_3min
-        
-    except Exception as e:
-        logger.error(f"❌ {stock_code} 데이터 조회 오류: {e}")
-        return None, None
-
-async def fetch_and_prepare_3min(stock_code: str, target_date: str) -> Optional[pd.DataFrame]:
-    """실데이터 1분봉을 조회 후 3분봉으로 변환하여 반환. (호환성 유지)"""
-    _, df_3min = await fetch_and_prepare_data(stock_code, target_date)
-    return df_3min
-
-
-async def evaluate_signals_at_times(
-    df_3min: pd.DataFrame,
-    target_date: str,
-    times: List[str],
-    *,
-    stock_code: str = "UNKNOWN",
-    logger: Optional[logging.Logger] = None,
-    debug_logs: bool = True,
-    log_level: int = logging.INFO,
-    use_decision_engine: bool = False,
-) -> List[Dict[str, object]]:
-    """지정 시각들에서 눌림목 매수신호 ON/OFF와 미충족 사유를 평가."""
-    results: List[Dict[str, object]] = []
-    if df_3min is None or df_3min.empty:
-        for t in times:
-            results.append({
-                "time": t,
-                "has_signal": False,
-                "signal_types": [],
-                "unmet_conditions": ["데이터 없음"],
-            })
-        return results
-
-    # 로거에 종목코드 설정
-    if logger:
-        logger._stock_code = stock_code
-    
-    # decision_engine 사용 옵션 (실시간과 동일한 로직)
-    if use_decision_engine:
-        # 각 시각별로 해당 시점까지의 데이터로 매수 판단
-        for t in times:
-            try:
-                # 해당 시각까지의 완성된 3분봉 데이터만 추출 (실시간과 동일)
-                time_dt = pd.to_datetime(f"{target_date} {t}")
-                # 현재 시점에서 완성된 3분봉만 사용 (진행중인 봉 제외)
-                current_3min_floor = time_dt.floor('3min')
-                mask = df_3min['datetime'] < current_3min_floor  # 진행중인 3분봉 제외
-                data_until_time = df_3min[mask]
-                
-                if len(data_until_time) < 5:
-                    results.append({
-                        "time": t,
-                        "has_signal": False,
-                        "signal_types": [],
-                        "unmet_conditions": ["데이터 부족"],
-                        "buy_info": None
-                    })
-                    continue
-                
-                # decision_engine을 통한 매수 판단 (3분봉 사용 - 실시간과 동일)
-                buy_signal, buy_reason, buy_info = await calculate_trading_signals_using_decision_engine(
-                    stock_code, data_until_time, logger=logger  # data_until_time은 3분봉
-                )
-                
-                results.append({
-                    "time": t,
-                    "has_signal": buy_signal,
-                    "signal_types": ["decision_engine"] if buy_signal else [],
-                    "unmet_conditions": [] if buy_signal else [buy_reason],
-                    "buy_info": buy_info if buy_signal else None
-                })
-                
-            except Exception as e:
-                results.append({
-                    "time": t,
-                    "has_signal": False,
-                    "signal_types": [],
-                    "unmet_conditions": [f"오류: {e}"],
-                    "buy_info": None
-                })
-    else:
-        # 기존 패턴 매칭 방식 (호환성 유지, 완성된 봉만 사용)
-        for t in times:
-            try:
-                # 해당 시각까지의 완성된 3분봉 데이터만 추출 (실시간과 동일)
-                time_dt = pd.to_datetime(f"{target_date} {t}")
-                # 현재 시점에서 완성된 3분봉만 사용 (진행중인 봉 제외)
-                current_3min_floor = time_dt.floor('3min')
-                mask = df_3min['datetime'] < current_3min_floor  # 진행중인 3분봉 제외
-                data_until_time = df_3min[mask]
-                
-                if len(data_until_time) < 5:
-                    results.append({
-                        "time": t,
-                        "has_signal": False,
-                        "signal_types": [],
-                        "unmet_conditions": ["완성된 3분봉 데이터 부족"],
-                    })
-                    continue
-
-                # 완성된 데이터로만 신호 계산
-                signals, signals_improved = calculate_trading_signals_once(data_until_time, debug_logs=debug_logs, logger=logger, log_level=log_level, stock_code=stock_code)
-                
-                if signals.empty:
-                    results.append({
-                        "time": t,
-                        "has_signal": False,
-                        "signal_types": [],
-                        "unmet_conditions": ["신호 계산 실패"],
-                    })
-                    continue
-                
-                # 마지막 완성된 봉에서 신호 확인
-                last_idx = len(data_until_time) - 1
-                buy1 = bool(signals.get("buy_pullback_pattern", pd.Series([False]*len(data_until_time))).iloc[last_idx]) if not signals.empty else False
-                buy2 = bool(signals.get("buy_bisector_recovery", pd.Series([False]*len(data_until_time))).iloc[last_idx]) if not signals.empty else False
-                
-                has_signal = buy1 or buy2
-                signal_types = []
-                if buy1:
-                    signal_types.append("buy_pullback_pattern")
-                if buy2:
-                    signal_types.append("buy_bisector_recovery")
-
-                if has_signal:
-                    results.append({
-                        "time": t,
-                        "has_signal": True,
-                        "signal_types": signal_types,
-                        "unmet_conditions": [],
-                    })
-                else:
-                    unmet = []  # 조건 분석 기능은 추후 구현
-                    results.append({
-                        "time": t,
-                        "has_signal": False,
-                        "signal_types": [],
-                        "unmet_conditions": unmet,
-                    })
-            except Exception as e:
-                results.append({
-                    "time": t,
-                    "has_signal": False,
-                    "signal_types": [],
-                    "unmet_conditions": [f"패턴매칭 오류: {e}"],
-                })
-
-    return results
-
-
 def list_all_buy_signals(df_3min: pd.DataFrame, *, logger: Optional[logging.Logger] = None, stock_code: str = "UNKNOWN") -> List[Dict[str, object]]:
-    """해당 3분봉 전체에서 발생한 매수 신호 시각/유형 리스트.
-
-    실전 기준: 눌림목(3분) 신호만 사용 (consolidation breakout 제외)
-    """
-    out: List[Dict[str, object]] = []
-    if df_3min is None or df_3min.empty or 'datetime' not in df_3min.columns:
-        return out
-    # 공통 신호 계산 함수 사용
-    sig, sig_improved = calculate_trading_signals_once(df_3min, debug_logs=False, stock_code=stock_code)
-    if sig is None or sig.empty:
-        sig = pd.DataFrame(index=df_3min.index)
-    has_pb = sig.get('buy_pullback_pattern', pd.Series([False]*len(df_3min)))
-    has_rc = sig.get('buy_bisector_recovery', pd.Series([False]*len(df_3min)))
-    for i in range(len(df_3min)):
-        pb = bool(has_pb.iloc[i])
-        rc = bool(has_rc.iloc[i])
-        if not (pb or rc):
-            continue
-        ts = df_3min['datetime'].iloc[i]
-        hhmm = pd.Timestamp(ts).strftime('%H:%M')
-        types = []
-        if pb:
-            types.append('pullback')
-        if rc:
-            types.append('bisector_recovery')
-        out.append({'time': hhmm, 'types': '+'.join(types)})
-    return out
-
-
-def generate_chart_for_stock(stock_code: str, target_date: str, df_3min: pd.DataFrame, 
-                           df_1min: Optional[pd.DataFrame] = None, 
-                           chart_renderer = None,
-                           strategy_manager = None,
-                           signal_calculator = None,
-                           logger: Optional[logging.Logger] = None) -> Optional[str]:
-    """단일 종목의 3분봉 차트를 생성 (거래량, 이등분선, 매수/매도 포인트 포함)"""
+    """전체 3분봉에서 매수 신호 전체 리스트를 반환"""
+    
+    if df_3min is None or df_3min.empty:
+        return []
+    
     try:
-        # logger가 없으면 기본 로거 사용
-        if logger is None:
-            logger = setup_logger(__name__)
-            
-        if df_3min is None or df_3min.empty:
-            logger.warning(f"차트 생성 실패: {stock_code} - 3분봉 데이터 없음")
-            return None
-            
-        # 차트 렌더러 초기화
-        if chart_renderer is None:
-            from visualization.chart_renderer import ChartRenderer
-            chart_renderer = ChartRenderer()
-        if strategy_manager is None:
-            from visualization.strategy_manager import StrategyManager
-            strategy_manager = StrategyManager()
-        if signal_calculator is None:
-            from visualization.signal_calculator import SignalCalculator
-            signal_calculator = SignalCalculator()
-            
-        logger.info(f"📊 차트 생성 시작: {stock_code} ({target_date})")
+        signals, sig_improved = calculate_trading_signals_once(
+            df_3min, 
+            debug_logs=False, 
+            logger=logger, 
+            stock_code=stock_code
+        )
         
-        # 3분봉 풀백 전략 가져오기
-        pullback_strategy = strategy_manager.get_strategy("pullback_candle_pattern")
+        if signals is None or signals.empty:
+            return []
         
-        # 지표 데이터 계산
-        indicators_data = {}
+        buy_signals = []
         
-        # 이등분선 계산
-        try:
-            from core.indicators.bisector_line import BisectorLine
-            bisector_line = BisectorLine.calculate_bisector_line(df_3min["high"], df_3min["low"])
-            if bisector_line is not None:
-                # 차트 렌더러가 기대하는 형식으로 전달
-                indicators_data['bisector_line'] = {
-                    'line_values': bisector_line
-                }
-                logger.debug(f"✅ {stock_code} 이등분선 계산 완료: {len(bisector_line)}개 값")
-        except Exception as e:
-            logger.warning(f"⚠️ {stock_code} 이등분선 계산 오류: {e}")
+        for i, row in signals.iterrows():
+            # 매수 신호 체크 (기존 컬럼명 사용)
+            buy_pullback = row.get('buy_pullback_pattern', False)
+            buy_bisector = row.get('buy_bisector_recovery', False)
             
-        # 매수/매도 신호 계산
-        try:
-            signals, signals_improved = calculate_trading_signals_once(df_3min, debug_logs=False, stock_code=stock_code)
-            
-            if signals is not None and not signals.empty:
-                # 매수 신호
-                buy_pullback = signals.get('buy_pullback_pattern', pd.Series([False]*len(df_3min)))
-                buy_bisector = signals.get('buy_bisector_recovery', pd.Series([False]*len(df_3min)))
-                indicators_data['buy_signals'] = {
+            if buy_pullback or buy_bisector:
+                # datetime 정보는 원본 df_3min에서 가져오기
+                if i < len(df_3min):
+                    original_row = df_3min.iloc[i]
+                    datetime_val = original_row.get('datetime')
+                    close_val = original_row.get('close', 0)
+                    volume_val = original_row.get('volume', 0)
+                else:
+                    datetime_val = None
+                    close_val = row.get('close', 0)
+                    volume_val = row.get('volume', 0)
+                
+                # 신호 강도에 따른 목표 수익률 계산
+                target_profit = get_target_profit_from_signal_strength(sig_improved, i)
+                
+                signal_info = {
+                    'index': i,
+                    'datetime': datetime_val,
+                    'time': datetime_val.strftime('%H:%M') if datetime_val else 'Unknown',
+                    'close': close_val,
+                    'volume': volume_val,
                     'buy_pullback_pattern': buy_pullback,
-                    'buy_bisector_recovery': buy_bisector
+                    'buy_bisector_recovery': buy_bisector,
+                    'signal_type': row.get('signal_type', ''),
+                    'confidence': row.get('confidence', 0),
+                    'target_profit': target_profit,
+                    'entry_low': original_row.get('low', 0) if i < len(df_3min) else 0,  # 진입 저가 추가
+                    'low': original_row.get('low', 0) if i < len(df_3min) else 0  # 추가 참조용
                 }
-                
-                # 매도 신호 계산 (임시 entry_low로 최근 신호의 저가 사용)
-                entry_low = None
-                latest_signal_idx = None
-                for i in range(len(df_3min)-1, -1, -1):
-                    if (bool(buy_pullback.iloc[i]) or bool(buy_bisector.iloc[i])):
-                        latest_signal_idx = i
-                        entry_low = float(df_3min['low'].iloc[i])
-                        break
-                
-                if entry_low is not None:
-                    try:
-                        sell_signals = PullbackCandlePattern.generate_sell_signals(df_3min, entry_low=entry_low)
-                        if sell_signals is not None and not sell_signals.empty:
-                            indicators_data['sell_signals'] = sell_signals
-                    except Exception as e:
-                        logger.warning(f"⚠️ {stock_code} 매도 신호 계산 오류: {e}")
-                
-                logger.debug(f"✅ {stock_code} 매수/매도 신호 계산 완료")
-            else:
-                logger.warning(f"⚠️ {stock_code} 신호 계산 결과 없음")
-                
-        except Exception as e:
-            logger.warning(f"⚠️ {stock_code} 신호 계산 오류: {e}")
+                buy_signals.append(signal_info)
         
-        # 체결 시뮬레이션 실행
-        trades = simulate_trades(df_3min, df_1min, logger=logger, stock_code=stock_code) if df_3min is not None else []
+        if logger:
+            logger.info(f"🎯 [{stock_code}] 총 {len(buy_signals)}개 매수 신호 발견")
+            
+        return buy_signals
         
-        # 차트 생성
-        try:
-            # 종목명 조회 (간단하게 코드만 사용)
-            stock_name = f"종목{stock_code}"
-            
-            chart_path = chart_renderer.create_strategy_chart(
-                stock_code=stock_code,
-                stock_name=stock_name,
-                target_date=target_date,
-                strategy=pullback_strategy,
-                data=df_3min,
-                indicators_data=indicators_data,
-                selection_reason="signal_replay 차트 생성",
-                chart_suffix="signal_replay",
-                timeframe="3min",
-                trade_simulation_results=trades  # 체결 시뮬레이션 결과 전달
-            )
-            
-            if chart_path:
-                logger.info(f"✅ 차트 생성 완료: {stock_code} -> {chart_path}")
-                return chart_path
-            else:
-                logger.warning(f"⚠️ 차트 생성 실패: {stock_code}")
-                return None
-                
-        except Exception as e:
-            logger.error(f"❌ {stock_code} 차트 생성 오류: {e}")
-            return None
-            
     except Exception as e:
-        logger.error(f"❌ {stock_code} 차트 생성 전체 오류: {e}")
-        return None
+        if logger:
+            logger.error(f"매수 신호 리스트 생성 실패 [{stock_code}]: {e}")
+        return []
 
 
 def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = None, *, logger: Optional[logging.Logger] = None, stock_code: str = "UNKNOWN") -> List[Dict[str, object]]:
-    """실전(_execute_trading_decision) 기준에 맞춘 눌림목(3분) 체결 시뮬레이션.
-
-    규칙(실전 근사):
-    - 매수: buy_pullback_pattern 또는 buy_bisector_recovery가 True일 때 진입 (3분봉 기준)
-      • 체결가: 신호 캔들의 3/5가(low + (high-low)*0.6), 실패 시 해당 캔들 종가
-    - 매도 우선순위: (1) 실시간 가격 기준 손절/익절 (1분마다 체크) → (2) 3분봉 기술적 분석 → (3) EOD 청산
-    - 종가 체결 가정, 복수 매매 허용, 끝까지 보유 시 EOD 청산
-    """
-    trades: List[Dict[str, object]] = []
-    if df_3min is None or df_3min.empty or 'datetime' not in df_3min.columns:
+    """매수신호 발생 시점에서 1분봉 기준으로 실제 거래를 시뮬레이션"""
+    
+    if df_3min is None or df_3min.empty:
+        return []
+        
+    if df_1min is None or df_1min.empty:
+        if logger:
+            logger.warning(f"1분봉 데이터 없음 - 거래 시뮬레이션 불가 [{stock_code}]")
+        return []
+    
+    try:
+        # 매수 신호 리스트 가져오기
+        buy_signals = list_all_buy_signals(df_3min, logger=logger, stock_code=stock_code)
+        
+        if not buy_signals:
+            if logger:
+                logger.info(f"매수 신호 없음 - 거래 시뮬레이션 불가 [{stock_code}]")
+            return []
+        
+        trades = []
+        current_position = None  # 현재 포지션 추적 (실시간과 동일하게 한 번에 하나만)
+        
+        for signal in buy_signals:
+            signal_datetime = signal['datetime']
+            signal_index = signal['index']
+            
+            # ==================== 실시간과 동일: 포지션 보유 중이면 매수 금지 ====================
+            if current_position is not None:
+                # 현재 시간이 포지션 매도 이후인지 확인
+                if signal_datetime <= current_position['sell_time']:
+                    if logger:
+                        logger.debug(f"⚠️ [{signal_datetime.strftime('%H:%M')}] 포지션 보유 중으로 매수 건너뜀")
+                    continue  # 포지션 보유 중이므로 매수 불가
+                else:
+                    # 포지션이 매도되었으므로 새로운 매수 가능
+                    current_position = None
+            
+            # 신고 강도에 따른 목표 수익률 결정 (원본 로직)
+            target_profit_rate = signal.get('target_profit', 0.015)  # 기본 1.5% (원본과 동일)
+            if target_profit_rate <= 0:
+                target_profit_rate = 0.015
+                
+            # 손익비 2:1로 손절매 비율 설정
+            stop_loss_rate = target_profit_rate / 2.0  # 손익비 2:1
+            
+            # 해당 3분봉 시작 시점부터 1분봉 데이터 찾기
+            signal_time_start = signal_datetime
+            signal_time_end = signal_datetime + pd.Timedelta(minutes=3)
+            
+            # 매수 시점: 3분봉 시작 후 첫 번째 1분봉
+            buy_candles = df_1min[
+                (df_1min['datetime'] >= signal_time_start) & 
+                (df_1min['datetime'] < signal_time_end)
+            ].copy()
+            
+            if buy_candles.empty:
+                continue
+                
+            # 첫 번째 1분봉에서 매수 (종가로 매수)
+            first_candle = buy_candles.iloc[0]
+            buy_time = first_candle['datetime']
+            buy_price = first_candle['close']
+            
+            # 진입 저가 추적 (실시간과 동일)
+            entry_low = signal.get('entry_low', 0)
+            if entry_low <= 0:
+                entry_low = signal.get('low', 0)  # 3분봉 저가를 대체
+            
+            # 매수 후부터 장 마감까지의 1분봉 데이터로 매도 시뮬레이션
+            remaining_data = df_1min[df_1min['datetime'] > buy_time].copy()
+            
+            if remaining_data.empty:
+                # 매도 기회 없음 - 미결제
+                trades.append({
+                    'buy_time': buy_time.strftime('%H:%M'),
+                    'buy_price': buy_price,
+                    'sell_time': '',
+                    'sell_price': 0,
+                    'profit_rate': 0.0,
+                    'status': 'open',
+                    'signal_type': signal.get('signal_type', ''),
+                    'confidence': signal.get('confidence', 0),
+                    'target_profit': target_profit_rate,
+                    'max_profit_rate': 0.0,
+                    'max_loss_rate': 0.0,
+                    'duration_minutes': 0,
+                    'reason': '거래시간 종료'
+                })
+                continue
+            
+            # 매도 조건 체크 (실시간 매매와 동일한 로직)
+            sell_time = None
+            sell_price = 0
+            max_profit_rate = 0.0
+            max_loss_rate = 0.0
+            sell_reason = ""
+            
+            for i, row in remaining_data.iterrows():
+                current_price = row['close']
+                current_profit_rate = ((current_price - buy_price) / buy_price) * 100
+                
+                # 최대/최소 수익률 추적
+                if current_profit_rate > max_profit_rate:
+                    max_profit_rate = current_profit_rate
+                if current_profit_rate < max_loss_rate:
+                    max_loss_rate = current_profit_rate
+                
+                # ==================== 실시간과 동일한 매도 조건들 ====================
+                
+                # 1. 신호강도별 익절 (가격 기준)
+                if current_price >= buy_price * (1.0 + target_profit_rate):
+                    sell_time = row['datetime']
+                    sell_price = current_price
+                    sell_reason = f"profit_{target_profit_rate*100:.1f}pct"
+                    break
+                    
+                # 2. 신호강도별 손절 (가격 기준) 
+                if current_price <= buy_price * (1.0 - stop_loss_rate):
+                    sell_time = row['datetime']
+                    sell_price = current_price
+                    sell_reason = f"stop_loss_{stop_loss_rate*100:.1f}pct"
+                    break
+                
+                # 3. 진입저가 실시간 체크 (-0.2%) - 실시간과 동일
+                if entry_low > 0 and current_price < entry_low * 0.998:
+                    sell_time = row['datetime']
+                    sell_price = current_price
+                    sell_reason = f"entry_low_break"
+                    break
+                
+                # 4. 3분봉 기반 기술적 분석 매도 신호 (매 1분마다 체크)
+                current_time = row['datetime']
+                
+                # 해당 시점까지의 1분봉 데이터를 3분봉으로 변환
+                data_until_now = df_1min[df_1min['datetime'] <= current_time]
+                if len(data_until_now) >= 15:  # 최소 15개 1분봉 필요
+                    try:
+                        from core.timeframe_converter import TimeFrameConverter
+                        data_3min_current = TimeFrameConverter.convert_to_3min_data(data_until_now)
+                        
+                        if data_3min_current is not None and len(data_3min_current) >= 5:
+                            # 3분봉 기반 매도 신호 계산
+                            technical_sell, technical_reason = _check_technical_sell_signals(
+                                data_3min_current, entry_low
+                            )
+                            
+                            if technical_sell:
+                                sell_time = row['datetime']
+                                sell_price = current_price
+                                sell_reason = technical_reason
+                                break
+                                
+                    except Exception as e:
+                        if logger:
+                            logger.debug(f"기술적 분석 매도 신호 체크 오류: {e}")
+                        continue
+            
+            # 거래 결과 기록 및 포지션 업데이트
+            if sell_time is not None:
+                duration_minutes = int((sell_time - buy_time).total_seconds() / 60)
+                profit_rate = ((sell_price - buy_price) / buy_price) * 100
+                
+                # ==================== 포지션 업데이트: 매도 완료 ====================
+                current_position = {
+                    'buy_time': buy_time,
+                    'sell_time': sell_time,
+                    'status': 'completed'
+                }
+                
+                trades.append({
+                    'buy_time': buy_time.strftime('%H:%M'),
+                    'buy_price': buy_price,
+                    'sell_time': sell_time.strftime('%H:%M'),
+                    'sell_price': sell_price,
+                    'profit_rate': profit_rate,
+                    'status': 'completed',
+                    'signal_type': signal.get('signal_type', ''),
+                    'confidence': signal.get('confidence', 0),
+                    'target_profit': target_profit_rate,
+                    'max_profit_rate': max_profit_rate,
+                    'max_loss_rate': max_loss_rate,
+                    'duration_minutes': duration_minutes,
+                    'reason': sell_reason
+                })
+            else:
+                # ==================== 포지션 업데이트: 미결제 (장 마감까지 보유) ====================
+                from utils.korean_time import now_kst
+                eod_time = buy_time.replace(hour=15, minute=30, second=0, microsecond=0)  # 15:30 장 마감
+                
+                current_position = {
+                    'buy_time': buy_time,
+                    'sell_time': eod_time,  # 장 마감 시간으로 설정하여 이후 매수 허용
+                    'status': 'eod_open'
+                }
+                
+                trades.append({
+                    'buy_time': buy_time.strftime('%H:%M'),
+                    'buy_price': buy_price,
+                    'sell_time': '',
+                    'sell_price': 0,
+                    'profit_rate': 0.0,
+                    'status': 'open',
+                    'signal_type': signal.get('signal_type', ''),
+                    'confidence': signal.get('confidence', 0),
+                    'target_profit': target_profit_rate,
+                    'max_profit_rate': max_profit_rate,
+                    'max_loss_rate': max_loss_rate,
+                    'duration_minutes': 0,
+                    'reason': '거래시간 종료'
+                })
+        
+        if logger:
+            completed_trades = [t for t in trades if t['status'] == 'completed']
+            successful_trades = [t for t in completed_trades if t['profit_rate'] > 0]
+            
+            logger.info(f"📈 [{stock_code}] 거래 시뮬레이션 완료:")
+            logger.info(f"   전체 거래: {len(trades)}건")
+            logger.info(f"   완료 거래: {len(completed_trades)}건")
+            logger.info(f"   성공 거래: {len(successful_trades)}건")
+            
+            if completed_trades:
+                avg_profit = sum(t['profit_rate'] for t in completed_trades) / len(completed_trades)
+                logger.info(f"   평균 수익률: {avg_profit:.2f}%")
+        
         return trades
     
-    # 공통 신호 계산 함수 사용
-    sig, sig_improved = calculate_trading_signals_once(df_3min, debug_logs=False, stock_code=stock_code)
-    if sig is None or sig.empty:
-        sig = pd.DataFrame(index=df_3min.index)
-
-    # 안전: 불리언 시리즈 확보
-    buy_pb = sig.get('buy_pullback_pattern', pd.Series([False]*len(df_3min)))
-    buy_rc = sig.get('buy_bisector_recovery', pd.Series([False]*len(df_3min)))
-
-    in_pos = False
-    pending_entry = None  # {'index_3min': j, 'type': 'pullback'|'bisector_recovery', 'entry_low': float}
-    entry_price = None
-    entry_time = None
-    entry_type = None
-    entry_low = None
-    entry_datetime = None
-    target_profit_rate = 0.015  # 기본 목표수익률 1.5%
-
-    # 당일 손실 2회 시 신규 진입 차단 (해제됨)
-    daily_loss_count = 0
-    can_enter = True  # 항상 진입 가능
-
-    # 1분봉이 있으면 1분 단위로 매도 체크, 없으면 3분봉 단위로 체크
-    if df_1min is not None and not df_1min.empty and 'datetime' in df_1min.columns:
-        # 1분봉 기반 매도 체크
-        closes_1min = pd.to_numeric(df_1min['close'], errors='coerce')
-        
-        for i in range(len(df_1min)):
-            current_time = df_1min['datetime'].iloc[i]
-            current_price = float(closes_1min.iloc[i]) if pd.notna(closes_1min.iloc[i]) else None
-            hhmm = pd.Timestamp(current_time).strftime('%H:%M')
-            
-            if current_price is None:
-                continue
-
-            # 매수 신호 체크 (3분봉과 시간 매핑)
-            if not in_pos:
-                if not can_enter:
-                    continue
-                # 현재 1분봉 시간에 해당하는 3분봉 찾기
-                for j in range(len(df_3min)):
-                    ts_3min = df_3min['datetime'].iloc[j]
-                    # 3분봉 시간 범위 계산 (예: 10:30~10:32)
-                    # 라벨(ts_3min)은 구간 시작 시각이므로 [라벨, 라벨+2분]을 포함
-                    start_time = pd.Timestamp(ts_3min)
-                    end_time = pd.Timestamp(ts_3min) + pd.Timedelta(minutes=2)
-                    
-                    if start_time <= pd.Timestamp(current_time) <= end_time:
-                        # 신호 봉에서는 즉시 진입하지 않고, 봉 확정 후(라벨+3분 이후) 첫 시점에 진입
-                        if pending_entry is None and (bool(buy_pb.iloc[j]) or bool(buy_rc.iloc[j])):
-                            typ = 'pullback' if bool(buy_pb.iloc[j]) else 'bisector_recovery'
-                            try:
-                                pending_entry = {
-                                    'index_3min': j,
-                                    'type': typ,
-                                    'entry_low': float(df_3min['low'].iloc[j])
-                                }
-                            except Exception:
-                                pending_entry = {
-                                    'index_3min': j,
-                                    'type': typ,
-                                    'entry_low': None
-                                }
-                        break
-
-                # 대기 엔트리가 있고, 해당 3분봉이 확정된 이후(라벨+3분 경과)면 진입
-                if (not in_pos) and pending_entry is not None:
-                    j = pending_entry['index_3min']
-                    ts_close = pd.Timestamp(df_3min['datetime'].iloc[j]) + pd.Timedelta(minutes=3)
-                    if pd.Timestamp(current_time) >= ts_close:
-                        in_pos = True
-                        # 3/5가 우선, 실패 시 현재가
-                        try:
-                            hi = float(df_3min['high'].iloc[j])
-                            lo = float(df_3min['low'].iloc[j])
-                            three_fifth_price = lo + (hi - lo) * 0.6
-                            entry_price = three_fifth_price if (three_fifth_price > 0 and lo <= three_fifth_price <= hi) else current_price
-                        except Exception:
-                            entry_price = current_price
-                        entry_time = hhmm
-                        entry_datetime = current_time
-                        entry_low = pending_entry.get('entry_low', None)
-                        entry_type = pending_entry.get('type', None)
-                        
-                        # 신호 강도 기반 목표수익률 설정
-                        target_profit_rate = get_target_profit_from_signal_strength(sig_improved, j)
-                        if logger:
-                            logger.debug(f"매수 진입 {j}: 목표수익률 {target_profit_rate*100:.0f}% 설정")
-                        
-                        pending_entry = None
-            else:
-                # 매도 체크 (1분마다)
-                exit_reason = None
-                
-                # 신호강도별 손절/익절 (손익비 2:1)
-                stop_loss_rate = target_profit_rate / 2.0  # 손익비 2:1
-                
-                # (1) 신호강도별 손절
-                if entry_price is not None and current_price <= entry_price * (1.0 - stop_loss_rate):
-                    exit_reason = f'stop_loss_{stop_loss_rate*100:.1f}pct'
-                # (2) 신호강도별 익절
-                elif entry_price is not None and current_price >= entry_price * (1.0 + target_profit_rate):
-                    exit_reason = f'profit_{target_profit_rate*100:.1f}pct'
-                # (3) 진입저가 실시간 체크: -0.2%
-                elif entry_low is not None and entry_low > 0 and current_price < entry_low * 0.998:
-                    exit_reason = 'realtime_entry_low_break'
-                
-                if exit_reason is not None:
-                     # 09시 이전 매수/매도는 승패 계산에서 제외
-                     buy_hour = int(entry_time.split(':')[0]) if ':' in entry_time else 0
-                     sell_hour = int(hhmm.split(':')[0]) if ':' in hhmm else 0
-                     
-                     if buy_hour >= 9 and sell_hour >= 9:  # 09시 이후만 승패 계산에 포함
-                         profit = (current_price - entry_price) / entry_price * 100.0 if entry_price and entry_price > 0 else 0.0
-                         trades.append({
-                             'buy_time': entry_time,
-                             'buy_type': entry_type,
-                             'buy_price': entry_price,
-                             'sell_time': hhmm,
-                             'sell_reason': exit_reason,
-                             'sell_price': current_price,
-                             'profit_rate': profit,
-                         })
-                     else:
-                         # 09시 이전 거래는 기록하되 승패 계산에서 제외
-                         trades.append({
-                             'buy_time': entry_time,
-                             'buy_type': entry_type,
-                             'buy_price': entry_price,
-                             'sell_time': hhmm,
-                             'sell_reason': exit_reason,
-                             'sell_price': current_price,
-                             'profit_rate': 0.0,  # 승패 계산에서 제외
-                             'excluded_from_stats': True,  # 통계에서 제외 표시
-                         })
-                     in_pos = False
-                     entry_price = None
-                     entry_time = None
-                     entry_type = None
-                     entry_low = None
-                     entry_datetime = None
-                     # 손실 집계 및 진입 차단 (해제됨)
-                     if 'profit' in locals() and profit < 0:
-                         daily_loss_count += 1
-                         # if daily_loss_count >= 2:
-                         #     can_enter = False
-    else:
-        # 기존 3분봉 방식 (1분봉 데이터 없는 경우)
-        closes = pd.to_numeric(df_3min['close'], errors='coerce')
-        
-        for i in range(len(df_3min)):
-            ts = df_3min['datetime'].iloc[i]
-            hhmm = pd.Timestamp(ts).strftime('%H:%M')
-            c = float(closes.iloc[i]) if pd.notna(closes.iloc[i]) else None
-            if c is None:
-                continue
-
-            if not in_pos:
-                if not can_enter:
-                    continue
-                # 직전 신호 봉 대기 중이면, 신호 봉의 다음 봉(i)에서 진입
-                if pending_entry is not None:
-                    in_pos = True
-                    j = pending_entry['index_3min']
-                    try:
-                        hi = float(df_3min['high'].iloc[j])
-                        lo = float(df_3min['low'].iloc[j])
-                        three_fifth_price = lo + (hi - lo) * 0.6
-                        entry_price = three_fifth_price if (three_fifth_price > 0 and lo <= three_fifth_price <= hi) else c
-                    except Exception:
-                        entry_price = c
-                    entry_time = hhmm
-                    entry_low = pending_entry.get('entry_low', None)
-                    entry_type = pending_entry.get('type', None)
-                    
-                    # 신호 강도 기반 목표수익률 설정
-                    target_profit_rate = get_target_profit_from_signal_strength(sig_improved, j)
-                    if logger:
-                        logger.debug(f"3분봉 매수 진입 {j}: 목표수익률 {target_profit_rate*100:.0f}% 설정")
-                    
-                    pending_entry = None
-                # 현재 봉이 신호 봉이면 '대기'만 등록(진입은 다음 봉에서)
-                elif bool(buy_pb.iloc[i]) or bool(buy_rc.iloc[i]):
-                    pending_entry = {
-                        'index_3min': i,
-                        'type': 'pullback' if bool(buy_pb.iloc[i]) else 'bisector_recovery',
-                        'entry_low': float(df_3min['low'].iloc[i]) if not pd.isna(df_3min['low'].iloc[i]) else None,
-                    }
-            else:
-                exit_reason = None
-                
-                # 실시간과 동일한 매도 로직 적용
-                # 신호강도별 손절/익절 (손익비 2:1)
-                stop_loss_rate = target_profit_rate / 2.0  # 손익비 2:1
-                
-                # (1) 신호강도별 손절
-                if entry_price is not None and c <= entry_price * (1.0 - stop_loss_rate):
-                    exit_reason = f'stop_loss_{stop_loss_rate*100:.1f}pct'
-                # (2) 신호강도별 익절
-                elif entry_price is not None and c >= entry_price * (1.0 + target_profit_rate):
-                    exit_reason = f'profit_{target_profit_rate*100:.1f}pct'
-                # (3) 진입저가 실시간 체크: -0.2%
-                elif entry_low is not None and entry_low > 0 and c < entry_low * 0.998:
-                    exit_reason = 'realtime_entry_low_break'
-                else:
-                    # (4) 3분봉 기준 기술적 분석 (기존 로직 유지)
-                    try:
-                        sell_sig = PullbackCandlePattern.generate_sell_signals(df_3min.iloc[:i+1], entry_low=entry_low)
-                    except Exception:
-                        sell_sig = pd.DataFrame(index=df_3min.index)
-                    if not sell_sig.empty:
-                        if bool(sell_sig.get('sell_bisector_break', pd.Series([False]*len(df_3min))).iloc[i]):
-                            exit_reason = 'pattern_bisector_break'
-                        elif bool(sell_sig.get('sell_support_break', pd.Series([False]*len(df_3min))).iloc[i]):
-                            exit_reason = 'pattern_support_break'
-                        elif bool(sell_sig.get('stop_entry_low_break', pd.Series([False]*len(df_3min))).iloc[i]):
-                            exit_reason = 'pattern_entry_low_break'
-
-                if exit_reason is not None:
-                    # 09시 이전 매수/매도는 승패 계산에서 제외
-                    buy_hour = int(entry_time.split(':')[0]) if ':' in entry_time else 0
-                    sell_hour = int(hhmm.split(':')[0]) if ':' in hhmm else 0
-                    
-                    if buy_hour >= 9 and sell_hour >= 9:  # 09시 이후만 승패 계산에 포함
-                        profit = (c - entry_price) / entry_price * 100.0 if entry_price and entry_price > 0 else 0.0
-                        trades.append({
-                            'buy_time': entry_time,
-                            'buy_type': entry_type,
-                            'buy_price': entry_price,
-                            'sell_time': hhmm,
-                            'sell_reason': exit_reason,
-                            'sell_price': c,
-                            'profit_rate': profit,
-                        })
-                    else:
-                        # 09시 이전 거래는 기록하되 승패 계산에서 제외
-                        trades.append({
-                            'buy_time': entry_time,
-                            'buy_type': entry_type,
-                            'buy_price': entry_price,
-                            'sell_time': hhmm,
-                            'sell_reason': exit_reason,
-                            'sell_price': c,
-                            'profit_rate': 0.0,  # 승패 계산에서 제외
-                            'excluded_from_stats': True,  # 통계에서 제외 표시
-                        })
-                    in_pos = False
-                    entry_price = None
-                    entry_time = None
-                    entry_type = None
-                    entry_low = None
-                    # 손실 집계 및 진입 차단 (해제됨)
-                    if profit < 0:
-                        daily_loss_count += 1
-                        # if daily_loss_count >= 2:
-                        #     can_enter = False
-
-    # EOD 청산
-    if in_pos and entry_price is not None:
-        # 1분봉 데이터가 있으면 1분봉의 마지막 가격, 없으면 3분봉 마지막 가격
-        if df_1min is not None and not df_1min.empty:
-            last_ts = df_1min['datetime'].iloc[-1]
-            last_close = float(pd.to_numeric(df_1min['close'], errors='coerce').iloc[-1])
-        else:
-            last_ts = df_3min['datetime'].iloc[-1]
-            closes = pd.to_numeric(df_3min['close'], errors='coerce')
-            last_close = float(closes.iloc[-1]) if pd.notna(closes.iloc[-1]) else entry_price
-        
-        last_hhmm = pd.Timestamp(last_ts).strftime('%H:%M')
-        if pd.isna(last_close):
-            last_close = entry_price
-            
-        # 09시 이전 매수는 EOD 청산에서도 승패 계산 제외
-        buy_hour = int(entry_time.split(':')[0]) if ':' in entry_time else 0
-        
-        if buy_hour >= 9:  # 09시 이후 매수만 승패 계산에 포함
-            profit = (last_close - entry_price) / entry_price * 100.0 if entry_price and entry_price > 0 else 0.0
-            trades.append({
-                'buy_time': entry_time,
-                'buy_type': entry_type,
-                'buy_price': entry_price,
-                'sell_time': last_hhmm,
-                'sell_reason': 'EOD',
-                'sell_price': last_close,
-                'profit_rate': profit,
-            })
-        else:
-            # 09시 이전 매수는 기록하되 승패 계산에서 제외
-            trades.append({
-                'buy_time': entry_time,
-                'buy_type': entry_type,
-                'buy_price': entry_price,
-                'sell_time': last_hhmm,
-                'sell_reason': 'EOD',
-                'sell_price': last_close,
-                'profit_rate': 0.0,  # 승패 계산에서 제외
-                'excluded_from_stats': True,  # 통계에서 제외 표시
-            })
-
-    return trades
+    except Exception as e:
+        if logger:
+            logger.error(f"거래 시뮬레이션 실패 [{stock_code}]: {e}")
+        return []
 
 
-
-def to_csv_rows(stock_code: str, target_date: str, evaluations: List[Dict[str, object]]) -> List[Dict[str, object]]:
-    rows: List[Dict[str, object]] = []
-    for item in evaluations:
-        rows.append({
-            "stock_code": stock_code,
-            "date": target_date,
-            "time": item["time"],
-            "has_signal": item["has_signal"],
-            "signal_types": ",".join(item["signal_types"]) if item["signal_types"] else "",
-            "unmet_conditions": ", ".join(item["unmet_conditions"]) if item["unmet_conditions"] else "",
-        })
-    return rows
-
-
-async def process_single_stock(code: str, date_str: str, times_map: Dict[str, List[str]], 
-                              capture_logger: Optional[logging.Logger], debug_logs: bool, 
-                              log_level: int, generate_charts: bool, 
-                              chart_renderer=None, strategy_manager=None, signal_calculator=None) -> Tuple[List[Dict[str, object]], List[Dict[str, object]], List[Dict[str, object]], str]:
-    """단일 종목 처리 (병렬 처리용)"""
+def _check_technical_sell_signals(data_3min: pd.DataFrame, entry_low: float):
+    """3분봉 기반 기술적 분석 매도 신호 체크 (실시간과 동일)"""
     try:
-        start_time = time.time()
+        from core.indicators.pullback_candle_pattern import PullbackCandlePattern
         
-        # 전역 변수에 현재 처리 중인 종목코드 설정
-        current_processing_stock['code'] = code
-        
-        # 1분봉과 3분봉 데이터를 모두 가져오기
-        df_1min, df_3min = await fetch_and_prepare_data(code, date_str)
-        
-        if df_3min is None:
-            logger.warning(f"⚠️ {code} 데이터 조회 실패")
-            return [], [], [], ""
-            
-        # 로거에 종목코드 설정 (전역 변수 방식)
-        if capture_logger and hasattr(capture_logger, '_formatter_stock_tracker'):
-            capture_logger._formatter_stock_tracker['code'] = code
-            
-        # 신호 평가 (실시간과 동일한 decision_engine 사용)
-        evals = await evaluate_signals_at_times(
-            df_3min,
-            date_str,
-            times_map.get(code, []),
-            stock_code=code,
-            logger=capture_logger,
-            debug_logs=debug_logs,
-            log_level=log_level,
-            use_decision_engine=True,  # 실시간과 동일한 로직 사용
+        # 매도 신호 계산
+        sell_signals = PullbackCandlePattern.generate_sell_signals(
+            data_3min,
+            entry_low=entry_low if entry_low > 0 else None
         )
         
-        # CSV 데이터 생성
-        csv_rows = to_csv_rows(code, date_str, evals)
+        if sell_signals is None or sell_signals.empty:
+            return False, ""
         
-        # 전체 매수신호 추출
-        signals_full = list_all_buy_signals(df_3min, logger=capture_logger, stock_code=code) if df_3min is not None else []
+        # 최신 봉의 매도 신호 체크
+        latest_signals = sell_signals.iloc[-1]
         
-        # 체결 시뮬레이션 (1분봉 데이터도 전달)
-        trades = simulate_trades(df_3min, df_1min, logger=capture_logger, stock_code=code) if df_3min is not None else []
+        # 매도 조건 1: 이등분선 이탈 (0.2% 기준)
+        if hasattr(latest_signals, 'sell_bisector_break') and bool(latest_signals.get('sell_bisector_break', False)):
+            return True, "bisector_break"
         
-        # 📊 타임라인 분석 로그 출력 (신고와 매도 정보 표시)
-        if df_3min is not None:
-            print(f"🔍 DEBUG: df_3min 존재함, 길이={len(df_3min)}")
-            # 신호 계산 (타임라인 출력용)
-            timeline_logger = capture_logger or logger
-            signals, _ = calculate_trading_signals_once(df_3min, debug_logs=False, logger=timeline_logger, stock_code=code)
-            print(f"🔍 DEBUG: signals 계산 완료, signals={len(signals) if signals is not None else 'None'}")
-            if signals is not None and not signals.empty:
-                print(f"🔍 DEBUG: 타임라인 분석 로그 호출: {code}, signals={len(signals)}")
-                generate_timeline_analysis_log(df_3min, signals, code, timeline_logger, df_1min=df_1min)
-            else:
-                print(f"🔍 DEBUG: 신호가 없어서 타임라인 분석 스킵: {code}")
-        else:
-            print(f"🔍 DEBUG: df_3min이 None임")
+        # 매도 조건 2: 지지 저점 이탈
+        if hasattr(latest_signals, 'sell_support_break') and bool(latest_signals.get('sell_support_break', False)):
+            return True, "support_break"
         
-        # 차트 생성 (요청된 경우에만)
-        chart_path = ""
-        if generate_charts and df_3min is not None:
-            try:
-                chart_path = generate_chart_for_stock(
-                    stock_code=code,
-                    target_date=date_str,
-                    df_3min=df_3min,
-                    df_1min=df_1min,
-                    chart_renderer=chart_renderer,
-                    strategy_manager=strategy_manager,
-                    signal_calculator=signal_calculator,
-                    logger=capture_logger or logger
-                ) or ""
-            except Exception as chart_err:
-                logger.error(f"❌ {code} 차트 생성 오류: {chart_err}")
-                chart_path = ""
-        
-        elapsed = time.time() - start_time
-        logger.info(f"✅ {code} 처리 완료: {elapsed:.2f}초 (신호:{len(signals_full)}, 매매:{len(trades)})")
-        
-        return csv_rows, signals_full, trades, chart_path
+        # 매도 조건 3: 진입 양봉 저가 0.2% 이탈
+        if hasattr(latest_signals, 'stop_entry_low_break') and bool(latest_signals.get('stop_entry_low_break', False)):
+            return True, "entry_low_technical_break"
+            
+        return False, ""
         
     except Exception as e:
-        logger.error(f"❌ {code} 처리 오류: {e}")
-        # 실패한 종목도 기본 데이터 반환
-        error_rows = []
-        for t in times_map.get(code, []):
-            error_rows.append({
-                "stock_code": code,
-                "date": date_str,
-                "time": t,
-                "has_signal": False,
-                "signal_types": "",
-                "unmet_conditions": f"에러: {e}",
-            })
-        return error_rows, [], [], ""
-
-
-async def run(
-    date_str: str,
-    codes: List[str],
-    times_map: Dict[str, List[str]],
-    *,
-    debug_logs: bool = True,
-    log_level: int = logging.INFO,
-    generate_charts: bool = False,
-) -> Tuple[List[Dict[str, object]], Dict[str, List[Dict[str, object]]], Dict[str, List[Dict[str, object]]], str, Dict[str, str]]:
-    """메인 실행 코루틴 (병렬 처리 최적화)."""
-    start_time = time.time()
-    logger.info(f"🚀 신호 재현 시작: {len(codes)}개 종목 (병렬 처리)")
-    
-    all_rows: List[Dict[str, object]] = []
-    all_signals: Dict[str, List[Dict[str, object]]] = {}
-    all_trades: Dict[str, List[Dict[str, object]]] = {}
-    chart_paths: Dict[str, str] = {}  # 종목별 생성된 차트 파일 경로
-    # 캡처 로거(메모리 버퍼, KST 포맷)
-    log_buffer = io.StringIO()
-    capture_logger: Optional[logging.Logger] = None
-    if debug_logs:
-        capture_logger = logging.getLogger('PullbackCandlePattern')
-        capture_logger.setLevel(log_level)
-        capture_logger.propagate = False
-        # 기존 핸들러 제거 후 메모리 핸들러만 부착
-        if capture_logger.handlers:
-            capture_logger.handlers.clear()
-        handler = logging.StreamHandler(log_buffer)
-        # 종목코드와 기준거래량 정보를 포함한 포맷터
-        
-        class CustomFormatter(logging.Formatter):
-            def format(self, record):
-                # 전역 변수에서 현재 처리 중인 종목코드 사용
-                stock_code = current_processing_stock.get('code', 'UNKNOWN')
-                
-                # 메시지에 종목코드가 없으면 추가
-                if not record.getMessage().startswith('['):
-                    record.msg = f"[{stock_code}] {record.msg}"
-                
-                # 기본 포맷 적용
-                formatted = super().format(record)
-                
-                # PullbackCandlePattern | INFO 부분만 제거하고 종목코드와 봉 정보는 유지
-                import re
-                # PullbackCandlePattern[종목코드] | INFO 부분을 제거
-                formatted = re.sub(r' \| PullbackCandlePattern(\[[^\]]+\])? \| \w+ \|', ' |', formatted)
-                
-                return formatted
-        
-        formatter = CustomFormatter('%(asctime)s | %(name)s | %(levelname)s | %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
-        formatter.logger = capture_logger
-        
-        # 로거에 종목코드 추적 변수 연결 (글로벌 변수 사용)
-        capture_logger._formatter_stock_tracker = current_processing_stock
-        # 한국시간 변환
-        try:
-            def _kst_conv(secs: float):
-                return datetime.fromtimestamp(secs, KST).timetuple()
-            formatter.converter = _kst_conv  # type: ignore[attr-defined]
-        except Exception:
-            pass
-        handler.setFormatter(formatter)
-        capture_logger.addHandler(handler)
-    
-    # 차트 생성용 인스턴스 초기화 (차트 생성이 필요한 경우에만)
-    chart_renderer = None
-    strategy_manager = None
-    signal_calculator = None
-    if generate_charts:
-        try:
-            from visualization.chart_renderer import ChartRenderer
-            from visualization.strategy_manager import StrategyManager
-            from visualization.signal_calculator import SignalCalculator
-            chart_renderer = ChartRenderer()
-            strategy_manager = StrategyManager()
-            signal_calculator = SignalCalculator()
-            logger.info("📊 차트 생성 모듈 초기화 완료")
-        except Exception as e:
-            logger.warning(f"⚠️ 차트 생성 모듈 초기화 실패: {e}")
-            generate_charts = False
-    
-    # 🚀 병렬 처리로 종목들을 동시에 처리 (최대 5개씩)
-    semaphore = asyncio.Semaphore(5)  # 동시 처리 종목 수 제한
-    
-    async def process_with_semaphore(code):
-        async with semaphore:
-            return await process_single_stock(
-                code, date_str, times_map, capture_logger, debug_logs, log_level, 
-                generate_charts, chart_renderer, strategy_manager, signal_calculator
-            )
-    
-    # 모든 종목을 병렬로 처리
-    tasks = [process_with_semaphore(code) for code in codes]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    
-    # 결과 처리
-    for i, (code, result) in enumerate(zip(codes, results)):
-        if isinstance(result, Exception):
-            logger.error(f"❌ {code} 처리 중 예외 발생: {result}")
-            # 예외 발생한 종목도 기본 데이터 추가
-            for t in times_map.get(code, []):
-                all_rows.append({
-                    "stock_code": code,
-                    "date": date_str,
-                    "time": t,
-                    "has_signal": False,
-                    "signal_types": "",
-                    "unmet_conditions": f"예외: {result}",
-                })
-            all_signals[code] = []
-            all_trades[code] = []
-            chart_paths[code] = ""
-        else:
-            csv_rows, signals_full, trades, chart_path = result
-            
-            # 콘솔 출력 (기존 방식 유지)
-            evals = []
-            for row in csv_rows:
-                evals.append({
-                    "time": row["time"],
-                    "has_signal": row["has_signal"],
-                    "signal_types": row["signal_types"].split(",") if row["signal_types"] else [],
-                    "unmet_conditions": row["unmet_conditions"].split(", ") if row["unmet_conditions"] else []
-                })
-            
-            # 콘솔 요약 출력 (인라인)
-            print(f"\n=== {code} - {date_str} 눌림목(3분) 신호 재현 ===")
-            for item in evals:
-                t = item["time"]
-                if item["has_signal"]:
-                    sig = ",".join(item["signal_types"]) if item["signal_types"] else "(종류 미상)"
-                    print(f"  {t} → ON [{sig}]")
-                else:
-                    reasons = ", ".join(item["unmet_conditions"]) if item["unmet_conditions"] else "(사유 미상)"
-                    print(f"  {t} → OFF  (미충족: {reasons})")
-            
-            # 결과 저장
-            all_rows.extend(csv_rows)
-            all_signals[code] = signals_full
-            all_trades[code] = trades
-            chart_paths[code] = chart_path
-    # 캡처된 로그 텍스트
-    logs_text = log_buffer.getvalue() if debug_logs else ""
-    
-    elapsed = time.time() - start_time
-    logger.info(f"🏁 전체 처리 완료: {elapsed:.2f}초 ({len(codes)}개 종목)")
-    
-    return all_rows, all_signals, all_trades, logs_text, chart_paths
+        return False, ""
 
 
 def main():
@@ -1351,392 +518,220 @@ def main():
         if k not in codes_union:
             codes_union.append(k)
     # 누락된 종목 키에 대해 빈 리스트 보정
-    for c in codes_union:
-        times_map.setdefault(c, [])
+    for code in codes_union:
+        if code not in times_map:
+            times_map[code] = []
 
-    logger.info(f"대상 날짜: {date_str}")
-    logger.info(f"대상 종목: {codes_union}")
-    logger.info(f"시각 매핑: {times_map}")
+    logger.info(f"🎯 대상 날짜: {date_str}")
+    logger.info(f"📊 처리할 종목 수: {len(codes_union)}개")
+    
+    if times_map:
+        specified_count = sum(1 for times_list in times_map.values() if times_list)
+        logger.info(f"⏰ 특정 시각 지정된 종목: {specified_count}개")
 
-    # KIS API 인증 선행 (실데이터 조회 필요)
-    api_manager = KISAPIManager()
-    if not api_manager.initialize():
-        print("\n❌ KIS API 인증/초기화 실패. key.ini/환경설정 확인 후 다시 시도하세요.")
+    # API 매니저 초기화
+    try:
+        api_manager = KISAPIManager()
+        if not api_manager.initialize():
+            logger.error("❌ KIS API 설정이 누락되었습니다. config/config.yaml을 확인하세요.")
+            sys.exit(1)
+    except Exception as e:
+        logger.error(f"❌ KIS API 매니저 초기화 실패: {e}")
         sys.exit(1)
 
-    # 기본 로깅 설정을 한 곳에서 관리
-    DEFAULT_LOG_DEBUG = True
-    DEFAULT_LOG_LEVEL = 'INFO'
-    level_map = {
-        'DEBUG': logging.DEBUG,
-        'INFO': logging.INFO,
-        'WARNING': logging.WARNING,
-        'ERROR': logging.ERROR,
-        'CRITICAL': logging.CRITICAL,
-    }
-    log_level = level_map.get(DEFAULT_LOG_LEVEL.upper(), logging.INFO)
-
-    # 차트 생성 옵션 확인
-    generate_charts = args.charts
-    if generate_charts:
-        logger.info("📊 차트 생성 모드 활성화")
-
-    rows, all_signals, all_trades, logs_text, chart_paths = asyncio.run(
-        run(
-            date_str,
-            codes_union,
-            times_map,
-            debug_logs=DEFAULT_LOG_DEBUG,
-            log_level=log_level,
-            generate_charts=generate_charts,
-        )
-    )
-
-    if args.export == "csv":
+    # 병렬 처리를 위한 함수 정의
+    def process_single_stock(stock_code: str) -> Tuple[str, List[Dict[str, object]]]:
+        """단일 종목 처리 함수"""
         try:
-            df = pd.DataFrame(rows)
-            df.to_csv(args.csv_path, index=False, encoding="utf-8-sig")
-            print(f"\n📄 CSV 저장 완료: {args.csv_path} ({len(df)}행)")
-        except Exception as e:
-            print(f"\n❌ CSV 저장 실패: {e}")
-    elif args.export == "txt":
-        try:
-            # 종목별로 그룹핑하여 텍스트 리포트 구성 (코드 순서 유지)
-            from collections import defaultdict
-            code_to_rows = defaultdict(list)
-            for r in rows:
-                code_to_rows[r.get("stock_code", "")] .append(r)
-
-            lines: list[str] = []
-            # 전체 승패 요약 (profit_rate > 0 승, < 0 패, =0 제외, 09시 이전 거래 제외)
-            total_wins = 0
-            total_losses = 0
-            for _code, _trades in all_trades.items():
-                for tr in _trades:
-                    # 09시 이전 거래는 승패 계산에서 제외
-                    if tr.get('excluded_from_stats', False):
-                        continue
-                    try:
-                        pr = float(tr.get('profit_rate', 0.0))
-                    except Exception:
-                        pr = 0.0
-                    if pr > 0:
-                        total_wins += 1
-                    elif pr < 0:
-                        total_losses += 1
-            lines.append(f"=== 총 승패: {total_wins}승 {total_losses}패 ===")
+            logger.info(f"🔄 [{stock_code}] 처리 시작...")
             
-            # selection_date 이후 승패 통계 계산 및 출력
-            if stock_selection_map:
-                selection_stats = calculate_selection_date_stats(all_trades, stock_selection_map, date_str)
-                selection_total_wins = sum(stats["wins"] for stats in selection_stats.values())
-                selection_total_losses = sum(stats["losses"] for stats in selection_stats.values())
-                lines.append(f"=== selection_date 이후 승패: {selection_total_wins}승 {selection_total_losses}패 ===")
+            # 데이터 조회 (DataProcessor 사용)
+            from visualization.data_processor import DataProcessor
+            from core.timeframe_converter import TimeFrameConverter
+            from utils.korean_time import now_kst
+            from datetime import datetime
             
-            lines.append("")
-            for code in codes_union:
-                lines.append(f"=== {code} - {date_str} 눌림목(3분) 신호 재현 ===")
-                
-                # selection_date 정보 표시
-                if code in stock_selection_map:
-                    selection_datetime_str = stock_selection_map[code]
-                    # 시간 정보가 포함되어 있으면 표시, 없으면 날짜만 표시
-                    if ' ' in selection_datetime_str:
-                        lines.append(f"  selection_date: {selection_datetime_str}")
-                    else:
-                        lines.append(f"  selection_date: {selection_datetime_str} (시간 정보 없음)")
-                
-                # 종목별 승패 요약 (09시 이전 거래 제외)
-                code_wins = 0
-                code_losses = 0
-                for tr in all_trades.get(code, []):
-                    # 09시 이전 거래는 승패 계산에서 제외
-                    if tr.get('excluded_from_stats', False):
-                        continue
-                    try:
-                        pr = float(tr.get('profit_rate', 0.0))
-                    except Exception:
-                        pr = 0.0
-                    if pr > 0:
-                        code_wins += 1
-                    elif pr < 0:
-                        code_losses += 1
-                lines.append(f"  승패: {code_wins}승 {code_losses}패")
-                
-                # selection_date 이후 승패 (동일한 값이지만 명확성을 위해 표시)
-                if code in stock_selection_map and stock_selection_map:
-                    selection_stats = calculate_selection_date_stats(all_trades, stock_selection_map, date_str)
-                    if code in selection_stats:
-                        sel_wins = selection_stats[code]["wins"]
-                        sel_losses = selection_stats[code]["losses"]
-                        lines.append(f"  selection_date 이후 승패: {sel_wins}승 {sel_losses}패")
-                # 입력 시각 순서를 유지하여 출력
-                for t in times_map.get(code, []):
-                    # 해당 시각의 레코드 찾기
-                    rec = next((x for x in code_to_rows.get(code, []) if x.get("time") == t), None)
-                    if rec is None:
-                        lines.append(f"  {t} → OFF  (미충족: 시각 매칭 실패)")
-                        continue
-                    if bool(rec.get("has_signal", False)):
-                        sig = rec.get("signal_types", "")
-                        sig_disp = sig if sig else "(종류 미상)"
-                        lines.append(f"  {t} → ON [{sig_disp}]")
-                    else:
-                        reasons = rec.get("unmet_conditions", "")
-                        reasons_disp = reasons if reasons else "(사유 미상)"
-                        lines.append(f"  {t} → OFF  (미충족: {reasons_disp})")
-                # 전체 매매신호 요약
-                lines.append("  매매신호:")
-                signals_list = all_signals.get(code, [])
-                if signals_list:
-                    for s in signals_list:
-                        lines.append(f"    {s['time']} [{s['types']}]")
-                else:
-                    lines.append("    없음")
-                # 체결 시뮬레이션 요약 (매수/매도/%)
-                lines.append("  체결 시뮬레이션:")
-                trades_list = all_trades.get(code, [])
-                if trades_list:
-                    for tr in trades_list:
-                        bt = tr.get('buy_time', '')
-                        btype = tr.get('buy_type', '')
-                        bp = tr.get('buy_price', 0.0)
-                        st = tr.get('sell_time', '')
-                        srsn = tr.get('sell_reason', '')
-                        sp = tr.get('sell_price', 0.0)
-                        pr = float(tr.get('profit_rate', 0.0))
-                        lines.append(f"    {bt} 매수[{btype}] @{bp:,.0f} → {st} 매도[{srsn}] @{sp:,.0f} ({pr:+.2f}%)")
-                else:
-                    lines.append("    없음")
-                lines.append("")
-
-            # 캡처 로그를 텍스트 끝에 덧붙임
-            if logs_text and logs_text.strip():
-                lines.append("=== Debug Logs (KST) ===")
-                lines.extend([ln for ln in logs_text.splitlines()])
-            content = "\n".join(lines).rstrip() + "\n"
-            with open(args.txt_path, "w", encoding="utf-8-sig") as f:
-                f.write(content)
-            print(f"\n📄 TXT 저장 완료: {args.txt_path}")
-        except Exception as e:
-            print(f"\n❌ TXT 저장 실패: {e}")
-
-    # 차트 생성 결과 출력
-    if generate_charts:
-        print(f"\n📊 차트 생성 결과:")
-        chart_success_count = sum(1 for path in chart_paths.values() if path)
-        print(f"  - 전체 종목: {len(codes_union)}개")
-        print(f"  - 차트 생성 성공: {chart_success_count}개")
-        print(f"  - 차트 생성 실패: {len(codes_union) - chart_success_count}개")
-        
-        if chart_success_count > 0:
-            print(f"\n📁 생성된 차트 파일:")
-            for code, path in chart_paths.items():
-                if path:
-                    print(f"  - {code}: {path}")
-
-
-def generate_timeline_analysis_log(df_3min: pd.DataFrame, signals: pd.DataFrame, stock_code: str, logger: Optional[logging.Logger] = None, df_1min: Optional[pd.DataFrame] = None) -> None:
-    """
-    종목별로 장시작(09:00)부터 장마감(15:30)까지 모든 3분봉에서의 상세 상황을 기록
-    
-    표시 정보:
-    - 시간 (09:00, 09:03, 09:06, ...)
-    - 가격 정보 (OHLCV)
-    - 신호 타입 및 신뢰도
-    - 매수/매도 발생 시점
-    - 거래량 정보
-    """
-    
-    if logger is None or df_3min is None or signals is None or df_3min.empty or signals.empty:
-        return
-    
-    # 매도 정보를 위해 거래 시뮬레이션 실행
-    trades = simulate_trades(df_3min, df_1min, stock_code=stock_code) if df_3min is not None else []
-    
-    # 매수/매도 시점 정보를 딕셔너리로 저장 (시간 -> 거래정보)
-    buy_info = {}
-    sell_info = {}
-    
-    for trade in trades:
-        # 매수 정보
-        if 'buy_time' in trade and 'buy_price' in trade and 'buy_signal_type' in trade:
-            buy_time_str = trade['buy_time']  # "HH:MM" 형식
-            buy_info[buy_time_str] = {
-                'signal_type': trade['buy_signal_type'],
-                'price': trade['buy_price']
-            }
-        
-        # 매도 정보
-        if 'sell_time' in trade and 'sell_reason' in trade and 'sell_price' in trade and 'profit_rate' in trade:
-            sell_time_str = trade['sell_time']  # "HH:MM" 형식
-            sell_info[sell_time_str] = {
-                'reason': trade['sell_reason'],
-                'price': trade['sell_price'],
-                'profit_pct': trade['profit_rate']
-            }
-    
-    try:
-        # 신호 데이터 준비
-        buy_pullback_signals = signals.get('buy_pullback_pattern', pd.Series([False] * len(signals))).fillna(False)
-        buy_bisector_signals = signals.get('buy_bisector_recovery', pd.Series([False] * len(signals))).fillna(False)
-        signal_types = signals.get('signal_type', pd.Series([''] * len(signals)))
-        confidence_scores = signals.get('confidence', pd.Series([0.0] * len(signals)))
-        
-        # 09:00~15:30 시간 필터링
-        filtered_indices = []
-        for i in range(len(df_3min)):
-            timestamp = df_3min['datetime'].iloc[i]
-            time_obj = pd.Timestamp(timestamp)
-            hour = time_obj.hour
-            minute = time_obj.minute
+            # 오늘 날짜인지 확인
+            today_str = now_kst().strftime("%Y%m%d")
             
-            # 09:00~15:30 범위 체크
-            if (hour == 9 and minute >= 0) or (10 <= hour <= 14) or (hour == 15 and minute <= 30):
-                filtered_indices.append(i)
-        
-        # 신호 통계 계산
-        signal_count = 0
-        for i in filtered_indices:
-            if i < len(signals) and (buy_pullback_signals.iloc[i] or buy_bisector_signals.iloc[i]):
-                signal_count += 1
-        
-        # 헤더 출력
-        logger.info(f"")
-        logger.info(f"📊 [{stock_code}] 장중 전체 타임라인 (09:00~15:30) - 모든 3분봉")
-        logger.info(f"📈 총 신호: {signal_count}개 / 전체 3분봉: {len(filtered_indices)}개")
-        logger.info(f"" + "="*70)
-        
-        # 모든 3분봉 시간대별로 상세 정보 표시
-        for idx, i in enumerate(filtered_indices):
-            if i >= len(df_3min):
-                continue
-                
-            # 시간 정보
-            timestamp = df_3min['datetime'].iloc[i]
-            time_str = pd.Timestamp(timestamp).strftime('%H:%M')
-            
-            # 가격 정보 (OHLCV)
-            row = df_3min.iloc[i]
-            open_price = row.get('open', 0)
-            high_price = row.get('high', 0)
-            low_price = row.get('low', 0)
-            close_price = row.get('close', 0)
-            volume = row.get('volume', 0)
-            
-            # 신호 정보
-            has_signal = False
-            signal_info = ""
-            confidence = 0
-            
-            if i < len(signals):
-                has_pullback = buy_pullback_signals.iloc[i] if i < len(buy_pullback_signals) else False
-                has_bisector = buy_bisector_signals.iloc[i] if i < len(buy_bisector_signals) else False
-                signal_type = signal_types.iloc[i] if i < len(signal_types) else ''
-                confidence = confidence_scores.iloc[i] if i < len(confidence_scores) else 0
-                
-                if has_pullback or has_bisector:
-                    has_signal = True
-                    signal_name = ""
-                    if has_pullback:
-                        signal_name += "눌림목"
-                    if has_bisector:
-                        signal_name += "이등분선회복" if not signal_name else "+이등분선회복"
-                    
-                    # 신호 강도별 표시
-                    if signal_type == 'STRONG_BUY':
-                        signal_emoji = "🔥"
-                        signal_desc = f"강매수({signal_name})"
-                    elif signal_type == 'CAUTIOUS_BUY':
-                        signal_emoji = "⭐"
-                        signal_desc = f"신중매수({signal_name})"
-                    elif signal_type == 'AVOID':
-                        signal_emoji = "⚠️"
-                        signal_desc = f"회피({signal_name})"
-                    else:
-                        signal_emoji = "📊"
-                        signal_desc = f"신호({signal_name})"
-                    
-                    signal_info = f"{signal_emoji} {signal_desc} (신뢰도:{confidence:.0f}%)"
-            
-            # 매수/매도 정보 확인
-            buy_trade_info = ""
-            sell_trade_info = ""
-            
-            if time_str in buy_info:
-                buy_data = buy_info[time_str]
-                buy_trade_info = f" 📈 매수주문 @{buy_data['price']:,.0f}원"
-            
-            if time_str in sell_info:
-                sell_data = sell_info[time_str]
-                reason = sell_data['reason']
-                price = sell_data['price']
-                profit_pct = sell_data['profit_pct']
-                
-                # 매도 사유별 이모지
-                if 'profit' in reason:
-                    emoji = "💰"
-                    reason_kr = f"익절({reason.replace('profit_', '').replace('pct', '%')})"
-                elif 'stop_loss' in reason:
-                    emoji = "🛑" 
-                    reason_kr = f"손절({reason.replace('stop_loss_', '').replace('pct', '%')})"
-                elif reason == 'EOD':
-                    emoji = "🌅"
-                    reason_kr = "장마감"
-                else:
-                    emoji = "🔄"
-                    reason_kr = reason
-                
-                profit_sign = "+" if profit_pct > 0 else ""
-                sell_trade_info = f" {emoji} 매도주문 ({reason_kr}) @{price:,.0f}원 ({profit_sign}{profit_pct:.2f}%)"
-            
-            # 출력 라인 구성
-            if has_signal:
-                # 신호가 있는 경우 - 강조 표시
-                logger.info(f"  ✅ {time_str} {signal_info}")
-                logger.info(f"      💰 가격: O{open_price:,.0f} H{high_price:,.0f} L{low_price:,.0f} C{close_price:,.0f} V{volume:,}")
-                if buy_trade_info:
-                    logger.info(f"     {buy_trade_info}")
-                if sell_trade_info:
-                    logger.info(f"     {sell_trade_info}")
-            elif buy_trade_info or sell_trade_info:
-                # 매수/매도만 있는 경우 - 거래 정보 표시
-                status_emoji = "📈" if buy_trade_info else "📉"
-                logger.info(f"  {status_emoji} {time_str} (종가:{close_price:,.0f}, 거래량:{volume:,})")
-                if buy_trade_info:
-                    logger.info(f"     {buy_trade_info}")
-                if sell_trade_info:
-                    logger.info(f"     {sell_trade_info}")
+            if date_str == today_str:
+                # 오늘 날짜면 실시간 데이터 사용
+                from api.kis_chart_api import get_full_trading_day_data
+                df_1min = get_full_trading_day_data(stock_code, date_str)
             else:
-                # 일반 상태 - 간략 표시
-                logger.info(f"  ⚪ {time_str} ❌ 신호없음 (종가:{close_price:,.0f}, 거래량:{volume:,})")
-        
-        # 전체 신호 강도 분포 요약
-        if signal_count > 0:
-            non_empty_signals = signals[signal_types != '']
-            if not non_empty_signals.empty:
-                strong_count = len(non_empty_signals[non_empty_signals['signal_type'] == 'STRONG_BUY'])
-                cautious_count = len(non_empty_signals[non_empty_signals['signal_type'] == 'CAUTIOUS_BUY']) 
-                avoid_count = len(non_empty_signals[non_empty_signals['signal_type'] == 'AVOID'])
-                
-                max_conf = confidence_scores.max() if len(confidence_scores) > 0 else 0
-                avg_conf = confidence_scores[confidence_scores > 0].mean() if len(confidence_scores[confidence_scores > 0]) > 0 else 0
-                
-                logger.info(f"" + "="*70)
-                logger.info(f"📊 [{stock_code}] 신호 강도별 분포")
-                logger.info(f"🔥 강매수: {strong_count}개 | ⭐ 신중매수: {cautious_count}개 | ⚠️ 회피: {avoid_count}개")
-                logger.info(f"💡 최고신뢰도: {max_conf:.0f}% | 평균신뢰도: {avg_conf:.0f}%")
-                logger.info(f"")
-        else:
-            logger.info(f"" + "="*70)
-            logger.info(f"📊 [{stock_code}] 매수 신호 없음 - 전체 {len(filtered_indices)}개 3분봉 분석 완료")
-            logger.info(f"")
+                # 과거 날짜는 DataProcessor 사용
+                dp = DataProcessor()
+                # 동기 호출로 변경
+                import asyncio
+                try:
+                    # 새로운 이벤트 루프 생성하여 충돌 방지
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        df_1min = loop.run_until_complete(dp.get_historical_chart_data(stock_code, date_str))
+                    finally:
+                        loop.close()
+                except Exception as e:
+                    df_1min = None
+                    logger.warning(f"⚠️  [{stock_code}] 비동기 데이터 조회 실패: {e}")
+                    return stock_code, []
             
-    except Exception as e:
-        logger.error(f"타임라인 분석 오류 [{stock_code}]: {e}")
+            if df_1min is None or df_1min.empty:
+                logger.warning(f"⚠️  [{stock_code}] 1분봉 데이터 없음")
+                return stock_code, []
+
+            # 3분봉 변환
+            df_3min = TimeFrameConverter.convert_to_3min_data(df_1min)
+            if df_3min is None or df_3min.empty:
+                logger.warning(f"⚠️  [{stock_code}] 3분봉 변환 실패")
+                return stock_code, []
+
+            # 거래 시뮬레이션 실행
+            trades = simulate_trades(df_3min, df_1min, logger=logger, stock_code=stock_code)
+            
+            # 차트 생성 (옵션)
+            if args.charts and trades:
+                try:
+                    # 신호 계산 (차트용)
+                    signals, _ = calculate_trading_signals_once(df_3min, logger=logger, stock_code=stock_code)
+                    generate_chart_for_stock(stock_code, date_str, df_3min, signals, trades, logger)
+                except Exception as chart_error:
+                    logger.warning(f"⚠️  [{stock_code}] 차트 생성 실패: {chart_error}")
+            
+            logger.info(f"✅ [{stock_code}] 처리 완료 - {len(trades)}건 거래")
+            return stock_code, trades
+            
+        except Exception as e:
+            logger.error(f"❌ [{stock_code}] 처리 실패: {e}")
+            return stock_code, []
+
+    # 병렬 처리 실행
+    all_trades: Dict[str, List[Dict[str, object]]] = {}
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        # 모든 종목을 병렬로 처리
+        future_to_stock = {
+            executor.submit(process_single_stock, code): code 
+            for code in codes_union
+        }
+        
+        for future in concurrent.futures.as_completed(future_to_stock):
+            stock_code = future_to_stock[future]
+            try:
+                processed_code, trades = future.result()
+                all_trades[processed_code] = trades
+            except Exception as exc:
+                logger.error(f"❌ [{stock_code}] 병렬 처리 중 예외 발생: {exc}")
+                all_trades[stock_code] = []
+
+    # 결과 요약
+    total_trades = sum(len(trades) for trades in all_trades.values())
+    successful_stocks = sum(1 for trades in all_trades.values() if trades)
+    
+    logger.info(f"" + "="*60)
+    logger.info(f"🎯 전체 처리 완료")
+    logger.info(f"📊 처리된 종목: {len(codes_union)}개")
+    logger.info(f"✅ 거래가 있는 종목: {successful_stocks}개")
+    logger.info(f"💰 총 거래 건수: {total_trades}건")
+
+    # 선택 날짜별 통계 (DB에서 selection_date 정보가 있을 때만)
+    if stock_selection_map:
+        try:
+            selection_stats = calculate_selection_date_stats(all_trades, stock_selection_map, date_str)
+            if selection_stats:
+                logger.info(f"" + "="*60)
+                logger.info(f"📅 선택 날짜별 거래 통계")
+                for selection_date, stats in selection_stats.items():
+                    success_rate = (stats['성공거래수'] / stats['총거래수'] * 100) if stats['총거래수'] > 0 else 0
+                    avg_profit = (stats['총수익률'] / stats['총거래수']) if stats['총거래수'] > 0 else 0
+                    logger.info(f"📅 {selection_date}: 총{stats['총거래수']}건 | 성공{stats['성공거래수']}건 | 성공률{success_rate:.1f}% | 평균수익률{avg_profit:.2f}%")
+        except Exception as e:
+            logger.warning(f"선택 날짜별 통계 계산 실패: {e}")
+
+    # 파일 내보내기
+    if args.export and total_trades > 0:
+        try:
+            if args.export == "csv":
+                # CSV 형식으로 내보내기
+                all_csv_rows = []
+                for stock_code, trades in all_trades.items():
+                    if trades:
+                        csv_rows = to_csv_rows(stock_code, date_str, trades)
+                        all_csv_rows.extend(csv_rows)
+                
+                if all_csv_rows:
+                    df_export = pd.DataFrame(all_csv_rows)
+                    df_export.to_csv(args.csv_path, index=False, encoding='utf-8-sig')
+                    logger.info(f"📁 CSV 파일 저장 완료: {args.csv_path} ({len(all_csv_rows)}건)")
+                
+            elif args.export == "txt":
+                # TXT 형식으로 내보내기 (원본 형식에 맞게)
+                try:
+                    lines = []
+                    
+                    # 전체 승패 통계 계산
+                    total_wins = sum(1 for trades in all_trades.values() for trade in trades if trade.get('profit_rate', 0) > 0 and trade.get('sell_time'))
+                    total_losses = sum(1 for trades in all_trades.values() for trade in trades if trade.get('profit_rate', 0) <= 0 and trade.get('sell_time'))
+                    
+                    lines.append(f"=== 총 승패: {total_wins}승 {total_losses}패 ===")
+                    lines.append(f"=== selection_date 이후 승패: {total_wins}승 {total_losses}패 ===")
+                    lines.append("")
+                    
+                    for stock_code in codes_union:
+                        trades = all_trades.get(stock_code, [])
+                        stock_selection_date = stock_selection_map.get(stock_code, "알수없음")
+                        
+                        # 종목별 승패 계산
+                        wins = sum(1 for trade in trades if trade.get('profit_rate', 0) > 0 and trade.get('sell_time'))
+                        losses = sum(1 for trade in trades if trade.get('profit_rate', 0) <= 0 and trade.get('sell_time'))
+                        
+                        lines.append(f"=== {stock_code} - {date_str} 눌림목(3분) 신호 재현 ===")
+                        lines.append(f"  selection_date: {stock_selection_date}")
+                        lines.append(f"  승패: {wins}승 {losses}패")
+                        lines.append(f"  selection_date 이후 승패: {wins}승 {losses}패")
+                        lines.append("  매매신호:")
+                        
+                        if trades:
+                            # 매매 신호 표시
+                            signals_shown = set()
+                            for trade in trades:
+                                signal_key = f"{trade['buy_time']} [pullback_pattern]"
+                                if signal_key not in signals_shown:
+                                    lines.append(f"    {trade['buy_time']} [pullback_pattern]")
+                                    signals_shown.add(signal_key)
+                        else:
+                            lines.append("    없음")
+                        
+                        lines.append("  체결 시뮬레이션:")
+                        if trades:
+                            for trade in trades:
+                                if trade.get('sell_time'):
+                                    profit_rate = trade.get('profit_rate', 0)
+                                    if profit_rate > 0:
+                                        reason = f"profit_{profit_rate:.1f}pct"
+                                    else:
+                                        reason = f"stop_loss_{abs(profit_rate):.1f}pct"
+                                    
+                                    lines.append(f"    {trade['buy_time']} 매수[pullback_pattern] @{trade['buy_price']:,.0f} → {trade['sell_time']} 매도[{reason}] @{trade['sell_price']:,.0f} ({profit_rate:+.2f}%)")
+                                else:
+                                    lines.append(f"    {trade['buy_time']} 매수[pullback_pattern] @{trade['buy_price']:,.0f} → 미결제 ({trade.get('reason', '알수없음')})")
+                        else:
+                            lines.append("    없음")
+                        
+                        lines.append("")
+                    
+                    content = "\n".join(lines).rstrip() + "\n"
+                    with open(args.txt_path, "w", encoding="utf-8-sig") as f:
+                        f.write(content)
+                    print(f"\n📄 TXT 저장 완료: {args.txt_path}")
+                except Exception as e:
+                    print(f"\n❌ TXT 저장 실패: {e}")
+                
+        except Exception as e:
+            logger.error(f"❌ 파일 내보내기 실패: {e}")
+
+    logger.info(f"🏁 신호 재현 리포트 완료!")
 
 
 if __name__ == "__main__":
     main()
-
-
