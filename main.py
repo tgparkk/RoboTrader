@@ -261,17 +261,17 @@ class DayTradingBot:
             # 매수 판단: 선정된 종목들 + 재거래 가능한 완료 종목들
             buy_decision_candidates = selected_stocks + completed_stocks
             
-            # 14시 이후 매수 금지 체크
+            # 15시 이후 매수 금지 체크
             current_time = now_kst()
-            is_after_2pm = current_time.hour >= 14
+            is_after_Npm = current_time.hour >= 15
             
-            if buy_decision_candidates and not is_after_2pm:
+            if buy_decision_candidates and not is_after_Npm:
                 self.logger.debug(f"🔍 매수 판단 대상: SELECTED={len(selected_stocks)}개, COMPLETED={len(completed_stocks)}개 (총 {len(buy_decision_candidates)}개)")
                 for trading_stock in buy_decision_candidates:
                     await self._analyze_buy_decision(trading_stock)
             else:
-                if is_after_2pm:
-                    self.logger.debug("📊 14시 이후이므로 매수 금지")
+                if is_after_Npm:
+                    self.logger.debug("📊 15시 이후이므로 매수 금지")
                 else:
                     self.logger.debug("📊 매수 판단 대상 종목 없음 (SELECTED + COMPLETED 상태 종목 없음)")
             
@@ -854,12 +854,25 @@ class DayTradingBot:
                     change_rate = stock_data.get('chgrate', '')
                     
                     if stock_code:
+                        # 전날 종가 조회 (일봉 데이터)
+                        prev_close = 0.0
+                        try:
+                            daily_data = self.api_manager.get_ohlcv_data(stock_code, "D", 2)
+                            if daily_data is not None and len(daily_data) >= 2:
+                                if hasattr(daily_data, 'iloc'):  # DataFrame
+                                    prev_close = float(daily_data.iloc[-2]['stck_clpr'])
+                                elif len(daily_data) >= 2:  # List
+                                    prev_close = daily_data[-2].close_price
+                        except Exception as e:
+                            self.logger.debug(f"⚠️ {stock_code} 전날 종가 조회 실패: {e}")
+                        
                         # 거래 상태 통합 관리자에 추가 (분봉 데이터 수집 + 거래 상태 관리)
                         selection_reason = f"조건검색 급등주 (등락률: {change_rate}%)"
                         success = await self.trading_manager.add_selected_stock(
                             stock_code=stock_code,
                             stock_name=stock_name,
-                            selection_reason=selection_reason
+                            selection_reason=selection_reason,
+                            prev_close=prev_close
                         )
                         
                         if success:

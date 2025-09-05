@@ -56,7 +56,7 @@ class TradingDecisionEngine:
         
         Args:
             trading_stock: 거래 종목 객체
-            combined_data: 1분봉 데이터 (기본 데이터)
+            combined_data: 3분봉 데이터 (기본 데이터)
             
         Returns:
             Tuple[매수신호여부, 매수사유, 매수정보딕셔너리]
@@ -66,7 +66,7 @@ class TradingDecisionEngine:
             stock_code = trading_stock.stock_code
             buy_info = {'buy_price': 0, 'quantity': 0, 'max_buy_amount': 0}
             
-            if combined_data is None or len(combined_data) < 15:
+            if combined_data is None or len(combined_data) < 5:
                 return False, "데이터 부족", buy_info
             
             # 보유 종목 여부 확인 - 이미 보유 중인 종목은 매수하지 않음
@@ -87,7 +87,7 @@ class TradingDecisionEngine:
             self._current_stock_code = stock_code
             
             # 전략 4: 눌림목 캔들패턴 매수 신호 (3분봉 사용)
-            signal_result, reason, price_info = self._check_pullback_candle_buy_signal(combined_data)
+            signal_result, reason, price_info = self._check_pullback_candle_buy_signal(combined_data, trading_stock)
             if signal_result and price_info:
                 # 매수 신호 발생 시 가격과 수량 계산
                 buy_price = price_info['buy_price']
@@ -641,7 +641,7 @@ class TradingDecisionEngine:
     
     
 
-    def _check_pullback_candle_buy_signal(self, data) -> Tuple[bool, str, Optional[Dict[str, float]]]:
+    def _check_pullback_candle_buy_signal(self, data, trading_stock=None) -> Tuple[bool, str, Optional[Dict[str, float]]]:
         """전략 4: 눌림목 캔들패턴 매수 신호 확인 (3분봉 기준)
         
         Returns:
@@ -667,10 +667,12 @@ class TradingDecisionEngine:
                 return False, "3분봉 미확정", None
             
             # 🆕 개선된 신호 생성 로직 사용 (3/5가 계산 포함)
+            prev_close = getattr(trading_stock, 'prev_close', None) if hasattr(trading_stock, 'prev_close') else None
             signal_strength = PullbackCandlePattern.generate_improved_signals(
                 data_3min,
                 stock_code=getattr(self, '_current_stock_code', 'UNKNOWN'),
-                debug=True
+                debug=True,
+                prev_close=prev_close
             )
             
             if signal_strength is None:

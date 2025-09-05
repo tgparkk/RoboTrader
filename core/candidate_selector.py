@@ -22,6 +22,7 @@ class CandidateStock:
     market: str
     score: float  # 선정 점수
     reason: str   # 선정 이유
+    prev_close: float = 0.0  # 전날 종가 (일봉 기준)
 
 
 class CandidateSelector:
@@ -401,12 +402,20 @@ class CandidateSelector:
                 self.logger.debug(f"❌ {code}: 최소 점수 미달 ({score}점 < 50점)")
                 return None
             
+            # 전날 종가 추출 (이미 계산된 prev_close 활용)
+            final_prev_close = 0.0
+            if hasattr(daily_data, 'empty') and len(daily_data) >= 2:
+                final_prev_close = float(daily_data.iloc[-2]['stck_clpr'])
+            elif len(data_list) >= 2:
+                final_prev_close = data_list[-2].close_price
+            
             return CandidateStock(
                 code=code,
                 name=name,
                 market=market,
                 score=score,
-                reason=", ".join(reasons)
+                reason=", ".join(reasons),
+                prev_close=final_prev_close
             )
             
         except Exception as e:

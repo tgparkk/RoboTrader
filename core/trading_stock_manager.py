@@ -71,7 +71,7 @@ class TradingStockManager:
             pass
     
     async def add_selected_stock(self, stock_code: str, stock_name: str, 
-                                selection_reason: str = "") -> bool:
+                                selection_reason: str = "", prev_close: float = 0.0) -> bool:
         """
         조건검색으로 선정된 종목 추가 (비동기)
         
@@ -79,6 +79,7 @@ class TradingStockManager:
             stock_code: 종목코드
             stock_name: 종목명
             selection_reason: 선정 사유
+            prev_close: 전날 종가 (일봉 기준)
             
         Returns:
             bool: 추가 성공 여부
@@ -123,7 +124,8 @@ class TradingStockManager:
                     stock_name=stock_name,
                     state=StockState.SELECTED,
                     selected_time=current_time,
-                    selection_reason=selection_reason
+                    selection_reason=selection_reason,
+                    prev_close=prev_close
                 )
                 
                 # 등록
@@ -370,17 +372,17 @@ class TradingStockManager:
             if not trading_stock.current_order_id:
                 return
             
-            self.logger.debug(f"🔍 매수 주문 체결 확인 시작: {trading_stock.stock_code} - 주문ID: {trading_stock.current_order_id}")
+            #self.logger.debug(f"🔍 매수 주문 체결 확인 시작: {trading_stock.stock_code} - 주문ID: {trading_stock.current_order_id}")
             
             # 주문 관리자에서 완료된 주문 확인
             completed_orders = self.order_manager.get_completed_orders()
-            self.logger.debug(f"📋 전체 완료 주문 수: {len(completed_orders)}")
+            #self.logger.debug(f"📋 전체 완료 주문 수: {len(completed_orders)}")
             
             for order in completed_orders:
                 if (order.order_id == trading_stock.current_order_id and 
                     order.stock_code == trading_stock.stock_code):
                     
-                    self.logger.info(f"✅ 매칭된 완료 주문 발견: {order.order_id} - 상태: {order.status.value}")
+                    #self.logger.info(f"✅ 매칭된 완료 주문 발견: {order.order_id} - 상태: {order.status.value}")
                     
                     if order.status == OrderStatus.FILLED:
                         # 매수 완료 - 포지션 상태로 변경
@@ -813,3 +815,45 @@ class TradingStockManager:
         except Exception as e:
             self.logger.error(f"❌ {stock_code} 제거 오류: {e}")
             return False
+    
+    async def handle_order_timeout(self, order):
+        """
+        OrderManager에서 타임아웃/취소된 주문 처리
+        
+        BUY_PENDING 상태인 종목을 다시 매수 가능한 상태로 복구합니다.
+        
+        Args:
+            order: 타임아웃된 주문 객체 (Order)
+        """
+        try:
+            stock_code = order.stock_code
+            
+            with self._lock:
+                if stock_code not in self.trading_stocks:
+                    self.logger.warning(f"⚠️ 타임아웃 처리할 종목 없음: {stock_code}")
+                    return
+                
+                trading_stock = self.trading_stocks[stock_code]
+                
+                # BUY_PENDING 상태인 경우에만 처리
+                if trading_stock.state != StockState.BUY_PENDING:
+                    self.logger.warning(f"⚠️ {stock_code} 예상치 못한 상태에서 타임아웃 처리: {trading_stock.state.value}")
+                    return
+                
+                # 매수 진행 플래그 해제
+                trading_stock.is_buying = False
+                trading_stock.current_order_id = None
+                trading_stock.order_processed = False
+                
+                # 재거래가 활성화된 경우 COMPLETED로, 비활성화된 경우 SELECTED로 복구
+                if self.enable_re_trading:
+                    self._change_stock_state(stock_code, StockState.COMPLETED, 
+                                          f"주문 타임아웃 복구 (재거래 가능)")
+                    self.logger.info(f"🔄 {stock_code} 타임아웃 복구 완료: BUY_PENDING → COMPLETED (재거래 가능)")
+                else:
+                    self._change_stock_state(stock_code, StockState.SELECTED, 
+                                          f"주문 타임아웃 복구")
+                    self.logger.info(f"🔄 {stock_code} 타임아웃 복구 완료: BUY_PENDING → SELECTED (매수 재시도 가능)")
+                
+        except Exception as e:
+            self.logger.error(f"❌ {order.stock_code if hasattr(order, 'stock_code') else 'Unknown'} 타임아웃 처리 오류: {e}")

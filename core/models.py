@@ -17,6 +17,7 @@ class OrderStatus(Enum):
     PARTIAL = "partial"
     FILLED = "filled"
     CANCELLED = "cancelled"
+    TIMEOUT = "timeout"  # 🆕 타임아웃으로 인한 강제 정리
 
 
 class PositionType(Enum):
@@ -149,6 +150,7 @@ class TradingStock:
     
     # 메타 정보
     selection_reason: str = ""
+    prev_close: float = 0.0  # 전날 종가 (일봉 기준)
     last_update: datetime = field(default_factory=datetime.now)
     target_profit_rate: float = 0.015  # 목표수익률 (기본값 1.5%)
     

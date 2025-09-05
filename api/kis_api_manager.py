@@ -566,7 +566,7 @@ class KISAPIManager:
             orgn_odno = order_data.get('odno', '')  # 주문번호
             
             # 주문조직번호 필드 찾기 (우선순위 순)
-            possible_orgno_fields = ['krx_fwdg_ord_orgno', 'ord_orgno', 'orgn_odno']
+            possible_orgno_fields = ['krx_fwdg_ord_orgno', 'ord_orgno', 'ord_gno_brno', 'orgn_odno']
             for field in possible_orgno_fields:
                 if field in order_data and order_data[field]:
                     ord_orgno = order_data[field]
@@ -676,6 +676,7 @@ class KISAPIManager:
                 )
                 
                 # 🔧 API 응답 검증
+                '''
                 if daily_results is not None:
                     if daily_results.empty:
                         self.logger.debug(f"📊 체결 내역 조회 결과: 빈 데이터프레임 (당일)")
@@ -689,6 +690,7 @@ class KISAPIManager:
                             self.logger.debug(f"📋 실제 필드 목록: {list(daily_results.columns)}")
                 else:
                     self.logger.warning(f"⚠️ 체결 내역 조회 API 호출 실패")
+                '''
                     
             except Exception as api_error:
                 self.logger.error(f"❌ 체결 내역 조회 중 오류: {api_error}")
@@ -698,8 +700,10 @@ class KISAPIManager:
             all_filled_records = None
             if daily_results is not None and not daily_results.empty:
                 all_filled_records = daily_results[daily_results['odno'] == order_id]
+                '''
                 if not all_filled_records.empty:
                     self.logger.debug(f"📋 체결 내역에서 발견: {order_id} ({len(all_filled_records)}건)")
+                '''
             
             # 5. 주문 상태 결정 및 데이터 생성
             if is_pending and pending_order_data:
@@ -765,7 +769,7 @@ class KISAPIManager:
                 order_qty = 0
                 last_record = None
                 
-                self.logger.debug(f"📊 체결 내역 분석 시작: {order_id}")
+                #self.logger.debug(f"📊 체결 내역 분석 시작: {order_id}")
                 
                 for idx, record in all_filled_records.iterrows():
                     # 🔧 개선: 다양한 체결량 필드명 확인 및 안전한 변환
@@ -809,25 +813,29 @@ class KISAPIManager:
                         order_qty = ord_qty
                     last_record = record
                     
-                    self.logger.debug(f"  📊 체결 레코드 {idx+1}: 체결량={ccld_qty}, 주문량={ord_qty}")
+                    #self.logger.debug(f"  📊 체결 레코드 {idx+1}: 체결량={ccld_qty}, 주문량={ord_qty}")
                     
                     # 🔧 추가: 레코드별 상세 정보 로깅 (디버깅용)
+                    '''
                     if ccld_qty > 0:
                         self.logger.debug(f"    ✅ 유효한 체결: 시간={record.get('ord_tmd', 'N/A')}, 가격={record.get('avg_prvs', record.get('ccld_unpr', 'N/A'))}")
                     else:
                         self.logger.debug(f"    ⚠️ 체결량 0: 가능한 필드값들 = {[record.get(f, 'N/A') for f in possible_qty_fields]}")
+                    '''
                 
                 # 🚨 핵심 수정: 체결량이 0인 경우 실제 미체결 상태로 처리
                 if total_filled_qty == 0 and order_qty > 0:
                     # 체결 내역은 있지만 체결량이 0인 경우 = 실제로는 아직 미체결
+                    '''
                     self.logger.info(f"📊 체결 내역에서 체결량 0 확인: {order_id} - 실제 미체결 상태")
                     self.logger.debug(f"📋 체결 내역 상세:")
                     for idx, record in all_filled_records.iterrows():
                         self.logger.debug(f"  레코드 {idx+1}: {record.to_dict()}")
+                    '''
                     
                     # 🆕 체결량이 0이면 미체결 주문으로 재분류하여 반환
                     # (완전 체결 처리하지 않고 미체결로 처리)
-                    self.logger.info(f"🔄 체결량 0이므로 미체결 상태로 분류: {order_id}")
+                    #self.logger.info(f"🔄 체결량 0이므로 미체결 상태로 분류: {order_id}")
                     
                     # 미체결 상태로 반환 (remaining_qty = order_qty)
                     return {
@@ -850,16 +858,18 @@ class KISAPIManager:
                     order_data['ord_qty'] = str(order_qty)              # 주문수량
                     order_data['cncl_yn'] = 'N'                         # 취소여부
                     
+                    '''
                     if total_filled_qty == order_qty and total_filled_qty > 0:
                         self.logger.info(f"✅ 완전 체결 확인: {order_id} - 체결: {total_filled_qty}/{order_qty}")
                     else:
                         self.logger.warning(f"⚠️ 체결 내역 불일치: {order_id} - 체결: {total_filled_qty}/{order_qty}")
+                    '''
                 else:
                     self.logger.error(f"❌ 체결 내역 처리 실패: {order_id}")
                     
                     # 🆕 체결 내역 처리 실패 시 대체 방법: 계좌 잔고 조회로 확인
                     try:
-                        self.logger.info(f"🔍 대체 확인 방법 시도: 계좌 잔고 조회로 체결 확인")
+                        #self.logger.info(f"🔍 대체 확인 방법 시도: 계좌 잔고 조회로 체결 확인")
                         from api.kis_market_api import get_stock_balance
                         
                         balance_result = get_stock_balance()
@@ -868,7 +878,7 @@ class KISAPIManager:
                             
                             # 주문 시점과 현재 잔고를 비교하여 체결 여부 추정
                             # (이 방법은 완벽하지 않지만 마지막 수단으로 사용)
-                            self.logger.debug(f"📊 대체 확인: 계좌 잔고 기반 체결 추정 시도")
+                            #self.logger.debug(f"📊 대체 확인: 계좌 잔고 기반 체결 추정 시도")
                             
                             # 기본 구조 반환 (미체결로 간주)
                             return {
@@ -885,7 +895,7 @@ class KISAPIManager:
                     return None
             else:
                 # ❌ 미체결 주문도 없고 체결 내역도 없음 = 주문 취소 또는 오류
-                self.logger.warning(f"⚠️ 주문 상태 불명: {order_id} (미체결 목록과 체결 내역 모두에서 찾을 수 없음)")
+                #self.logger.warning(f"⚠️ 주문 상태 불명: {order_id} (미체결 목록과 체결 내역 모두에서 찾을 수 없음)")
                 
                 # 🆕 주문 상태 불명인 경우 기본 구조 반환 (None 대신)
                 # 이를 통해 OrderManager에서 적절한 처리가 가능하도록 함
@@ -902,10 +912,10 @@ class KISAPIManager:
                     'status_unknown': True    # 🆕 상태 불명 플래그
                 }
                 
-                self.logger.debug(f"📋 주문 상태 불명으로 기본 구조 반환: {order_id}")
+                #self.logger.debug(f"📋 주문 상태 불명으로 기본 구조 반환: {order_id}")
                 return order_data
             
-            self.logger.debug(f"✅ 주문 상태 조회 완료: {order_id}")
+            #self.logger.debug(f"✅ 주문 상태 조회 완료: {order_id}")
             return order_data
             
         except Exception as e:

@@ -55,7 +55,7 @@ class TimeFrameConverter:
             df = df.set_index('datetime')
             
             # 지정된 시간봉으로 리샘플링
-            resampled = df.resample(f'{timeframe_minutes}T').agg({
+            resampled = df.resample(f'{timeframe_minutes}min').agg({
                 'open': 'first',
                 'high': 'max',
                 'low': 'min',
@@ -133,7 +133,7 @@ class TimeFrameConverter:
             
             try:
                 # pandas Timestamp로 변환하고 타임존 정보 처리
-                current_3min_floor = pd.Timestamp(current_time).floor('3T')
+                current_3min_floor = pd.Timestamp(current_time).floor('3min')
                 
                 # resampled datetime과 같은 형태로 맞추기
                 if not resampled.empty:

@@ -422,8 +422,15 @@ class OrderManager:
                     self._move_to_completed(order_id)
                     self.logger.info(f"주문 취소 확인: {order_id}")
                 elif is_status_unknown:
-                    # 불명 상태는 판정 유보
-                    self.logger.warning(f"⚠️ 주문 상태 불명, 판정 유보: {order_id} - data={status_data}")
+                    # 🆕 상태 불명이 5분 이상 지속되면 타임아웃 처리
+                    elapsed_time = (now_kst() - order.timestamp).total_seconds()
+                    if elapsed_time > 300:  # 5분 = 300초
+                        self.logger.warning(f"⚠️ 주문 상태 불명 5분 초과로 타임아웃 처리: {order_id} - 경과: {elapsed_time:.0f}초")
+                        order.status = OrderStatus.TIMEOUT
+                        self._move_to_completed(order_id)
+                    else:
+                        # 5분 미만이면 판정 유보
+                        self.logger.warning(f"⚠️ 주문 상태 불명, 판정 유보: {order_id} - 경과: {elapsed_time:.0f}초 (5분 초과 시 타임아웃)")
                 elif is_actual_unfilled:
                     # 실제 미체결 플래그가 명시된 경우 대기 유지
                     self.logger.debug(f"🔍 실제 미체결 상태: {order_id} - 잔여 {remaining_qty}")
@@ -518,9 +525,42 @@ class OrderManager:
                 self.logger.info(f"✅ 타임아웃 취소 성공: {order_id}")
             else:
                 self.logger.error(f"❌ 타임아웃 취소 실패: {order_id}")
+                # 🆕 취소 실패 시에도 강제로 상태 정리 (타임아웃이므로 이미 무효한 주문으로 판단)
+                if order_id in self.pending_orders:
+                    order = self.pending_orders[order_id]
+                    order.status = OrderStatus.TIMEOUT  # 타임아웃 상태로 변경
+                    self._move_to_completed(order_id)
+                    self.logger.warning(f"🔄 타임아웃으로 인한 강제 상태 정리: {order_id} (PENDING → TIMEOUT)")
+                    
+                    # 🆕 TradingStockManager에 타임아웃 상황 알림
+                    if self.trading_manager and hasattr(self.trading_manager, 'handle_order_timeout'):
+                        try:
+                            await self.trading_manager.handle_order_timeout(order)
+                            self.logger.info(f"✅ TradingStockManager 타임아웃 처리 완료: {order_id}")
+                        except Exception as notify_error:
+                            self.logger.error(f"❌ TradingStockManager 타임아웃 처리 실패: {notify_error}")
+            
+            # 🆕 취소 성공한 경우도 TradingStockManager에 알림 (상태 동기화)
+            if cancel_success and self.trading_manager and hasattr(self.trading_manager, 'handle_order_timeout'):
+                try:
+                    order = self.pending_orders.get(order_id)
+                    if order:
+                        await self.trading_manager.handle_order_timeout(order)
+                        self.logger.info(f"✅ TradingStockManager 취소 처리 완료: {order_id}")
+                except Exception as notify_error:
+                    self.logger.error(f"❌ TradingStockManager 취소 처리 실패: {notify_error}")
             
         except Exception as e:
             self.logger.error(f"타임아웃 처리 실패 {order_id}: {e}")
+            # 🆕 예외 발생 시에도 강제로 상태 정리
+            try:
+                if order_id in self.pending_orders:
+                    order = self.pending_orders[order_id]
+                    order.status = OrderStatus.TIMEOUT
+                    self._move_to_completed(order_id)
+                    self.logger.warning(f"🔄 예외 발생으로 인한 강제 상태 정리: {order_id}")
+            except:
+                pass
     
     async def _handle_3candle_timeout(self, order_id: str):
         """3분봉 기준 타임아웃 처리 (매수 주문 후 3봉 지나면 취소)"""
@@ -538,16 +578,51 @@ class OrderManager:
             # 미체결 주문 취소
             cancel_success = await self.cancel_order(order_id)
             
-            # 텔레그램 알림 (기존 cancel_order에서 이미 알림이 발송되므로 추가 정보만 포함)
-            if cancel_success and self.telegram:
-                await self.telegram.notify_order_cancelled({
-                    'stock_code': order.stock_code,
-                    'stock_name': f'Stock_{order.stock_code}',
-                    'order_type': order.order_type.value
-                }, "3분봉 3개 경과")
+            if cancel_success:
+                # 텔레그램 알림 (기존 cancel_order에서 이미 알림이 발송되므로 추가 정보만 포함)
+                if self.telegram:
+                    await self.telegram.notify_order_cancelled({
+                        'stock_code': order.stock_code,
+                        'stock_name': f'Stock_{order.stock_code}',
+                        'order_type': order.order_type.value
+                    }, "3분봉 3개 경과")
+            else:
+                # 🆕 3분봉 타임아웃 취소 실패 시에도 강제로 상태 정리
+                if order_id in self.pending_orders:
+                    order = self.pending_orders[order_id]
+                    order.status = OrderStatus.TIMEOUT
+                    self._move_to_completed(order_id)
+                    self.logger.warning(f"🔄 3분봉 타임아웃으로 인한 강제 상태 정리: {order_id} (PENDING → TIMEOUT)")
+                    
+                    # 🆕 TradingStockManager에 3분봉 타임아웃 상황 알림
+                    if self.trading_manager and hasattr(self.trading_manager, 'handle_order_timeout'):
+                        try:
+                            await self.trading_manager.handle_order_timeout(order)
+                            self.logger.info(f"✅ TradingStockManager 3분봉 타임아웃 처리 완료: {order_id}")
+                        except Exception as notify_error:
+                            self.logger.error(f"❌ TradingStockManager 3분봉 타임아웃 처리 실패: {notify_error}")
+            
+            # 🆕 3분봉 타임아웃 취소 성공한 경우도 TradingStockManager에 알림
+            if cancel_success and self.trading_manager and hasattr(self.trading_manager, 'handle_order_timeout'):
+                try:
+                    order = self.pending_orders.get(order_id)  
+                    if order:
+                        await self.trading_manager.handle_order_timeout(order)
+                        self.logger.info(f"✅ TradingStockManager 3분봉 취소 처리 완료: {order_id}")
+                except Exception as notify_error:
+                    self.logger.error(f"❌ TradingStockManager 3분봉 취소 처리 실패: {notify_error}")
             
         except Exception as e:
             self.logger.error(f"3분봉 타임아웃 처리 실패 {order_id}: {e}")
+            # 🆕 예외 발생 시에도 강제로 상태 정리
+            try:
+                if order_id in self.pending_orders:
+                    order = self.pending_orders[order_id]
+                    order.status = OrderStatus.TIMEOUT
+                    self._move_to_completed(order_id)
+                    self.logger.warning(f"🔄 3분봉 타임아웃 예외로 인한 강제 상태 정리: {order_id}")
+            except:
+                pass
     
     async def _check_price_adjustment(self, order_id: str):
         """가격 정정 검토"""
