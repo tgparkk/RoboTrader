@@ -130,15 +130,15 @@ class IntradayStockManager:
                     'market_time': current_time.strftime('%H:%M:%S')
                 })
                 
-                self.logger.debug(f"✅ {stock_code}({stock_name}) 장중 선정 완료 - "
-                               f"시간: {current_time.strftime('%H:%M:%S')}")
+                #self.logger.debug(f"✅ {stock_code}({stock_name}) 장중 선정 완료 - "
+                #               f"시간: {current_time.strftime('%H:%M:%S')}")
             
             # 🆕 과거 데이터 수집 완료까지 대기
             self.logger.info(f"📈 {stock_code} 과거 데이터 수집 시작...")
             success = await self._collect_historical_data(stock_code)
             
             if success:
-                self.logger.info(f"✅ {stock_code} 과거 데이터 수집 완료 및 종목 추가 성공")
+                #self.logger.info(f"✅ {stock_code} 과거 데이터 수집 완료 및 종목 추가 성공")
                 return True
             else:
                 # 데이터 수집 실패 시 종목 제거

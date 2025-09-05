@@ -205,8 +205,7 @@ class PullbackCandlePattern:
     def generate_improved_signals(
         data: pd.DataFrame,
         stock_code: str = "UNKNOWN",
-        debug: bool = False,
-        prev_close: Optional[float] = None
+        debug: bool = False
     ) -> Optional[SignalStrength]:
         """개선된 신호 생성 로직 (통합)"""
         
@@ -243,75 +242,13 @@ class PullbackCandlePattern:
                                         volume_analysis.volume_ratio,
                                         PullbackUtils.get_bisector_status(current['close'], bisector_line))
             
-            # 1. 전날 종가 대비 3% 이상 상승 확인
-            '''
-            if len(data) < 2:
-                return SignalStrength(SignalType.AVOID, 0, 0, 
-                                    ["데이터 부족"],
-                                    volume_analysis.volume_ratio,
-                                    PullbackUtils.get_bisector_status(current['close'], bisector_line) if bisector_line else BisectorStatus.BROKEN)
-            '''
-            
-            # 전날 종가 확인 (파라미터로 전달된 값 우선 사용)
-            if prev_close is not None and prev_close > 0:
-                # 파라미터로 전달된 일봉 기준 전날 종가 사용
-                final_prev_close = prev_close
-                prev_source = "일봉전날종가"
-            else:
-                # 분봉에서 전날 종가 추정 (기존 로직)
-                try:
-                    # 현재 시간이 포함된 인덱스 확인
-                    current_datetime = data.index[-1] if hasattr(data.index[-1], 'date') else pd.to_datetime(data.index[-1])
-                    current_date = current_datetime.date()
-                    
-                    # 전날의 모든 데이터를 찾아서 마지막(종가) 데이터 선택
-                    prev_day_indices = []
-                    
-                    for i in range(len(data)):
-                        check_datetime = data.index[i] if hasattr(data.index[i], 'date') else pd.to_datetime(data.index[i])
-                        check_date = check_datetime.date()
-                        
-                        if check_date < current_date:
-                            prev_day_indices.append(i)
-                    
-                    if prev_day_indices:
-                        # 전날 데이터 중 가장 마지막 인덱스 = 전날 종가
-                        last_prev_day_idx = max(prev_day_indices)
-                        final_prev_close = data['close'].iloc[last_prev_day_idx]
-                        prev_source = f"분봉전날종가(idx:{last_prev_day_idx})"
-                    else:
-                        # 전날 데이터가 없으면 직전 데이터 사용
-                        final_prev_close = data['close'].iloc[-2]
-                        prev_source = "직전봉"
-                    
-                except Exception as e:
-                    # 오류 시 기존 로직 사용
-                    final_prev_close = data['close'].iloc[-2]
-                    prev_source = f"직전봉(오류:{str(e)})"
-            
-            current_close = current['close']     # 현재가
-            daily_gain_pct = (current_close - final_prev_close) / final_prev_close * 100
-            
-            if debug and logger:
-                logger.info(f"📊 전날대비상승률 계산 - {prev_source}: {final_prev_close:,.0f}, 현재가: {current_close:,.0f}, 상승률: {daily_gain_pct:.1f}%")
-                logger.info(f"📊 데이터 인덱스 확인 - 총 {len(data)}개, 마지막2개: [{data.index[-2]}, {data.index[-1]}]")
-            
-            # 전날 종가 대비 2% 미만이면 진입하지 않음
-            
-            if daily_gain_pct < 2.0:
-                return SignalStrength(SignalType.AVOID, 0, 0, 
-                                    [f"전날대비상승부족({daily_gain_pct:.1f}% < 2.0%)"],
-                                    volume_analysis.volume_ratio,
-                                    PullbackUtils.get_bisector_status(current['close'], bisector_line) if bisector_line else BisectorStatus.BROKEN)
-                    
-            
-            # 2. 선행 상승 확인
+            # 1. 선행 상승 확인
             has_prior_uptrend = PullbackUtils.check_prior_uptrend(data)
             
-            # 3. 눌림목 품질 분석
+            # 2. 눌림목 품질 분석
             pullback_quality = PullbackCandlePattern.analyze_pullback_quality(data, baseline_volumes)
             
-            # 4. 회피 조건 체크 (완화된 버전)
+            # 3. 회피 조건 체크 (완화된 버전)
             has_selling_pressure = PullbackCandlePattern.check_heavy_selling_pressure(data, baseline_volumes)
             has_bearish_restriction = PullbackCandlePattern.check_bearish_volume_restriction(data, baseline_volumes)
             bisector_volume_ok = PullbackCandlePattern.check_bisector_breakout_volume(data)
@@ -326,7 +263,7 @@ class PullbackCandlePattern:
                 if avoid_result:
                     return avoid_result
             
-            # 5. 매수 신호 계산
+            # 4. 매수 신호 계산
             is_recovery_candle = candle_analysis.is_bullish
             volume_recovers = PullbackUtils.check_volume_recovery(data)
             has_retrace = PullbackUtils.check_low_volume_retrace(data)

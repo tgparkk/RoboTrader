@@ -644,8 +644,11 @@ class TradingDecisionEngine:
     def _check_pullback_candle_buy_signal(self, data, trading_stock=None) -> Tuple[bool, str, Optional[Dict[str, float]]]:
         """전략 4: 눌림목 캔들패턴 매수 신호 확인 (3분봉 기준)
         
+        Args:
+            data: 이미 3분봉으로 변환된 데이터 (중복 변환 방지)
+            
         Returns:
-            Tuple[bool, str, Optional[Dict]]: (신호여부, 사유, 가격정보)
+            Tuple[bool, str, Optional[Dict]]: (신고여부, 사유, 가격정보)
             가격정보: {'buy_price': float, 'entry_low': float, 'target_profit': float}
         """
         try:
@@ -656,23 +659,19 @@ class TradingDecisionEngine:
             if not all(col in data.columns for col in required_cols):
                 return False, "필요한 데이터 컬럼 부족", None
             
-            # 1분봉 데이터를 3분봉으로 변환
-            data_3min = TimeFrameConverter.convert_to_3min_data(data)
-            if data_3min is None or len(data_3min) < 5:
-                self.logger.warning(f"📊 3분봉 데이터 부족: {len(data_3min) if data_3min is not None else 0}개 (최소 5개 필요)")
-                return False, f"3분봉 데이터 부족 ({len(data_3min) if data_3min is not None else 0}/5)", None
+            # ❌ 중복 변환 제거: data는 이미 3분봉으로 변환된 상태
+            # ❌ 중복 검증 제거: 상위 함수에서 이미 길이 확인함
+            data_3min = data  # main.py에서 이미 변환됨
             
             # 🆕 3분봉 확정 확인 (signal_replay 방식)
             if not self._is_candle_confirmed(data_3min):
                 return False, "3분봉 미확정", None
             
             # 🆕 개선된 신호 생성 로직 사용 (3/5가 계산 포함)
-            prev_close = getattr(trading_stock, 'prev_close', None) if hasattr(trading_stock, 'prev_close') else None
             signal_strength = PullbackCandlePattern.generate_improved_signals(
                 data_3min,
                 stock_code=getattr(self, '_current_stock_code', 'UNKNOWN'),
-                debug=True,
-                prev_close=prev_close
+                debug=True
             )
             
             if signal_strength is None:

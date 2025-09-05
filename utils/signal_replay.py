@@ -86,45 +86,6 @@ def parse_times_mapping(arg_value: str) -> Dict[str, List[str]]:
     return mapping
 
 
-def get_stocks_from_candidate_table(date_str: str) -> List[str]:
-    """candidate_stocks 테이블에서 특정 날짜의 종목코드들을 조회
-    
-    Args:
-        date_str: YYYYMMDD 형식의 날짜
-        
-    Returns:
-        List[str]: 종목코드 목록 (6자리 문자열)
-    """
-    try:
-        # 데이터베이스 파일 경로 설정
-        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        db_path = os.path.join(project_root, 'data', 'robotrader.db')
-        
-        if not os.path.exists(db_path):
-            logger.warning(f"데이터베이스 파일을 찾을 수 없음: {db_path}")
-            return []
-        
-        # YYYYMMDD → YYYY-MM-DD 형식으로 변환
-        target_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
-        
-        with sqlite3.connect(db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT DISTINCT stock_code FROM candidate_stocks 
-                WHERE DATE(selection_date) = ?
-                ORDER BY score DESC
-            ''', (target_date,))
-            
-            rows = cursor.fetchall()
-            stock_codes = [row[0].zfill(6) for row in rows]  # 6자리로 패딩
-            
-            logger.info(f"📅 {date_str} 날짜로 candidate_stocks에서 {len(stock_codes)}개 종목 조회")
-            return stock_codes
-            
-    except Exception as e:
-        logger.error(f"candidate_stocks 테이블 조회 실패: {e}")
-        return []
-
 
 def get_stocks_with_selection_date(date_str: str) -> Dict[str, str]:
     """candidate_stocks 테이블에서 특정 날짜의 종목코드와 selection_date를 함께 조회
@@ -395,11 +356,6 @@ def calculate_trading_signals_once(df_3min: pd.DataFrame, *, debug_logs: bool = 
 
 
 
-def floor_to_3min(ts: pd.Timestamp) -> pd.Timestamp:
-    """주어진 타임스탬프를 3분 경계로 내림(floor)한다."""
-    return ts.floor("3T")
-
-
 def locate_row_for_time(df_3min: pd.DataFrame, target_date: str, hhmm: str) -> Optional[int]:
     """3분봉 DataFrame에서 특정 HH:MM 라벨의 행 인덱스를 찾는다.
     - DataFrame은 'datetime' 컬럼을 가져야 한다(visualization.DataProcessor 기준).
@@ -411,7 +367,7 @@ def locate_row_for_time(df_3min: pd.DataFrame, target_date: str, hhmm: str) -> O
         # target_date(YYYYMMDD) + HH:MM:00 → floor 3분으로 보정
         date_str = f"{target_date[:4]}-{target_date[4:6]}-{target_date[6:8]}"
         target_ts = pd.Timestamp(f"{date_str} {hhmm}:00")
-        target_floor = floor_to_3min(target_ts)
+        target_floor = target_ts.floor("3T")
         # 정확히 일치하는 라벨 우선
         matches = df_3min.index[df_3min["datetime"] == target_floor].tolist()
         if matches:
@@ -508,9 +464,11 @@ async def evaluate_signals_at_times(
         # 각 시각별로 해당 시점까지의 데이터로 매수 판단
         for t in times:
             try:
-                # 해당 시각까지의 3분봉 데이터 추출
+                # 해당 시각까지의 완성된 3분봉 데이터만 추출 (실시간과 동일)
                 time_dt = pd.to_datetime(f"{target_date} {t}")
-                mask = df_3min.index <= time_dt
+                # 현재 시점에서 완성된 3분봉만 사용 (진행중인 봉 제외)
+                current_3min_floor = time_dt.floor('3min')
+                mask = df_3min['datetime'] < current_3min_floor  # 진행중인 3분봉 제외
                 data_until_time = df_3min[mask]
                 
                 if len(data_until_time) < 5:
@@ -545,42 +503,70 @@ async def evaluate_signals_at_times(
                     "buy_info": None
                 })
     else:
-        # 기존 패턴 매칭 방식 (호환성 유지)
-        signals, signals_improved = calculate_trading_signals_once(df_3min, debug_logs=debug_logs, logger=logger, log_level=log_level, stock_code=stock_code)
+        # 기존 패턴 매칭 방식 (호환성 유지, 완성된 봉만 사용)
         for t in times:
-            row_idx = locate_row_for_time(df_3min, target_date, t)
-            if row_idx is None:
+            try:
+                # 해당 시각까지의 완성된 3분봉 데이터만 추출 (실시간과 동일)
+                time_dt = pd.to_datetime(f"{target_date} {t}")
+                # 현재 시점에서 완성된 3분봉만 사용 (진행중인 봉 제외)
+                current_3min_floor = time_dt.floor('3min')
+                mask = df_3min['datetime'] < current_3min_floor  # 진행중인 3분봉 제외
+                data_until_time = df_3min[mask]
+                
+                if len(data_until_time) < 5:
+                    results.append({
+                        "time": t,
+                        "has_signal": False,
+                        "signal_types": [],
+                        "unmet_conditions": ["완성된 3분봉 데이터 부족"],
+                    })
+                    continue
+
+                # 완성된 데이터로만 신호 계산
+                signals, signals_improved = calculate_trading_signals_once(data_until_time, debug_logs=debug_logs, logger=logger, log_level=log_level, stock_code=stock_code)
+                
+                if signals.empty:
+                    results.append({
+                        "time": t,
+                        "has_signal": False,
+                        "signal_types": [],
+                        "unmet_conditions": ["신호 계산 실패"],
+                    })
+                    continue
+                
+                # 마지막 완성된 봉에서 신호 확인
+                last_idx = len(data_until_time) - 1
+                buy1 = bool(signals.get("buy_pullback_pattern", pd.Series([False]*len(data_until_time))).iloc[last_idx]) if not signals.empty else False
+                buy2 = bool(signals.get("buy_bisector_recovery", pd.Series([False]*len(data_until_time))).iloc[last_idx]) if not signals.empty else False
+                
+                has_signal = buy1 or buy2
+                signal_types = []
+                if buy1:
+                    signal_types.append("buy_pullback_pattern")
+                if buy2:
+                    signal_types.append("buy_bisector_recovery")
+
+                if has_signal:
+                    results.append({
+                        "time": t,
+                        "has_signal": True,
+                        "signal_types": signal_types,
+                        "unmet_conditions": [],
+                    })
+                else:
+                    unmet = []  # 조건 분석 기능은 추후 구현
+                    results.append({
+                        "time": t,
+                        "has_signal": False,
+                        "signal_types": [],
+                        "unmet_conditions": unmet,
+                    })
+            except Exception as e:
                 results.append({
                     "time": t,
                     "has_signal": False,
                     "signal_types": [],
-                    "unmet_conditions": ["시각 매칭 실패"],
-                })
-                continue
-
-            buy1 = bool(signals.get("buy_pullback_pattern", pd.Series([False]*len(df_3min))).iloc[row_idx]) if not signals.empty else False
-            buy2 = bool(signals.get("buy_bisector_recovery", pd.Series([False]*len(df_3min))).iloc[row_idx]) if not signals.empty else False
-            has_signal = buy1 or buy2
-            signal_types = []
-            if buy1:
-                signal_types.append("buy_pullback_pattern")
-            if buy2:
-                signal_types.append("buy_bisector_recovery")
-
-            if has_signal:
-                results.append({
-                    "time": t,
-                    "has_signal": True,
-                    "signal_types": signal_types,
-                    "unmet_conditions": [],
-                })
-            else:
-                unmet = []  # 조건 분석 기능은 추후 구현
-                results.append({
-                    "time": t,
-                    "has_signal": False,
-                    "signal_types": [],
-                    "unmet_conditions": unmet,
+                    "unmet_conditions": [f"패턴매칭 오류: {e}"],
                 })
 
     return results
@@ -1053,18 +1039,6 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
     return trades
 
 
-def print_report(stock_code: str, target_date: str, evaluations: List[Dict[str, object]]):
-    """콘솔 요약 출력."""
-    print(f"\n=== {stock_code} - {target_date} 눌림목(3분) 신호 재현 ===")
-    for item in evaluations:
-        t = item["time"]
-        if item["has_signal"]:
-            sig = ",".join(item["signal_types"]) if item["signal_types"] else "(종류 미상)"
-            print(f"  {t} → ON [{sig}]")
-        else:
-            reasons = ", ".join(item["unmet_conditions"]) if item["unmet_conditions"] else "(사유 미상)"
-            print(f"  {t} → OFF  (미충족: {reasons})")
-
 
 def to_csv_rows(stock_code: str, target_date: str, evaluations: List[Dict[str, object]]) -> List[Dict[str, object]]:
     rows: List[Dict[str, object]] = []
@@ -1102,7 +1076,7 @@ async def process_single_stock(code: str, date_str: str, times_map: Dict[str, Li
         if capture_logger and hasattr(capture_logger, '_formatter_stock_tracker'):
             capture_logger._formatter_stock_tracker['code'] = code
             
-        # 신호 평가
+        # 신호 평가 (실시간과 동일한 decision_engine 사용)
         evals = await evaluate_signals_at_times(
             df_3min,
             date_str,
@@ -1111,6 +1085,7 @@ async def process_single_stock(code: str, date_str: str, times_map: Dict[str, Li
             logger=capture_logger,
             debug_logs=debug_logs,
             log_level=log_level,
+            use_decision_engine=True,  # 실시간과 동일한 로직 사용
         )
         
         # CSV 데이터 생성
@@ -1301,7 +1276,16 @@ async def run(
                     "unmet_conditions": row["unmet_conditions"].split(", ") if row["unmet_conditions"] else []
                 })
             
-            print_report(code, date_str, evals)
+            # 콘솔 요약 출력 (인라인)
+            print(f"\n=== {code} - {date_str} 눌림목(3분) 신호 재현 ===")
+            for item in evals:
+                t = item["time"]
+                if item["has_signal"]:
+                    sig = ",".join(item["signal_types"]) if item["signal_types"] else "(종류 미상)"
+                    print(f"  {t} → ON [{sig}]")
+                else:
+                    reasons = ", ".join(item["unmet_conditions"]) if item["unmet_conditions"] else "(사유 미상)"
+                    print(f"  {t} → OFF  (미충족: {reasons})")
             
             # 결과 저장
             all_rows.extend(csv_rows)
@@ -1553,21 +1537,37 @@ def main():
 
 
 def generate_timeline_analysis_log(df_3min: pd.DataFrame, signals: pd.DataFrame, stock_code: str, logger: Optional[logging.Logger] = None, df_1min: Optional[pd.DataFrame] = None) -> None:
-    """시간대별 신호 상태 분석 로그 생성 (09:00~15:30 전체 시간대)"""
-    print(f"🔍 generate_timeline_analysis_log 호출됨: {stock_code}, df_3min={len(df_3min) if df_3min is not None else 'None'}, signals={len(signals) if signals is not None else 'None'}, df_1min={len(df_1min) if df_1min is not None else 'None'}")
+    """
+    종목별로 장시작(09:00)부터 장마감(15:30)까지 모든 3분봉에서의 상세 상황을 기록
+    
+    표시 정보:
+    - 시간 (09:00, 09:03, 09:06, ...)
+    - 가격 정보 (OHLCV)
+    - 신호 타입 및 신뢰도
+    - 매수/매도 발생 시점
+    - 거래량 정보
+    """
     
     if logger is None or df_3min is None or signals is None or df_3min.empty or signals.empty:
-        print(f"🔍 타임라인 로그 생성 조건 불만족: logger={logger is not None}, df_3min={df_3min is not None and not df_3min.empty if df_3min is not None else False}, signals={signals is not None and not signals.empty if signals is not None else False}")
         return
     
-    # 매도 정보를 위해 거래 시뮬레이션 실행 (logger 없이)
+    # 매도 정보를 위해 거래 시뮬레이션 실행
     trades = simulate_trades(df_3min, df_1min, stock_code=stock_code) if df_3min is not None else []
-    print(f"🔍 trades 계산 완료: {len(trades)}개")
     
-    # 매도 시점 정보를 딕셔너리로 저장 (시간 -> 매도정보)
+    # 매수/매도 시점 정보를 딕셔너리로 저장 (시간 -> 거래정보)
+    buy_info = {}
     sell_info = {}
-    for i, trade in enumerate(trades):
-        print(f"🔍 trade {i}: {trade}")
+    
+    for trade in trades:
+        # 매수 정보
+        if 'buy_time' in trade and 'buy_price' in trade and 'buy_signal_type' in trade:
+            buy_time_str = trade['buy_time']  # "HH:MM" 형식
+            buy_info[buy_time_str] = {
+                'signal_type': trade['buy_signal_type'],
+                'price': trade['buy_price']
+            }
+        
+        # 매도 정보
         if 'sell_time' in trade and 'sell_reason' in trade and 'sell_price' in trade and 'profit_rate' in trade:
             sell_time_str = trade['sell_time']  # "HH:MM" 형식
             sell_info[sell_time_str] = {
@@ -1576,19 +1576,12 @@ def generate_timeline_analysis_log(df_3min: pd.DataFrame, signals: pd.DataFrame,
                 'profit_pct': trade['profit_rate']
             }
     
-    # 디버그: 매도 정보 확인
-    print(f"🔍 매도 정보 디버그: {len(sell_info)}개")
-    for sell_time, sell_data in sell_info.items():
-        print(f"  - {sell_time}: {sell_data['reason']} @{sell_data['price']:.0f} ({sell_data['profit_pct']:.2f}%)")
-    
     try:
-        print(f"🔍 타임라인 분석 시작: signals.columns={list(signals.columns)}")
-        # 매수신호가 있는 시점들 찾기
-        buy_pullback_signals = signals['buy_pullback_pattern'].fillna(False)
-        buy_bisector_signals = signals['buy_bisector_recovery'].fillna(False)
+        # 신호 데이터 준비
+        buy_pullback_signals = signals.get('buy_pullback_pattern', pd.Series([False] * len(signals))).fillna(False)
+        buy_bisector_signals = signals.get('buy_bisector_recovery', pd.Series([False] * len(signals))).fillna(False)
         signal_types = signals.get('signal_type', pd.Series([''] * len(signals)))
         confidence_scores = signals.get('confidence', pd.Series([0.0] * len(signals)))
-        print(f"🔍 신호 데이터 준비 완료")
         
         # 09:00~15:30 시간 필터링
         filtered_indices = []
@@ -1602,39 +1595,79 @@ def generate_timeline_analysis_log(df_3min: pd.DataFrame, signals: pd.DataFrame,
             if (hour == 9 and minute >= 0) or (10 <= hour <= 14) or (hour == 15 and minute <= 30):
                 filtered_indices.append(i)
         
-        # 신호가 있는 인덱스들 추출 (필터링된 시간대 내에서)
-        signal_indices = []
+        # 신호 통계 계산
+        signal_count = 0
         for i in filtered_indices:
             if i < len(signals) and (buy_pullback_signals.iloc[i] or buy_bisector_signals.iloc[i]):
-                signal_indices.append(i)
+                signal_count += 1
         
-        print(f"")
-        print(f"📊 [{stock_code}] 장중 전체 타임라인 (09:00~15:30) - 모든 3분봉")
-        print(f"📈 총 신호: {len(signal_indices)}개 / 전체 3분봉: {len(filtered_indices)}개")
-        print(f"" + "="*70)
+        # 헤더 출력
+        logger.info(f"")
+        logger.info(f"📊 [{stock_code}] 장중 전체 타임라인 (09:00~15:30) - 모든 3분봉")
+        logger.info(f"📈 총 신호: {signal_count}개 / 전체 3분봉: {len(filtered_indices)}개")
+        logger.info(f"" + "="*70)
         
-        # 모든 3분봉 시간대별로 신호 상태 표시
-        print(f"🔍 타임라인 루프 시작: {len(filtered_indices)}개 인덱스")
+        # 모든 3분봉 시간대별로 상세 정보 표시
         for idx, i in enumerate(filtered_indices):
             if i >= len(df_3min):
                 continue
                 
+            # 시간 정보
             timestamp = df_3min['datetime'].iloc[i]
             time_str = pd.Timestamp(timestamp).strftime('%H:%M')
             
-            if idx < 5:  # 처음 5개만 디버그 출력
-                print(f"🔍 처리 중: idx={idx}, i={i}, time={time_str}")
+            # 가격 정보 (OHLCV)
+            row = df_3min.iloc[i]
+            open_price = row.get('open', 0)
+            high_price = row.get('high', 0)
+            low_price = row.get('low', 0)
+            close_price = row.get('close', 0)
+            volume = row.get('volume', 0)
             
-            # 현재 시간에 신호가 있는지 확인
+            # 신호 정보
             has_signal = False
-            if i < len(signals):
-                has_signal = buy_pullback_signals.iloc[i] or buy_bisector_signals.iloc[i]
+            signal_info = ""
+            confidence = 0
             
-            if has_signal:
-                # 신호가 있는 경우 - 상세 정보 표시
-                print(f"  ✅ {time_str} 매수 신호")
-            elif time_str in sell_info:
-                # 매도 신호가 있는 경우
+            if i < len(signals):
+                has_pullback = buy_pullback_signals.iloc[i] if i < len(buy_pullback_signals) else False
+                has_bisector = buy_bisector_signals.iloc[i] if i < len(buy_bisector_signals) else False
+                signal_type = signal_types.iloc[i] if i < len(signal_types) else ''
+                confidence = confidence_scores.iloc[i] if i < len(confidence_scores) else 0
+                
+                if has_pullback or has_bisector:
+                    has_signal = True
+                    signal_name = ""
+                    if has_pullback:
+                        signal_name += "눌림목"
+                    if has_bisector:
+                        signal_name += "이등분선회복" if not signal_name else "+이등분선회복"
+                    
+                    # 신호 강도별 표시
+                    if signal_type == 'STRONG_BUY':
+                        signal_emoji = "🔥"
+                        signal_desc = f"강매수({signal_name})"
+                    elif signal_type == 'CAUTIOUS_BUY':
+                        signal_emoji = "⭐"
+                        signal_desc = f"신중매수({signal_name})"
+                    elif signal_type == 'AVOID':
+                        signal_emoji = "⚠️"
+                        signal_desc = f"회피({signal_name})"
+                    else:
+                        signal_emoji = "📊"
+                        signal_desc = f"신호({signal_name})"
+                    
+                    signal_info = f"{signal_emoji} {signal_desc} (신뢰도:{confidence:.0f}%)"
+            
+            # 매수/매도 정보 확인
+            buy_trade_info = ""
+            sell_trade_info = ""
+            
+            if time_str in buy_info:
+                buy_data = buy_info[time_str]
+                buy_trade_info = f" 📈 매수주문 @{buy_data['price']:,.0f}원"
+            
+            if time_str in sell_info:
                 sell_data = sell_info[time_str]
                 reason = sell_data['reason']
                 price = sell_data['price']
@@ -1655,26 +1688,48 @@ def generate_timeline_analysis_log(df_3min: pd.DataFrame, signals: pd.DataFrame,
                     reason_kr = reason
                 
                 profit_sign = "+" if profit_pct > 0 else ""
-                print(f"  {emoji} {time_str} 🔻 매도 ({reason_kr}) @{price:.0f}원 ({profit_sign}{profit_pct:.2f}%)")
-            else:
-                # 신호도 없고 매도도 없는 경우 - 간략히 표시하거나 생략
-                if idx < 10:  # 처음 몇 개만 출력해서 확인
-                    print(f"  ❌ {time_str} 신호없음")
+                sell_trade_info = f" {emoji} 매도주문 ({reason_kr}) @{price:,.0f}원 ({profit_sign}{profit_pct:.2f}%)"
             
-            continue  # 기존 코드는 스킵하고 continue
-        
+            # 출력 라인 구성
+            if has_signal:
+                # 신호가 있는 경우 - 강조 표시
+                logger.info(f"  ✅ {time_str} {signal_info}")
+                logger.info(f"      💰 가격: O{open_price:,.0f} H{high_price:,.0f} L{low_price:,.0f} C{close_price:,.0f} V{volume:,}")
+                if buy_trade_info:
+                    logger.info(f"     {buy_trade_info}")
+                if sell_trade_info:
+                    logger.info(f"     {sell_trade_info}")
+            elif buy_trade_info or sell_trade_info:
+                # 매수/매도만 있는 경우 - 거래 정보 표시
+                status_emoji = "📈" if buy_trade_info else "📉"
+                logger.info(f"  {status_emoji} {time_str} (종가:{close_price:,.0f}, 거래량:{volume:,})")
+                if buy_trade_info:
+                    logger.info(f"     {buy_trade_info}")
+                if sell_trade_info:
+                    logger.info(f"     {sell_trade_info}")
+            else:
+                # 일반 상태 - 간략 표시
+                logger.info(f"  ⚪ {time_str} ❌ 신호없음 (종가:{close_price:,.0f}, 거래량:{volume:,})")
         
         # 전체 신호 강도 분포 요약
-        non_empty_signals = signals[signal_types != '']
-        if not non_empty_signals.empty:
-            strong_count = len(non_empty_signals[non_empty_signals['signal_type'] == 'STRONG_BUY'])
-            cautious_count = len(non_empty_signals[non_empty_signals['signal_type'] == 'CAUTIOUS_BUY']) 
-            avoid_count = len(non_empty_signals[non_empty_signals['signal_type'] == 'AVOID'])
-            
+        if signal_count > 0:
+            non_empty_signals = signals[signal_types != '']
+            if not non_empty_signals.empty:
+                strong_count = len(non_empty_signals[non_empty_signals['signal_type'] == 'STRONG_BUY'])
+                cautious_count = len(non_empty_signals[non_empty_signals['signal_type'] == 'CAUTIOUS_BUY']) 
+                avoid_count = len(non_empty_signals[non_empty_signals['signal_type'] == 'AVOID'])
+                
+                max_conf = confidence_scores.max() if len(confidence_scores) > 0 else 0
+                avg_conf = confidence_scores[confidence_scores > 0].mean() if len(confidence_scores[confidence_scores > 0]) > 0 else 0
+                
+                logger.info(f"" + "="*70)
+                logger.info(f"📊 [{stock_code}] 신호 강도별 분포")
+                logger.info(f"🔥 강매수: {strong_count}개 | ⭐ 신중매수: {cautious_count}개 | ⚠️ 회피: {avoid_count}개")
+                logger.info(f"💡 최고신뢰도: {max_conf:.0f}% | 평균신뢰도: {avg_conf:.0f}%")
+                logger.info(f"")
+        else:
             logger.info(f"" + "="*70)
-            logger.info(f"📊 [{stock_code}] 신호 강도별 분포")
-            logger.info(f"🔥 강매수: {strong_count}개 | ⭐ 신중매수: {cautious_count}개 | ⚠️ 회피: {avoid_count}개")
-            logger.info(f"💡 최고신뢰도: {confidence_scores.max():.0f}% | 평균신뢰도: {confidence_scores[confidence_scores > 0].mean():.0f}%")
+            logger.info(f"📊 [{stock_code}] 매수 신호 없음 - 전체 {len(filtered_indices)}개 3분봉 분석 완료")
             logger.info(f"")
             
     except Exception as e:
