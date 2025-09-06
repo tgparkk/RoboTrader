@@ -135,62 +135,65 @@ def calculate_trading_signals_once(df_3min: pd.DataFrame, *, debug_logs: bool = 
 
 
 def list_all_buy_signals(df_3min: pd.DataFrame, *, logger: Optional[logging.Logger] = None, stock_code: str = "UNKNOWN") -> List[Dict[str, object]]:
-    """전체 3분봉에서 매수 신호 전체 리스트를 반환"""
+    """전체 3분봉에서 매수 신호 전체 리스트를 반환 (실시간과 동일한 방식)"""
     
     if df_3min is None or df_3min.empty:
         return []
     
     try:
-        signals, sig_improved = calculate_trading_signals_once(
-            df_3min, 
-            debug_logs=False, 
-            logger=logger, 
-            stock_code=stock_code
-        )
-        
-        if signals is None or signals.empty:
-            return []
+        from core.indicators.pullback_candle_pattern import PullbackCandlePattern, SignalType
         
         buy_signals = []
         
-        for i, row in signals.iterrows():
-            # 매수 신호 체크 (기존 컬럼명 사용)
-            buy_pullback = row.get('buy_pullback_pattern', False)
-            buy_bisector = row.get('buy_bisector_recovery', False)
+        # 각 3분봉 시점에서 실시간과 동일한 방식으로 신호 체크
+        for i in range(len(df_3min)):
+            # 해당 시점까지의 데이터만 사용 (실시간과 동일)
+            current_data = df_3min.iloc[:i+1].copy()
             
-            if buy_pullback or buy_bisector:
-                # datetime 정보는 원본 df_3min에서 가져오기
-                if i < len(df_3min):
-                    original_row = df_3min.iloc[i]
-                    datetime_val = original_row.get('datetime')
-                    close_val = original_row.get('close', 0)
-                    volume_val = original_row.get('volume', 0)
-                else:
-                    datetime_val = None
-                    close_val = row.get('close', 0)
-                    volume_val = row.get('volume', 0)
+            if len(current_data) < 5:  # 최소 데이터 요구사항
+                continue
+            
+            # ==================== 실시간과 동일한 신호 생성 ====================
+            signal_strength = PullbackCandlePattern.generate_improved_signals(
+                current_data,
+                stock_code=stock_code,
+                debug=False
+            )
+            
+            if signal_strength is None:
+                continue
+            
+            # 매수 신호 확인 (실시간과 동일한 조건)
+            if signal_strength.signal_type in [SignalType.STRONG_BUY, SignalType.CAUTIOUS_BUY]:
+                # 현재 3분봉 정보
+                current_row = df_3min.iloc[i]
+                datetime_val = current_row.get('datetime')
+                close_val = current_row.get('close', 0)
+                volume_val = current_row.get('volume', 0)
+                low_val = current_row.get('low', 0)
                 
-                # 신호 강도에 따른 목표 수익률 계산
-                target_profit = get_target_profit_from_signal_strength(sig_improved, i)
+                # 3분봉 완성 시점 (실제 신호 발생 시점)
+                signal_completion_time = datetime_val + pd.Timedelta(minutes=3) if datetime_val else datetime_val
                 
                 signal_info = {
                     'index': i,
-                    'datetime': datetime_val,
-                    'time': datetime_val.strftime('%H:%M') if datetime_val else 'Unknown',
+                    'datetime': datetime_val,  # 원본 라벨 시간 (내부 처리용)
+                    'signal_time': signal_completion_time,  # 실제 신호 발생 시간 (표시용)
+                    'time': signal_completion_time.strftime('%H:%M') if signal_completion_time else 'Unknown',
                     'close': close_val,
                     'volume': volume_val,
-                    'buy_pullback_pattern': buy_pullback,
-                    'buy_bisector_recovery': buy_bisector,
-                    'signal_type': row.get('signal_type', ''),
-                    'confidence': row.get('confidence', 0),
-                    'target_profit': target_profit,
-                    'entry_low': original_row.get('low', 0) if i < len(df_3min) else 0,  # 진입 저가 추가
-                    'low': original_row.get('low', 0) if i < len(df_3min) else 0  # 추가 참조용
+                    'signal_type': signal_strength.signal_type.value,
+                    'confidence': signal_strength.confidence,
+                    'target_profit': signal_strength.target_profit,
+                    'buy_price': signal_strength.buy_price,  # 실시간과 동일한 3/5가
+                    'entry_low': signal_strength.entry_low,  # 실시간과 동일한 진입저가
+                    'low': low_val,
+                    'reasons': ' | '.join(signal_strength.reasons)  # 신호 사유
                 }
                 buy_signals.append(signal_info)
         
         if logger:
-            logger.info(f"🎯 [{stock_code}] 총 {len(buy_signals)}개 매수 신호 발견")
+            logger.info(f"🎯 [{stock_code}] 총 {len(buy_signals)}개 매수 신호 발견 (실시간 방식)")
             
         return buy_signals
         
@@ -238,31 +241,70 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                     # 포지션이 매도되었으므로 새로운 매수 가능
                     current_position = None
             
-            # 신고 강도에 따른 목표 수익률 결정 (원본 로직)
-            target_profit_rate = signal.get('target_profit', 0.015)  # 기본 1.5% (원본과 동일)
+            # ==================== 실시간과 완전 동일한 매수 로직 ====================
+            
+            # 신호 강도에 따른 목표 수익률 (실시간과 동일)
+            target_profit_rate = signal.get('target_profit', 0.015)
             if target_profit_rate <= 0:
                 target_profit_rate = 0.015
                 
             # 손익비 2:1로 손절매 비율 설정
-            stop_loss_rate = target_profit_rate / 2.0  # 손익비 2:1
+            stop_loss_rate = target_profit_rate / 2.0
             
-            # 해당 3분봉 시작 시점부터 1분봉 데이터 찾기
-            signal_time_start = signal_datetime
-            signal_time_end = signal_datetime + pd.Timedelta(minutes=3)
+            # 실시간과 동일한 3/5가 및 진입저가 사용
+            three_fifths_price = signal.get('buy_price', 0)  # 이미 계산된 3/5가 사용
+            entry_low = signal.get('entry_low', 0)  # 이미 계산된 진입저가 사용
             
-            # 매수 시점: 3분봉 시작 후 첫 번째 1분봉
-            buy_candles = df_1min[
+            if three_fifths_price <= 0:
+                if logger:
+                    logger.warning(f"⚠️ [{stock_code}] 3/5가 정보 없음, 거래 건너뜀")
+                continue
+            
+            # ==================== 매수 체결 가능성 검증 (5분 내) ====================
+            
+            # 3분봉 라벨 기준으로 완성 시점 계산
+            # 예: 09:30 라벨 → 09:30~09:32 구간이 09:33에 완성되어 09:33부터 매수 시도
+            signal_candle_completion = signal_datetime + pd.Timedelta(minutes=3)  # 3분봉 완성 시점
+            signal_time_start = signal_candle_completion  # 완성 시점부터 매수 시도
+            signal_time_end = signal_time_start + pd.Timedelta(minutes=5)  # 5분 내
+            
+            # 디버그: 시간 정보 출력
+            if logger:
+                logger.debug(f"🕐 신호 라벨: {signal_datetime.strftime('%H:%M')}, "
+                           f"3분봉 완성: {signal_candle_completion.strftime('%H:%M')}, "
+                           f"매수 윈도우: {signal_time_start.strftime('%H:%M')}~{signal_time_end.strftime('%H:%M')}")
+            
+            check_candles = df_1min[
                 (df_1min['datetime'] >= signal_time_start) & 
                 (df_1min['datetime'] < signal_time_end)
             ].copy()
             
-            if buy_candles.empty:
+            if check_candles.empty:
+                if logger:
+                    logger.debug(f"⚠️ [{stock_code}] 체결 검증용 1분봉 데이터 없음, 거래 건너뜀")
                 continue
-                
-            # 첫 번째 1분봉에서 매수 (종가로 매수)
-            first_candle = buy_candles.iloc[0]
-            buy_time = first_candle['datetime']
-            buy_price = first_candle['close']
+            
+            # 5분 내에 3/5가 이하로 떨어지는 시점 찾기
+            buy_time = None
+            buy_executed_price = three_fifths_price
+            
+            for _, candle in check_candles.iterrows():
+                # 해당 1분봉의 저가가 3/5가 이하면 체결 가능
+                if candle['low'] <= three_fifths_price:
+                    buy_time = candle['datetime']
+                    # 체결가는 3/5가로 고정 (지정가 주문과 동일)
+                    break
+            
+            if buy_time is None:
+                # 5분 내에 3/5가 이하로 떨어지지 않음 → 매수 미체결
+                if logger:
+                    logger.debug(f"💸 [{stock_code}] 매수 미체결: 5분 내 3/5가({three_fifths_price:,.0f}원) 도달 실패")
+                continue
+            
+            # 체결 성공
+            buy_price = buy_executed_price
+            if logger:
+                logger.debug(f"💰 [{stock_code}] 매수 체결: {buy_price:,.0f}원 @ {buy_time.strftime('%H:%M:%S')}")
             
             # 진입 저가 추적 (실시간과 동일)
             entry_low = signal.get('entry_low', 0)
@@ -299,64 +341,79 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
             sell_reason = ""
             
             for i, row in remaining_data.iterrows():
-                current_price = row['close']
-                current_profit_rate = ((current_price - buy_price) / buy_price) * 100
+                candle_high = row['high']
+                candle_low = row['low'] 
+                candle_close = row['close']
                 
-                # 최대/최소 수익률 추적
-                if current_profit_rate > max_profit_rate:
-                    max_profit_rate = current_profit_rate
-                if current_profit_rate < max_loss_rate:
-                    max_loss_rate = current_profit_rate
+                # 최대/최소 수익률 추적 (종가 기준)
+                close_profit_rate = ((candle_close - buy_price) / buy_price) * 100
+                high_profit_rate = ((candle_high - buy_price) / buy_price) * 100
+                low_profit_rate = ((candle_low - buy_price) / buy_price) * 100
                 
-                # ==================== 실시간과 동일한 매도 조건들 ====================
+                if high_profit_rate > max_profit_rate:
+                    max_profit_rate = high_profit_rate
+                if low_profit_rate < max_loss_rate:
+                    max_loss_rate = low_profit_rate
                 
-                # 1. 신호강도별 익절 (가격 기준)
-                if current_price >= buy_price * (1.0 + target_profit_rate):
+                # ==================== 1분봉 고가/저가에서 매도 조건 체크 ====================
+                
+                # 익절 목표가
+                profit_target_price = buy_price * (1.0 + target_profit_rate)
+                # 손절 목표가  
+                stop_loss_target_price = buy_price * (1.0 - stop_loss_rate)
+                # 진입저가 -0.2% 기준가
+                entry_low_break_price = entry_low * 0.998 if entry_low > 0 else 0
+                
+                # 1. 신호강도별 익절 - 1분봉 고가가 익절 목표가 터치 시
+                if candle_high >= profit_target_price:
                     sell_time = row['datetime']
-                    sell_price = current_price
+                    sell_price = profit_target_price  # 목표가로 매도
                     sell_reason = f"profit_{target_profit_rate*100:.1f}pct"
                     break
                     
-                # 2. 신호강도별 손절 (가격 기준) 
-                if current_price <= buy_price * (1.0 - stop_loss_rate):
+                # 2. 신호강도별 손절 - 1분봉 저가가 손절 목표가 터치 시
+                if candle_low <= stop_loss_target_price:
                     sell_time = row['datetime']
-                    sell_price = current_price
+                    sell_price = stop_loss_target_price  # 손절가로 매도
                     sell_reason = f"stop_loss_{stop_loss_rate*100:.1f}pct"
                     break
                 
-                # 3. 진입저가 실시간 체크 (-0.2%) - 실시간과 동일
-                if entry_low > 0 and current_price < entry_low * 0.998:
+                # 3. 진입저가 -0.2% 이탈 - 1분봉 저가가 기준가 터치 시
+                if entry_low_break_price > 0 and candle_low <= entry_low_break_price:
                     sell_time = row['datetime']
-                    sell_price = current_price
+                    sell_price = entry_low_break_price  # 기준가로 매도
                     sell_reason = f"entry_low_break"
                     break
                 
-                # 4. 3분봉 기반 기술적 분석 매도 신호 (매 1분마다 체크)
+                # 4. 3분봉 기반 기술적 분석 매도 신호 (3분봉 완성 시점에만 체크 - 실시간과 동일)
                 current_time = row['datetime']
                 
-                # 해당 시점까지의 1분봉 데이터를 3분봉으로 변환
-                data_until_now = df_1min[df_1min['datetime'] <= current_time]
-                if len(data_until_now) >= 15:  # 최소 15개 1분봉 필요
-                    try:
-                        from core.timeframe_converter import TimeFrameConverter
-                        data_3min_current = TimeFrameConverter.convert_to_3min_data(data_until_now)
-                        
-                        if data_3min_current is not None and len(data_3min_current) >= 5:
-                            # 3분봉 기반 매도 신호 계산
-                            technical_sell, technical_reason = _check_technical_sell_signals(
-                                data_3min_current, entry_low
-                            )
+                # 3분봉 완성 시점에만 기술적 분석 실행 (실시간과 동일)
+                if current_time.minute % 3 == 0:  # 3분 단위 시점에만 실행
+                    # 해당 시점까지의 1분봉 데이터를 3분봉으로 변환
+                    data_until_now = df_1min[df_1min['datetime'] <= current_time]
+                    if len(data_until_now) >= 15:  # 최소 15개 1분봉 필요
+                        try:
+                            from core.timeframe_converter import TimeFrameConverter
+                            data_3min_current = TimeFrameConverter.convert_to_3min_data(data_until_now)
                             
-                            if technical_sell:
-                                sell_time = row['datetime']
-                                sell_price = current_price
-                                sell_reason = technical_reason
-                                break
+                            if data_3min_current is not None and len(data_3min_current) >= 5:
+                                # 3분봉 기반 매도 신호 계산
+                                technical_sell, technical_reason = _check_technical_sell_signals(
+                                    data_3min_current, entry_low
+                                )
                                 
-                    except Exception as e:
-                        if logger:
-                            logger.debug(f"기술적 분석 매도 신호 체크 오류: {e}")
-                        continue
+                                if technical_sell:
+                                    sell_time = row['datetime']
+                                    # 기술적 분석 신호 시 종가로 매도 (실시간과 동일)
+                                    sell_price = candle_close
+                                    sell_reason = technical_reason
+                                    break
+                                    
+                        except Exception as e:
+                            if logger:
+                                logger.debug(f"기술적 분석 매도 신호 체크 오류: {e}")
+                            continue
             
             # 거래 결과 기록 및 포지션 업데이트
             if sell_time is not None:
