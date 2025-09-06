@@ -597,7 +597,7 @@ def main():
         sys.exit(1)
 
     # 병렬 처리를 위한 함수 정의
-    def process_single_stock(stock_code: str) -> Tuple[str, List[Dict[str, object]]]:
+    def process_single_stock(stock_code: str) -> Tuple[str, List[Dict[str, object]], pd.DataFrame]:
         """단일 종목 처리 함수"""
         try:
             logger.info(f"🔄 [{stock_code}] 처리 시작...")
@@ -656,14 +656,15 @@ def main():
                     logger.warning(f"⚠️  [{stock_code}] 차트 생성 실패: {chart_error}")
             
             logger.info(f"✅ [{stock_code}] 처리 완료 - {len(trades)}건 거래")
-            return stock_code, trades
+            return stock_code, trades, df_1min
             
         except Exception as e:
             logger.error(f"❌ [{stock_code}] 처리 실패: {e}")
-            return stock_code, []
+            return stock_code, [], pd.DataFrame()
 
     # 병렬 처리 실행
     all_trades: Dict[str, List[Dict[str, object]]] = {}
+    all_stock_data: Dict[str, pd.DataFrame] = {}  # 🆕 상세 분석용 데이터 저장
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
         # 모든 종목을 병렬로 처리
@@ -675,11 +676,13 @@ def main():
         for future in concurrent.futures.as_completed(future_to_stock):
             stock_code = future_to_stock[future]
             try:
-                processed_code, trades = future.result()
+                processed_code, trades, stock_data = future.result()
                 all_trades[processed_code] = trades
+                all_stock_data[processed_code] = stock_data  # 🆕 1분봉 데이터 저장
             except Exception as exc:
                 logger.error(f"❌ [{stock_code}] 병렬 처리 중 예외 발생: {exc}")
                 all_trades[stock_code] = []
+                all_stock_data[stock_code] = pd.DataFrame()
 
     # 결과 요약
     total_trades = sum(len(trades) for trades in all_trades.values())
@@ -774,6 +777,100 @@ def main():
                                     lines.append(f"    {trade['buy_time']} 매수[pullback_pattern] @{trade['buy_price']:,.0f} → 미결제 ({trade.get('reason', '알수없음')})")
                         else:
                             lines.append("    없음")
+                        
+                        # ==================== 🆕 상세 3분봉 분석 추가 ====================
+                        lines.append("")
+                        lines.append("  🔍 상세 3분봉 분석 (09:00~15:30):")
+                        
+                        # 해당 종목의 상세 분석을 위한 데이터 재처리
+                        try:
+                            # 해당 종목의 3분봉 데이터 재조회
+                            all_data_for_stock = all_stock_data.get(stock_code)
+                            if all_data_for_stock is not None and not all_data_for_stock.empty:
+                                # 3분봉 변환
+                                from core.timeframe_converter import TimeFrameConverter
+                                df_3min_detailed = TimeFrameConverter.convert_to_3min_data(all_data_for_stock)
+                                
+                                if df_3min_detailed is not None and not df_3min_detailed.empty:
+                                    # 매수/매도 시점 매핑
+                                    trade_times = {}
+                                    for trade in trades:
+                                        buy_time_str = trade['buy_time']
+                                        trade_times[buy_time_str] = {
+                                            'type': 'buy',
+                                            'price': trade['buy_price'],
+                                            'sell_time': trade.get('sell_time', ''),
+                                            'sell_price': trade.get('sell_price', 0),
+                                            'reason': trade.get('reason', '')
+                                        }
+                                    
+                                    # 3분봉별 상세 분석
+                                    for i, row in df_3min_detailed.iterrows():
+                                        candle_time = row['datetime']
+                                        if candle_time.hour < 9 or candle_time.hour > 15:
+                                            continue
+                                        if candle_time.hour == 15 and candle_time.minute >= 30:
+                                            continue
+                                            
+                                        time_str = candle_time.strftime('%H:%M')
+                                        signal_time_str = (candle_time + pd.Timedelta(minutes=3)).strftime('%H:%M')
+                                        
+                                        # 신호 생성 및 분석
+                                        current_data = df_3min_detailed.iloc[:i+1]
+                                        if len(current_data) >= 5:
+                                            from core.indicators.pullback_candle_pattern import PullbackCandlePattern, SignalType
+                                            
+                                            signal_strength = PullbackCandlePattern.generate_improved_signals(
+                                                current_data,
+                                                stock_code=stock_code,
+                                                debug=False
+                                            )
+                                            
+                                            # 상태 표시
+                                            status_parts = []
+                                            
+                                            # 1. 기본 정보
+                                            close_price = row['close']
+                                            volume = row['volume']
+                                            status_parts.append(f"종가:{close_price:,.0f}")
+                                            status_parts.append(f"거래량:{volume:,.0f}")
+                                            
+                                            # 2. 신호 상태
+                                            if signal_strength:
+                                                if signal_strength.signal_type == SignalType.STRONG_BUY:
+                                                    status_parts.append("🟢강매수")
+                                                elif signal_strength.signal_type == SignalType.CAUTIOUS_BUY:
+                                                    status_parts.append("🟡조건부매수")
+                                                elif signal_strength.signal_type == SignalType.AVOID:
+                                                    status_parts.append("🔴회피")
+                                                elif signal_strength.signal_type == SignalType.WAIT:
+                                                    status_parts.append("⚪대기")
+                                                else:
+                                                    status_parts.append("⚫조건미충족")
+                                                    
+                                                # 신뢰도 표시
+                                                status_parts.append(f"신뢰도:{signal_strength.confidence:.0f}%")
+                                            else:
+                                                status_parts.append("❌신호없음")
+                                            
+                                            # 3. 매매 실행 여부
+                                            if signal_time_str in trade_times:
+                                                trade_info = trade_times[signal_time_str]
+                                                if trade_info['type'] == 'buy':
+                                                    status_parts.append(f"💰매수@{trade_info['price']:,.0f}")
+                                                    if trade_info['sell_time']:
+                                                        status_parts.append(f"→{trade_info['sell_time']}매도@{trade_info['sell_price']:,.0f}")
+                                            
+                                            status_text = " | ".join(status_parts)
+                                            lines.append(f"    {time_str}→{signal_time_str}: {status_text}")
+                                        else:
+                                            lines.append(f"    {time_str}→{signal_time_str}: 데이터부족")
+                                else:
+                                    lines.append("    3분봉 변환 실패")
+                            else:
+                                lines.append("    데이터 없음")
+                        except Exception as e:
+                            lines.append(f"    분석 오류: {str(e)[:50]}")
                         
                         lines.append("")
                     

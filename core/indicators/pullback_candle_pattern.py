@@ -420,7 +420,7 @@ class PullbackCandlePattern:
     ) -> pd.DataFrame:
         """거래 신호 생성 (기존 호환성 유지)"""
         # 호환성을 위해 기존 파라미터들을 받지만 새로운 로직에서는 일부만 사용
-        signal_strength = PullbackCandlePattern.generate_improved_signals(data, stock_code, debug)
+        # 중복 호출 제거: _generate_signals_with_improved_logic 내부에서 이미 generate_improved_signals를 호출함
         
         # 원본 로직을 따라 DataFrame 형태로 신호 생성
         return PullbackCandlePattern._generate_signals_with_improved_logic(

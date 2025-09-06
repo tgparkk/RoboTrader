@@ -670,7 +670,8 @@ class TradingDecisionEngine:
             # 🆕 개선된 신호 생성 로직 사용 (3/5가 계산 포함)
             signal_strength = PullbackCandlePattern.generate_improved_signals(
                 data_3min,
-                stock_code=getattr(self, '_current_stock_code', 'UNKNOWN'),
+                #stock_code=getattr(self, '_current_stock_code', 'UNKNOWN'),
+                stock_code=trading_stock.stock_code,
                 debug=True
             )
             
