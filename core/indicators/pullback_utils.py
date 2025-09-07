@@ -30,9 +30,10 @@ class PullbackUtils:
         return VolumeAnalyzer.calculate_daily_baseline_volume(data)
     
     @staticmethod
-    def analyze_volume(data: pd.DataFrame, period: int = 10) -> VolumeAnalysis:
+    def analyze_volume(data: pd.DataFrame, period: int = 10, 
+                      baseline_volumes: Optional[pd.Series] = None) -> VolumeAnalysis:
         """거래량 분석 (개선된 기준거래량 사용)"""
-        return VolumeAnalyzer.analyze_volume(data, period)
+        return VolumeAnalyzer.analyze_volume(data, period, baseline_volumes)
     
     @staticmethod
     def analyze_price_trend(data: pd.DataFrame, period: int = 10) -> Dict[str, float]:
@@ -80,9 +81,10 @@ class PullbackUtils:
         return CandleAnalyzer.analyze_candle(data, period)
     
     @staticmethod
-    def check_prior_uptrend(data: pd.DataFrame, min_gain: float = 0.05) -> bool:
+    def check_prior_uptrend(data: pd.DataFrame, min_gain: float = 0.05, 
+                          baseline_volume: Optional[float] = None) -> bool:
         """선행 상승 확인 (개선된 버전)"""
-        return CandleAnalyzer.check_prior_uptrend(data, min_gain)
+        return CandleAnalyzer.check_prior_uptrend(data, min_gain, baseline_volume)
     
     @staticmethod
     def check_price_trend(data: pd.DataFrame, period: int = 10) -> str:

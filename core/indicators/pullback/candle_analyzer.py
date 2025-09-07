@@ -116,18 +116,20 @@ class CandleAnalyzer:
         )
 
     @staticmethod
-    def check_prior_uptrend(data: pd.DataFrame, min_gain: float = 0.03) -> bool:
+    def check_prior_uptrend(data: pd.DataFrame, min_gain: float = 0.03, 
+                          baseline_volume: Optional[float] = None) -> bool:
         """
         선행 상승 확인 (완화된 버전)
         
         조건:
-        1. 현재시간부터 과거로 탐색하여 n개의 봉이 합해서 3% 이상 상승
-        2. 하락할 때는 기준 거래량의 1/4 수준 유지
-        3. 1/4를 넘는 거래량의 하락은 최대 1개만 허용
+        1. 현재가가 첫봉(09:00) 시가 대비 4% 이상 상승
+        2. 현재시간부터 과거로 탐색하여 n개의 봉이 합해서 3% 이상 상승
+        3. 하락할 때는 기준 거래량의 1/2 수준 유지
+        4. 1/2를 넘는 거래량의 하락은 최대 1개만 허용
         
         Args:
             data: 분봉 데이터
-            min_gain: 최소 상승률 (기본값: 3%)
+            min_gain: 최소 상승률 (기본값: 2%)
             
         Returns:
             bool: 눌림목 선행 조건 만족 여부
@@ -148,23 +150,69 @@ class CandleAnalyzer:
                 # datetime 정보가 없으면 전체 데이터를 당일로 간주
                 today_data = data.copy()
             
-            # 기준 거래량 계산 (당일 최대 거래량)
-            baseline_volume = today_data['volume'].max()
-            low_volume_threshold = baseline_volume * 0.25  # 1/4 수준
+            # 기준 거래량 계산 (최적화: 이미 계산된 값 재사용)
+            if baseline_volume is None:
+                baseline_volume = today_data['volume'].max()
+            low_volume_threshold = baseline_volume * 0.5  # 1/2 수준
             
-            # 현재 캔들이 양봉인지 확인
+            # 현재 캔들이 양봉인지 확인 (완화: 연속 상승 패턴도 허용)
             current_candle = today_data.iloc[-1]
-            if current_candle['close'] <= current_candle['open']:
-                return False
+            
+            # 기본 양봉 조건
+            is_bullish = current_candle['close'] > current_candle['open']
+            
+            # 연속 상승 패턴 확인 (양봉이 아니어도 전체적 상승 흐름이면 허용)
+            is_consecutive_rise = False
+            if len(today_data) >= 3:  # 최소 3개 봉 확인
+                # 최근 3개 봉의 전체적 상승 흐름 확인
+                recent_candles = today_data.iloc[-3:]
+                
+                # 시작점과 끝점 비교로 전체 흐름 판단
+                start_price = recent_candles.iloc[0]['low']  # 첫 번째 봉의 저가
+                end_price = current_candle['close']          # 현재 봉의 종가
+                
+                # 전체적으로 상승했는지 확인 (중간에 음봉이 있어도 허용)
+                if end_price > start_price:
+                    # 추가로 고점들이 상승 추세인지 확인
+                    highs = recent_candles['high'].values
+                    # 최근 고점이 이전 고점들보다 높은 경우가 많은지 확인
+                    rising_highs = sum(1 for i in range(1, len(highs)) if highs[i] > highs[i-1])
+                    if rising_highs >= len(highs) // 2:  # 절반 이상이 상승
+                        is_consecutive_rise = True
             
             # 디버그: 특정 시점 분석
             debug_mode = (abs(current_candle['close'] - 2440) < 10 or  # 391710 09:42
-                         'datetime' in data.columns and 
-                         pd.to_datetime(data['datetime']).iloc[-1].strftime('%H:%M') == '10:00')
+                         abs(current_candle['close'] - 35850) < 10 or  # 290650 10:00
+                         abs(current_candle['close'] - 33950) < 10)    # 039200 09:30
+            
+            if not is_bullish and not is_consecutive_rise:
+                return False
+            
+            # 추가 조건: 현재가가 첫봉(09:00) 시가 대비 +4% 이상 상승했는지 확인
+            first_candle = today_data.iloc[0]  # 09:00 3분봉 (첫 번째 봉)
+            first_candle_open = first_candle['open']  # 첫봉의 시가
+            current_close = current_candle['close']
+            
+            if first_candle_open > 0:
+                gain_from_first = (current_close - first_candle_open) / first_candle_open
+                min_gain_from_first = 0.04  # 4%
+                
+                if debug_mode:
+                    print(f"첫봉 시가 대비 상승률: {first_candle_open:.0f}→{current_close:.0f} = {gain_from_first*100:.1f}% (최소: {min_gain_from_first*100}%)")
+                
+                if gain_from_first < min_gain_from_first:
+                    if debug_mode:
+                        print(f"❌ 첫봉 시가 대비 상승률 부족: {gain_from_first*100:.1f}% < {min_gain_from_first*100}%")
+                    return False
+            else:
+                # 첫봉 시가가 0인 경우 (비정상적 상황)
+                if debug_mode:
+                    print("⚠️ 첫봉 시가가 0 - 첫봉 대비 상승률 확인 불가")
+                return False
             if debug_mode:
                 print(f"\n🔍 [DEBUG] 09:42 선행상승 분석 시작")
                 print(f"현재 캔들: {current_candle['close']:.0f}원 (양봉: {current_candle['close'] > current_candle['open']})")
-                print(f"기준거래량: {baseline_volume:,.0f}, 1/4수준: {low_volume_threshold:,.0f}")
+                print(f"기준거래량: {baseline_volume:,.0f}, 1/2수준: {low_volume_threshold:,.0f}")
                 print(f"당일 데이터 개수: {len(today_data)}")
             
             # 현재부터 과거로 탐색 (최대 20개 봉)
@@ -191,7 +239,7 @@ class CandleAnalyzer:
                     if debug_mode:
                         print(f"구간[{start_offset}봉]: {segment_start_low:.0f}→{segment_high:.0f} = {total_gain*100:.1f}%")
                     
-                    if total_gain >= min_gain:  # 3% 이상 상승 확인
+                    if total_gain >= min_gain:  # 2% 이상 상승 확인
                         
                         # 2. 하락 구간의 거래량 체크
                         high_volume_decline_count = 0
@@ -199,7 +247,7 @@ class CandleAnalyzer:
                         for i in range(len(segment_data)):
                             candle = segment_data.iloc[i]
                             
-                            # 음봉이면서 거래량이 1/4를 넘는 경우 카운트
+                            # 음봉이면서 거래량이 1/2를 넘는 경우 카운트
                             if (candle['close'] < candle['open'] and 
                                 candle['volume'] > low_volume_threshold):
                                 high_volume_decline_count += 1
@@ -207,8 +255,8 @@ class CandleAnalyzer:
                         if debug_mode:
                             print(f"  고거래량 하락 개수: {high_volume_decline_count}")
                         
-                        # 3. 고거래량 하락이 3개 이하인지 확인 (완화: 1개→3개)
-                        if high_volume_decline_count <= 3:
+                        # 3. 고거래량 하락이 1개 이하인지 확인
+                        if high_volume_decline_count <= 1:
                             
                             # 4. 추가 검증: 현재 캔들이 회복 신호인지 확인
                             segment_low = segment_data['low'].min()

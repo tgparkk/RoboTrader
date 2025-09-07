@@ -4,7 +4,7 @@
 
 import pandas as pd
 import numpy as np
-from typing import Dict
+from typing import Dict, Optional
 from .types import VolumeAnalysis
 
 
@@ -31,7 +31,8 @@ class VolumeAnalyzer:
             return pd.Series([max_vol] * len(data), index=data.index)
     
     @staticmethod
-    def analyze_volume(data: pd.DataFrame, period: int = 10) -> VolumeAnalysis:
+    def analyze_volume(data: pd.DataFrame, period: int = 10, 
+                      baseline_volumes: Optional[pd.Series] = None) -> VolumeAnalysis:
         """거래량 분석 (개선된 기준거래량 사용)"""
         if 'volume' not in data.columns or len(data) < period:
             return VolumeAnalysis(0, 0, 0, 0, 'stable', False, False, False, False)
@@ -39,8 +40,9 @@ class VolumeAnalyzer:
         volumes = data['volume'].values
         current_volume = volumes[-1]
         
-        # 기준 거래량: 당일 최대 거래량 (실시간)
-        baseline_volumes = VolumeAnalyzer.calculate_daily_baseline_volume(data)
+        # 기준 거래량: 당일 최대 거래량 (실시간) - 최적화: 이미 계산된 값 재사용
+        if baseline_volumes is None:
+            baseline_volumes = VolumeAnalyzer.calculate_daily_baseline_volume(data)
         baseline_volume = baseline_volumes.iloc[-1]
         
         # 최근 평균 거래량

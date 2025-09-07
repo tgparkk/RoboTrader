@@ -82,11 +82,11 @@ class SignalCalculator:
             reasons.append("머리위물량(-)")
         
         if bisector_status == BisectorStatus.BROKEN:
-            confidence -= 20
+            confidence -= 35
             reasons.append("이등분선이탈(-)")
         
         # 신호 타입 결정 (균형적 임계값 - 신호율과 품질의 균형)
-        if confidence >= 88:  # 매우 높은 수준의 강매수
+        if confidence >= 85:  # 매우 높은 수준의 강매수
             signal_type = SignalType.STRONG_BUY
             target_profit = 0.025  # 2.5%
         elif confidence >= 70:  # 높은 수준의 매수

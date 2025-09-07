@@ -1,6 +1,19 @@
 """
 실데이터 기반 매매신호(눌림목/3분봉) 재현 리포트 스크립트
 
+🔄 로직 전환 방법:
+  # v2 로직 사용 (SHA-1: 4d2836c2 복원):
+    - 157-164 라인 주석 해제
+    - 167-171 라인 주석 처리
+    - 999-1006 라인 주석 해제  
+    - 1009-1013 라인 주석 처리
+  
+  # 현재 로직 사용 (개선된 버전):
+    - 157-164 라인 주석 처리
+    - 167-171 라인 주석 해제
+    - 999-1006 라인 주석 처리
+    - 1009-1013 라인 주석 해제
+
 사용 예 (Windows PowerShell):
   # candidate_stocks 테이블에서 자동으로 종목 조회
   python utils\signal_replay.py --date 20250825 --export txt --charts
@@ -153,11 +166,21 @@ def list_all_buy_signals(df_3min: pd.DataFrame, *, logger: Optional[logging.Logg
             if len(current_data) < 5:  # 최소 데이터 요구사항
                 continue
             
-            # ==================== 실시간과 동일한 신호 생성 ====================
+            # ==================== 신호 생성 로직 선택 ====================
+            # 🔄 v2 로직 사용 (SHA-1: 4d2836c2 복원) - 주석 처리하여 비활성화
+            # signal_strength, risk_signals = PullbackCandlePattern.generate_improved_signals_v2(
+            #     current_data,
+            #     entry_price=None,
+            #     entry_low=None,
+            #     debug=True,
+            #     logger=logger
+            # )
+            
+            # 🔄 현재 로직 사용 (개선된 버전) - 주석 해제하여 사용
             signal_strength = PullbackCandlePattern.generate_improved_signals(
                 current_data,
                 stock_code=stock_code,
-                debug=False
+                debug=True
             )
             
             if signal_strength is None:
@@ -233,14 +256,25 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
             
             # ==================== 실시간과 동일: 포지션 보유 중이면 매수 금지 ====================
             if current_position is not None:
-                # 현재 시간이 포지션 매도 이후인지 확인 (실제 신호 시간 기준)
-                if signal_completion_time <= current_position['sell_time']:
+                # 현재 신호 시간이 포지션 매도 시간 이전인지 확인 (매도 전이면 매수 불가)
+                if signal_completion_time < current_position['sell_time']:
                     if logger:
-                        logger.debug(f"⚠️ [{signal_completion_time.strftime('%H:%M')}] 포지션 보유 중으로 매수 건너뜀")
+                        logger.debug(f"⚠️ [{signal_completion_time.strftime('%H:%M')}] 포지션 보유 중(매도예정: {current_position['sell_time'].strftime('%H:%M')})으로 매수 건너뜀")
                     continue  # 포지션 보유 중이므로 매수 불가
                 else:
-                    # 포지션이 매도되었으므로 새로운 매수 가능
-                    current_position = None
+                    # 매도 후 2개 3분봉(6분) 대기 조건 확인
+                    cooldown_time = current_position['sell_time'] + pd.Timedelta(minutes=6)  # 2개 3분봉 = 6분
+                    
+                    if signal_completion_time < cooldown_time:
+                        # 아직 쿨다운 기간 중
+                        if logger:
+                            logger.debug(f"⏰ [{signal_completion_time.strftime('%H:%M')}] 매도 후 쿨다운 중(쿨다운 종료: {cooldown_time.strftime('%H:%M')}), 매수 건너뜀")
+                        continue  # 쿨다운 기간 중이므로 매수 불가
+                    else:
+                        # 쿨다운 기간 완료, 새로운 매수 가능
+                        if logger:
+                            logger.debug(f"✅ [{signal_completion_time.strftime('%H:%M')}] 쿨다운 완료({cooldown_time.strftime('%H:%M')}), 새 매수 가능")
+                        current_position = None
             
             # ==================== 실시간과 완전 동일한 매수 로직 ====================
             
@@ -261,64 +295,66 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                     logger.warning(f"⚠️ [{stock_code}] 3/5가 정보 없음, 거래 건너뜀")
                 continue
             
-            # ==================== 매수 체결 가능성 검증 (5분 내) ====================
+            # ==================== 매수 체결 가정 (미체결 개념 주석 처리) ====================
             
+            # 미체결 개념을 제거하고 항상 양봉의 3/5 가격으로 매수했다고 가정
             # 실제 신호 발생 시점부터 매수 시도
-            # 예: 09:42 라벨 → 09:45:00 신호 발생 → 09:45:00부터 매수 시도
-            signal_time_start = signal_completion_time  # 신호 발생 시점부터 매수 시도
-            signal_time_end = signal_time_start + pd.Timedelta(minutes=5)  # 5분 내
+            # 예: 09:42 라벨 → 09:45:00 신호 발생 → 09:45:00에 3/5가로 매수
+            signal_time_start = signal_completion_time  # 신호 발생 시점에 매수
             
             # 디버그: 시간 정보 출력
             if logger:
                 logger.debug(f"🕐 신호 라벨: {signal_datetime.strftime('%H:%M')}, "
                            f"신호 발생: {signal_completion_time.strftime('%H:%M')}, "
-                           f"매수 윈도우: {signal_time_start.strftime('%H:%M')}~{signal_time_end.strftime('%H:%M')}")
+                           f"매수가: {three_fifths_price:,.0f}원")
             
-            check_candles = df_1min[
-                (df_1min['datetime'] >= signal_time_start) & 
-                (df_1min['datetime'] < signal_time_end)
-            ].copy()
-            
-            if check_candles.empty:
-                if logger:
-                    logger.debug(f"⚠️ [{stock_code}] 체결 검증용 1분봉 데이터 없음, 거래 건너뜀")
-                continue
-            
-            # 5분 내에 3/5가 이하로 떨어지는 시점 찾기 (체결 가능성만 확인)
-            buy_executed = False
+            # 항상 매수 성공으로 가정
+            buy_executed = True
             buy_executed_price = three_fifths_price
-            actual_execution_time = None
+            actual_execution_time = signal_completion_time
             
-            for _, candle in check_candles.iterrows():
-                # 해당 1분봉의 저가가 3/5가 이하면 체결 가능
-                if candle['low'] <= three_fifths_price:
-                    buy_executed = True
-                    actual_execution_time = candle['datetime']
-                    # 체결가는 3/5가로 고정 (지정가 주문과 동일)
-                    break
-            
-            if not buy_executed:
-                # 5분 내에 3/5가 이하로 떨어지지 않음 → 매수 미체결
-                if logger:
-                    logger.debug(f"💸 [{stock_code}] 매수 미체결: 5분 내 3/5가({three_fifths_price:,.0f}원) 도달 실패")
-                
-                # 미체결 신호도 기록에 추가
-                trades.append({
-                    'buy_time': signal_completion_time.strftime('%H:%M'),
-                    'buy_price': 0,
-                    'sell_time': '',
-                    'sell_price': 0,
-                    'profit_rate': 0.0,
-                    'status': 'unexecuted',
-                    'signal_type': signal.get('signal_type', ''),
-                    'confidence': signal.get('confidence', 0),
-                    'target_profit': target_profit_rate,
-                    'max_profit_rate': 0.0,
-                    'max_loss_rate': 0.0,
-                    'duration_minutes': 0,
-                    'reason': f'미체결: 5분 내 3/5가({three_fifths_price:,.0f}원) 도달 실패'
-                })
-                continue
+            # (주석 처리된 미체결 로직)
+            # check_candles = df_1min[
+            #     (df_1min['datetime'] >= signal_time_start) & 
+            #     (df_1min['datetime'] < signal_time_end)
+            # ].copy()
+            # 
+            # if check_candles.empty:
+            #     if logger:
+            #         logger.debug(f"⚠️ [{stock_code}] 체결 검증용 1분봉 데이터 없음, 거래 건너뜀")
+            #     continue
+            # 
+            # # 5분 내에 3/5가 이하로 떨어지는 시점 찾기 (체결 가능성만 확인)
+            # for _, candle in check_candles.iterrows():
+            #     # 해당 1분봉의 저가가 3/5가 이하면 체결 가능
+            #     if candle['low'] <= three_fifths_price:
+            #         buy_executed = True
+            #         actual_execution_time = candle['datetime']
+            #         # 체결가는 3/5가로 고정 (지정가 주문과 동일)
+            #         break
+            # 
+            # if not buy_executed:
+            #     # 5분 내에 3/5가 이하로 떨어지지 않음 → 매수 미체결
+            #     if logger:
+            #         logger.debug(f"💸 [{stock_code}] 매수 미체결: 5분 내 3/5가({three_fifths_price:,.0f}원) 도달 실패")
+            #     
+            #     # 미체결 신호도 기록에 추가
+            #     trades.append({
+            #         'buy_time': signal_completion_time.strftime('%H:%M'),
+            #         'buy_price': 0,
+            #         'sell_time': '',
+            #         'sell_price': 0,
+            #         'profit_rate': 0.0,
+            #         'status': 'unexecuted',
+            #         'signal_type': signal.get('signal_type', ''),
+            #         'confidence': signal.get('confidence', 0),
+            #         'target_profit': target_profit_rate,
+            #         'max_profit_rate': 0.0,
+            #         'max_loss_rate': 0.0,
+            #         'duration_minutes': 0,
+            #         'reason': f'미체결: 5분 내 3/5가({three_fifths_price:,.0f}원) 도달 실패'
+            #     })
+            #     continue
             
             # 체결 성공 - 매수 시간은 신호 발생 시점으로 기록
             buy_time = signal_completion_time  # 09:45:00 (신호 발생 시점)
@@ -749,8 +785,8 @@ def main():
                 try:
                     lines = []
                     
-                    # 전체 승패 통계 계산 (미체결 제외)
-                    all_completed_trades = [trade for trades in all_trades.values() for trade in trades if trade.get('status') != 'unexecuted']
+                    # 전체 승패 통계 계산 (미체결 제외 - 현재는 항상 체결)
+                    all_completed_trades = [trade for trades in all_trades.values() for trade in trades]  # 미체결 개념 제거
                     total_wins = sum(1 for trade in all_completed_trades if trade.get('profit_rate', 0) > 0 and trade.get('sell_time'))
                     total_losses = sum(1 for trade in all_completed_trades if trade.get('profit_rate', 0) <= 0 and trade.get('sell_time'))
                     
@@ -771,10 +807,10 @@ def main():
                                 else:  # 날짜만
                                     selection_dt = datetime.strptime(selection_date[:10], '%Y-%m-%d')
                                 
-                                # 각 거래 시간과 selection_date 비교 (미체결 제외)
+                                # 각 거래 시간과 selection_date 비교 (미체결 개념 제거)
                                 for trade in trades:
-                                    if trade.get('status') == 'unexecuted':
-                                        continue  # 미체결 제외
+                                    # if trade.get('status') == 'unexecuted':
+                                    #     continue  # 미체결 제외
                                     if trade.get('sell_time'):  # 완료된 거래만
                                         # 거래 시간을 datetime으로 변환
                                         buy_time_str = trade.get('buy_time', '')
@@ -821,8 +857,8 @@ def main():
                         trades = all_trades.get(stock_code, [])
                         stock_selection_date = stock_selection_map.get(stock_code, "알수없음")
                         
-                        # 종목별 승패 계산 (미체결 제외)
-                        completed_trades_only = [trade for trade in trades if trade.get('status') != 'unexecuted']
+                        # 종목별 승패 계산 (미체결 개념 제거)
+                        completed_trades_only = [trade for trade in trades]  # 미체결 개념 제거
                         wins = sum(1 for trade in completed_trades_only if trade.get('profit_rate', 0) > 0 and trade.get('sell_time'))
                         losses = sum(1 for trade in completed_trades_only if trade.get('profit_rate', 0) <= 0 and trade.get('sell_time'))
                         
@@ -840,10 +876,10 @@ def main():
                                 else:  # 날짜만
                                     selection_dt = datetime.strptime(stock_selection_date[:10], '%Y-%m-%d')
                                 
-                                # 각 거래 시간과 selection_date 비교 (미체결 제외)
+                                # 각 거래 시간과 selection_date 비교 (미체결 개념 제거)
                                 for trade in trades:
-                                    if trade.get('status') == 'unexecuted':
-                                        continue  # 미체결 제외
+                                    # if trade.get('status') == 'unexecuted':
+                                    #     continue  # 미체결 제외
                                     if trade.get('sell_time'):  # 완료된 거래만
                                         # 거래 시간을 datetime으로 변환
                                         buy_time_str = trade.get('buy_time', '')
@@ -894,10 +930,10 @@ def main():
                         lines.append("  체결 시뮬레이션:")
                         if trades:
                             for trade in trades:
-                                if trade.get('status') == 'unexecuted':
-                                    # 미체결 신호
-                                    lines.append(f"    {trade['buy_time']} 신호[pullback_pattern] → {trade.get('reason', '미체결')}")
-                                elif trade.get('sell_time'):
+                                # if trade.get('status') == 'unexecuted':
+                                #     # 미체결 신호
+                                #     lines.append(f"    {trade['buy_time']} 신호[pullback_pattern] → {trade.get('reason', '미체결')}")
+                                if trade.get('sell_time'):
                                     # 체결 + 매도 완료
                                     profit_rate = trade.get('profit_rate', 0)
                                     if profit_rate > 0:
@@ -933,6 +969,9 @@ def main():
                                     # 실제 매수 신호를 다시 분석하여 신호 발생 시점을 찾기
                                     buy_signals_for_mapping = list_all_buy_signals(df_3min_detailed, logger=logger, stock_code=stock_code)
                                     
+                                    # 거래와 신호의 정확한 1:1 매핑을 위한 처리
+                                    used_signals = set()  # 이미 매핑된 신호들
+                                    
                                     for trade in trades:
                                         buy_time_str = trade['buy_time']
                                         # 기존 매수 시간 기반 매핑 (하위 호환)
@@ -944,30 +983,42 @@ def main():
                                             'reason': trade.get('reason', '')
                                         }
                                         
-                                        # 신호 발생 시점에서 매수 정보를 찾기 위한 매핑
+                                        # 각 거래에 대해 가장 가까운 시간의 신호 하나만 매핑
+                                        best_match_signal = None
+                                        best_match_diff = float('inf')
+                                        
                                         for signal in buy_signals_for_mapping:
                                             signal_completion_time = signal.get('signal_time')
                                             if signal_completion_time:
                                                 signal_completion_str = signal_completion_time.strftime('%H:%M')
-                                                # 매수 시간과 5분 이내 차이나는 신호를 찾기
+                                                
+                                                # 이미 사용된 신호는 건너뜀
+                                                if signal_completion_str in used_signals:
+                                                    continue
+                                                
                                                 try:
                                                     from datetime import datetime
                                                     buy_time_obj = datetime.strptime(f"2025-01-01 {buy_time_str}:00", '%Y-%m-%d %H:%M:%S')
                                                     signal_time_obj = datetime.strptime(f"2025-01-01 {signal_completion_str}:00", '%Y-%m-%d %H:%M:%S')
                                                     time_diff = abs((buy_time_obj - signal_time_obj).total_seconds())
                                                     
-                                                    # 5분(300초) 이내 차이나면 해당 신호에서 매수된 것으로 간주
-                                                    if time_diff <= 300:
-                                                        signal_to_buy_mapping[signal_completion_str] = {
-                                                            'type': 'buy',
-                                                            'price': trade['buy_price'],
-                                                            'sell_time': trade.get('sell_time', ''),
-                                                            'sell_price': trade.get('sell_price', 0),
-                                                            'reason': trade.get('reason', '')
-                                                        }
-                                                        break
+                                                    # 5분(300초) 이내이고 가장 가까운 신호 찾기
+                                                    if time_diff <= 300 and time_diff < best_match_diff:
+                                                        best_match_signal = signal_completion_str
+                                                        best_match_diff = time_diff
                                                 except:
                                                     continue
+                                        
+                                        # 가장 적합한 신호에 거래 매핑
+                                        if best_match_signal:
+                                            signal_to_buy_mapping[best_match_signal] = {
+                                                'type': 'buy',
+                                                'price': trade['buy_price'],
+                                                'sell_time': trade.get('sell_time', ''),
+                                                'sell_price': trade.get('sell_price', 0),
+                                                'reason': trade.get('reason', '')
+                                            }
+                                            used_signals.add(best_match_signal)
                                     
                                     # 3분봉별 상세 분석
                                     for i, row in df_3min_detailed.iterrows():
@@ -985,10 +1036,21 @@ def main():
                                         if len(current_data) >= 5:
                                             from core.indicators.pullback_candle_pattern import PullbackCandlePattern, SignalType
                                             
+                                            # ==================== 신호 생성 로직 선택 ====================
+                                            # 🔄 v2 로직 사용 (SHA-1: 4d2836c2 복원) - 주석 처리하여 비활성화
+                                            # signal_strength, risk_signals = PullbackCandlePattern.generate_improved_signals_v2(
+                                            #     current_data,
+                                            #     entry_price=None,
+                                            #     entry_low=None,
+                                            #     debug=True,
+                                            #     logger=logger
+                                            # )
+                                            
+                                            # 🔄 현재 로직 사용 (개선된 버전) - 주석 해제하여 사용
                                             signal_strength = PullbackCandlePattern.generate_improved_signals(
                                                 current_data,
                                                 stock_code=stock_code,
-                                                debug=False
+                                                debug=True
                                             )
                                             
                                             # 상태 표시
