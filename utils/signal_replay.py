@@ -227,15 +227,16 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
         current_position = None  # 현재 포지션 추적 (실시간과 동일하게 한 번에 하나만)
         
         for signal in buy_signals:
-            signal_datetime = signal['datetime']
+            signal_datetime = signal['datetime']  # 라벨 시간 (09:42)
+            signal_completion_time = signal['signal_time']  # 실제 신호 발생 시간 (09:45:00)
             signal_index = signal['index']
             
             # ==================== 실시간과 동일: 포지션 보유 중이면 매수 금지 ====================
             if current_position is not None:
-                # 현재 시간이 포지션 매도 이후인지 확인
-                if signal_datetime <= current_position['sell_time']:
+                # 현재 시간이 포지션 매도 이후인지 확인 (실제 신호 시간 기준)
+                if signal_completion_time <= current_position['sell_time']:
                     if logger:
-                        logger.debug(f"⚠️ [{signal_datetime.strftime('%H:%M')}] 포지션 보유 중으로 매수 건너뜀")
+                        logger.debug(f"⚠️ [{signal_completion_time.strftime('%H:%M')}] 포지션 보유 중으로 매수 건너뜀")
                     continue  # 포지션 보유 중이므로 매수 불가
                 else:
                     # 포지션이 매도되었으므로 새로운 매수 가능
@@ -262,16 +263,15 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
             
             # ==================== 매수 체결 가능성 검증 (5분 내) ====================
             
-            # 3분봉 라벨 기준으로 완성 시점 계산
-            # 예: 09:30 라벨 → 09:30~09:32 구간이 09:33에 완성되어 09:33부터 매수 시도
-            signal_candle_completion = signal_datetime + pd.Timedelta(minutes=3)  # 3분봉 완성 시점
-            signal_time_start = signal_candle_completion  # 완성 시점부터 매수 시도
+            # 실제 신호 발생 시점부터 매수 시도
+            # 예: 09:42 라벨 → 09:45:00 신호 발생 → 09:45:00부터 매수 시도
+            signal_time_start = signal_completion_time  # 신호 발생 시점부터 매수 시도
             signal_time_end = signal_time_start + pd.Timedelta(minutes=5)  # 5분 내
             
             # 디버그: 시간 정보 출력
             if logger:
                 logger.debug(f"🕐 신호 라벨: {signal_datetime.strftime('%H:%M')}, "
-                           f"3분봉 완성: {signal_candle_completion.strftime('%H:%M')}, "
+                           f"신호 발생: {signal_completion_time.strftime('%H:%M')}, "
                            f"매수 윈도우: {signal_time_start.strftime('%H:%M')}~{signal_time_end.strftime('%H:%M')}")
             
             check_candles = df_1min[
@@ -284,27 +284,47 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                     logger.debug(f"⚠️ [{stock_code}] 체결 검증용 1분봉 데이터 없음, 거래 건너뜀")
                 continue
             
-            # 5분 내에 3/5가 이하로 떨어지는 시점 찾기
-            buy_time = None
+            # 5분 내에 3/5가 이하로 떨어지는 시점 찾기 (체결 가능성만 확인)
+            buy_executed = False
             buy_executed_price = three_fifths_price
+            actual_execution_time = None
             
             for _, candle in check_candles.iterrows():
                 # 해당 1분봉의 저가가 3/5가 이하면 체결 가능
                 if candle['low'] <= three_fifths_price:
-                    buy_time = candle['datetime']
+                    buy_executed = True
+                    actual_execution_time = candle['datetime']
                     # 체결가는 3/5가로 고정 (지정가 주문과 동일)
                     break
             
-            if buy_time is None:
+            if not buy_executed:
                 # 5분 내에 3/5가 이하로 떨어지지 않음 → 매수 미체결
                 if logger:
                     logger.debug(f"💸 [{stock_code}] 매수 미체결: 5분 내 3/5가({three_fifths_price:,.0f}원) 도달 실패")
+                
+                # 미체결 신호도 기록에 추가
+                trades.append({
+                    'buy_time': signal_completion_time.strftime('%H:%M'),
+                    'buy_price': 0,
+                    'sell_time': '',
+                    'sell_price': 0,
+                    'profit_rate': 0.0,
+                    'status': 'unexecuted',
+                    'signal_type': signal.get('signal_type', ''),
+                    'confidence': signal.get('confidence', 0),
+                    'target_profit': target_profit_rate,
+                    'max_profit_rate': 0.0,
+                    'max_loss_rate': 0.0,
+                    'duration_minutes': 0,
+                    'reason': f'미체결: 5분 내 3/5가({three_fifths_price:,.0f}원) 도달 실패'
+                })
                 continue
             
-            # 체결 성공
+            # 체결 성공 - 매수 시간은 신호 발생 시점으로 기록
+            buy_time = signal_completion_time  # 09:45:00 (신호 발생 시점)
             buy_price = buy_executed_price
             if logger:
-                logger.debug(f"💰 [{stock_code}] 매수 체결: {buy_price:,.0f}원 @ {buy_time.strftime('%H:%M:%S')}")
+                logger.debug(f"💰 [{stock_code}] 매수 체결: {buy_price:,.0f}원 @ {buy_time.strftime('%H:%M:%S')} (실제 체결: {actual_execution_time.strftime('%H:%M:%S')})")
             
             # 진입 저가 추적 (실시간과 동일)
             entry_low = signal.get('entry_low', 0)
@@ -378,12 +398,12 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                     sell_reason = f"stop_loss_{stop_loss_rate*100:.1f}pct"
                     break
                 
-                # 3. 진입저가 -0.2% 이탈 - 1분봉 저가가 기준가 터치 시
-                if entry_low_break_price > 0 and candle_low <= entry_low_break_price:
-                    sell_time = row['datetime']
-                    sell_price = entry_low_break_price  # 기준가로 매도
-                    sell_reason = f"entry_low_break"
-                    break
+                # 3. 진입저가 -0.2% 이탈 - 1분봉 저가가 기준가 터치 시 (주석처리: 손익비로만 판단)
+                # if entry_low_break_price > 0 and candle_low <= entry_low_break_price:
+                #     sell_time = row['datetime']
+                #     sell_price = entry_low_break_price  # 기준가로 매도
+                #     sell_reason = f"entry_low_break"
+                #     break
                 
                 # 4. 3분봉 기반 기술적 분석 매도 신호 (3분봉 완성 시점에만 체크 - 실시간과 동일)
                 current_time = row['datetime']
@@ -729,26 +749,135 @@ def main():
                 try:
                     lines = []
                     
-                    # 전체 승패 통계 계산
-                    total_wins = sum(1 for trades in all_trades.values() for trade in trades if trade.get('profit_rate', 0) > 0 and trade.get('sell_time'))
-                    total_losses = sum(1 for trades in all_trades.values() for trade in trades if trade.get('profit_rate', 0) <= 0 and trade.get('sell_time'))
+                    # 전체 승패 통계 계산 (미체결 제외)
+                    all_completed_trades = [trade for trades in all_trades.values() for trade in trades if trade.get('status') != 'unexecuted']
+                    total_wins = sum(1 for trade in all_completed_trades if trade.get('profit_rate', 0) > 0 and trade.get('sell_time'))
+                    total_losses = sum(1 for trade in all_completed_trades if trade.get('profit_rate', 0) <= 0 and trade.get('sell_time'))
+                    
+                    # selection_date 이후 승패 계산 (필터링 적용)
+                    selection_date_wins = 0
+                    selection_date_losses = 0
+                    
+                    for stock_code, trades in all_trades.items():
+                        selection_date = stock_selection_map.get(stock_code)
+                        if selection_date and selection_date != "알수없음":
+                            try:
+                                # selection_date를 datetime으로 변환 (시간,분 포함)
+                                from datetime import datetime
+                                if len(selection_date) >= 19:  # YYYY-MM-DD HH:MM:SS 형식
+                                    selection_dt = datetime.strptime(selection_date[:19], '%Y-%m-%d %H:%M:%S')
+                                elif len(selection_date) >= 16:  # YYYY-MM-DD HH:MM 형식
+                                    selection_dt = datetime.strptime(selection_date[:16], '%Y-%m-%d %H:%M')
+                                else:  # 날짜만
+                                    selection_dt = datetime.strptime(selection_date[:10], '%Y-%m-%d')
+                                
+                                # 각 거래 시간과 selection_date 비교 (미체결 제외)
+                                for trade in trades:
+                                    if trade.get('status') == 'unexecuted':
+                                        continue  # 미체결 제외
+                                    if trade.get('sell_time'):  # 완료된 거래만
+                                        # 거래 시간을 datetime으로 변환
+                                        buy_time_str = trade.get('buy_time', '')
+                                        if buy_time_str:
+                                            try:
+                                                # 시뮬레이션 날짜 + 거래 시간으로 완전한 datetime 생성
+                                                trade_datetime_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} {buy_time_str}:00"
+                                                trade_dt = datetime.strptime(trade_datetime_str, '%Y-%m-%d %H:%M:%S')
+                                                
+                                                # selection_date 이후인 거래만 포함
+                                                if trade_dt >= selection_dt:
+                                                    if trade.get('profit_rate', 0) > 0:
+                                                        selection_date_wins += 1
+                                                    else:
+                                                        selection_date_losses += 1
+                                            except:
+                                                # 시간 파싱 실패 시 포함
+                                                if trade.get('profit_rate', 0) > 0:
+                                                    selection_date_wins += 1
+                                                else:
+                                                    selection_date_losses += 1
+                            except:
+                                # 날짜 파싱 실패 시 전체 포함
+                                for trade in trades:
+                                    if trade.get('sell_time'):
+                                        if trade.get('profit_rate', 0) > 0:
+                                            selection_date_wins += 1
+                                        else:
+                                            selection_date_losses += 1
+                        else:
+                            # selection_date 정보가 없는 경우 전체 포함
+                            for trade in trades:
+                                if trade.get('sell_time'):
+                                    if trade.get('profit_rate', 0) > 0:
+                                        selection_date_wins += 1
+                                    else:
+                                        selection_date_losses += 1
                     
                     lines.append(f"=== 총 승패: {total_wins}승 {total_losses}패 ===")
-                    lines.append(f"=== selection_date 이후 승패: {total_wins}승 {total_losses}패 ===")
+                    lines.append(f"=== selection_date 이후 승패: {selection_date_wins}승 {selection_date_losses}패 ===")
                     lines.append("")
                     
                     for stock_code in codes_union:
                         trades = all_trades.get(stock_code, [])
                         stock_selection_date = stock_selection_map.get(stock_code, "알수없음")
                         
-                        # 종목별 승패 계산
-                        wins = sum(1 for trade in trades if trade.get('profit_rate', 0) > 0 and trade.get('sell_time'))
-                        losses = sum(1 for trade in trades if trade.get('profit_rate', 0) <= 0 and trade.get('sell_time'))
+                        # 종목별 승패 계산 (미체결 제외)
+                        completed_trades_only = [trade for trade in trades if trade.get('status') != 'unexecuted']
+                        wins = sum(1 for trade in completed_trades_only if trade.get('profit_rate', 0) > 0 and trade.get('sell_time'))
+                        losses = sum(1 for trade in completed_trades_only if trade.get('profit_rate', 0) <= 0 and trade.get('sell_time'))
+                        
+                        # 종목별 selection_date 이후 승패 계산
+                        selection_wins = 0
+                        selection_losses = 0
+                        
+                        if stock_selection_date and stock_selection_date != "알수없음":
+                            try:
+                                # selection_date를 datetime으로 변환 (시간,분 포함)
+                                if len(stock_selection_date) >= 19:  # YYYY-MM-DD HH:MM:SS 형식
+                                    selection_dt = datetime.strptime(stock_selection_date[:19], '%Y-%m-%d %H:%M:%S')
+                                elif len(stock_selection_date) >= 16:  # YYYY-MM-DD HH:MM 형식
+                                    selection_dt = datetime.strptime(stock_selection_date[:16], '%Y-%m-%d %H:%M')
+                                else:  # 날짜만
+                                    selection_dt = datetime.strptime(stock_selection_date[:10], '%Y-%m-%d')
+                                
+                                # 각 거래 시간과 selection_date 비교 (미체결 제외)
+                                for trade in trades:
+                                    if trade.get('status') == 'unexecuted':
+                                        continue  # 미체결 제외
+                                    if trade.get('sell_time'):  # 완료된 거래만
+                                        # 거래 시간을 datetime으로 변환
+                                        buy_time_str = trade.get('buy_time', '')
+                                        if buy_time_str:
+                                            try:
+                                                # 시뮬레이션 날짜 + 거래 시간으로 완전한 datetime 생성
+                                                trade_datetime_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} {buy_time_str}:00"
+                                                trade_dt = datetime.strptime(trade_datetime_str, '%Y-%m-%d %H:%M:%S')
+                                                
+                                                # selection_date 이후인 거래만 포함
+                                                if trade_dt >= selection_dt:
+                                                    if trade.get('profit_rate', 0) > 0:
+                                                        selection_wins += 1
+                                                    else:
+                                                        selection_losses += 1
+                                            except:
+                                                # 시간 파싱 실패 시 포함
+                                                if trade.get('profit_rate', 0) > 0:
+                                                    selection_wins += 1
+                                                else:
+                                                    selection_losses += 1
+                            except:
+                                # 날짜 파싱 실패 시 전체 포함
+                                selection_wins = wins
+                                selection_losses = losses
+                        else:
+                            # selection_date 정보가 없는 경우 전체 포함
+                            selection_wins = wins
+                            selection_losses = losses
                         
                         lines.append(f"=== {stock_code} - {date_str} 눌림목(3분) 신호 재현 ===")
                         lines.append(f"  selection_date: {stock_selection_date}")
                         lines.append(f"  승패: {wins}승 {losses}패")
-                        lines.append(f"  selection_date 이후 승패: {wins}승 {losses}패")
+                        lines.append(f"  selection_date 이후 승패: {selection_wins}승 {selection_losses}패")
                         lines.append("  매매신호:")
                         
                         if trades:
@@ -765,7 +894,11 @@ def main():
                         lines.append("  체결 시뮬레이션:")
                         if trades:
                             for trade in trades:
-                                if trade.get('sell_time'):
+                                if trade.get('status') == 'unexecuted':
+                                    # 미체결 신호
+                                    lines.append(f"    {trade['buy_time']} 신호[pullback_pattern] → {trade.get('reason', '미체결')}")
+                                elif trade.get('sell_time'):
+                                    # 체결 + 매도 완료
                                     profit_rate = trade.get('profit_rate', 0)
                                     if profit_rate > 0:
                                         reason = f"profit_{profit_rate:.1f}pct"
@@ -774,6 +907,7 @@ def main():
                                     
                                     lines.append(f"    {trade['buy_time']} 매수[pullback_pattern] @{trade['buy_price']:,.0f} → {trade['sell_time']} 매도[{reason}] @{trade['sell_price']:,.0f} ({profit_rate:+.2f}%)")
                                 else:
+                                    # 체결 + 미결제
                                     lines.append(f"    {trade['buy_time']} 매수[pullback_pattern] @{trade['buy_price']:,.0f} → 미결제 ({trade.get('reason', '알수없음')})")
                         else:
                             lines.append("    없음")
@@ -792,10 +926,16 @@ def main():
                                 df_3min_detailed = TimeFrameConverter.convert_to_3min_data(all_data_for_stock)
                                 
                                 if df_3min_detailed is not None and not df_3min_detailed.empty:
-                                    # 매수/매도 시점 매핑
+                                    # 매수/매도 시점 매핑 - 실제 신호 발생 시점에 표시하도록 수정
                                     trade_times = {}
+                                    signal_to_buy_mapping = {}  # 신호 시점 → 매수 기록 매핑
+                                    
+                                    # 실제 매수 신호를 다시 분석하여 신호 발생 시점을 찾기
+                                    buy_signals_for_mapping = list_all_buy_signals(df_3min_detailed, logger=logger, stock_code=stock_code)
+                                    
                                     for trade in trades:
                                         buy_time_str = trade['buy_time']
+                                        # 기존 매수 시간 기반 매핑 (하위 호환)
                                         trade_times[buy_time_str] = {
                                             'type': 'buy',
                                             'price': trade['buy_price'],
@@ -803,6 +943,31 @@ def main():
                                             'sell_price': trade.get('sell_price', 0),
                                             'reason': trade.get('reason', '')
                                         }
+                                        
+                                        # 신호 발생 시점에서 매수 정보를 찾기 위한 매핑
+                                        for signal in buy_signals_for_mapping:
+                                            signal_completion_time = signal.get('signal_time')
+                                            if signal_completion_time:
+                                                signal_completion_str = signal_completion_time.strftime('%H:%M')
+                                                # 매수 시간과 5분 이내 차이나는 신호를 찾기
+                                                try:
+                                                    from datetime import datetime
+                                                    buy_time_obj = datetime.strptime(f"2025-01-01 {buy_time_str}:00", '%Y-%m-%d %H:%M:%S')
+                                                    signal_time_obj = datetime.strptime(f"2025-01-01 {signal_completion_str}:00", '%Y-%m-%d %H:%M:%S')
+                                                    time_diff = abs((buy_time_obj - signal_time_obj).total_seconds())
+                                                    
+                                                    # 5분(300초) 이내 차이나면 해당 신호에서 매수된 것으로 간주
+                                                    if time_diff <= 300:
+                                                        signal_to_buy_mapping[signal_completion_str] = {
+                                                            'type': 'buy',
+                                                            'price': trade['buy_price'],
+                                                            'sell_time': trade.get('sell_time', ''),
+                                                            'sell_price': trade.get('sell_price', 0),
+                                                            'reason': trade.get('reason', '')
+                                                        }
+                                                        break
+                                                except:
+                                                    continue
                                     
                                     # 3분봉별 상세 분석
                                     for i, row in df_3min_detailed.iterrows():
@@ -842,9 +1007,17 @@ def main():
                                                 elif signal_strength.signal_type == SignalType.CAUTIOUS_BUY:
                                                     status_parts.append("🟡조건부매수")
                                                 elif signal_strength.signal_type == SignalType.AVOID:
-                                                    status_parts.append("🔴회피")
+                                                    # 회피 이유 추가
+                                                    avoid_reason = ""
+                                                    if signal_strength.reasons:
+                                                        avoid_reason = f"({signal_strength.reasons[0]})"
+                                                    status_parts.append(f"🔴회피{avoid_reason}")
                                                 elif signal_strength.signal_type == SignalType.WAIT:
-                                                    status_parts.append("⚪대기")
+                                                    # 대기 이유 추가
+                                                    wait_reason = ""
+                                                    if signal_strength.reasons:
+                                                        wait_reason = f"({signal_strength.reasons[0]})"
+                                                    status_parts.append(f"⚪대기{wait_reason}")
                                                 else:
                                                     status_parts.append("⚫조건미충족")
                                                     
@@ -853,13 +1026,20 @@ def main():
                                             else:
                                                 status_parts.append("❌신호없음")
                                             
-                                            # 3. 매매 실행 여부
-                                            if signal_time_str in trade_times:
+                                            # 3. 매매 실행 여부 - 신호 발생 시점에서 표시
+                                            trade_info = None
+                                            
+                                            # 먼저 신호 발생 시점(signal_time_str)에서 매수 기록 확인
+                                            if signal_time_str in signal_to_buy_mapping:
+                                                trade_info = signal_to_buy_mapping[signal_time_str]
+                                            # 기존 매수 시점에서도 확인 (하위 호환)
+                                            elif signal_time_str in trade_times:
                                                 trade_info = trade_times[signal_time_str]
-                                                if trade_info['type'] == 'buy':
-                                                    status_parts.append(f"💰매수@{trade_info['price']:,.0f}")
-                                                    if trade_info['sell_time']:
-                                                        status_parts.append(f"→{trade_info['sell_time']}매도@{trade_info['sell_price']:,.0f}")
+                                                
+                                            if trade_info and trade_info['type'] == 'buy':
+                                                status_parts.append(f"💰매수@{trade_info['price']:,.0f}")
+                                                if trade_info['sell_time']:
+                                                    status_parts.append(f"→{trade_info['sell_time']}매도@{trade_info['sell_price']:,.0f}")
                                             
                                             status_text = " | ".join(status_parts)
                                             lines.append(f"    {time_str}→{signal_time_str}: {status_text}")
@@ -880,6 +1060,8 @@ def main():
                     print(f"\n📄 TXT 저장 완료: {args.txt_path}")
                 except Exception as e:
                     print(f"\n❌ TXT 저장 실패: {e}")
+                    import traceback
+                    print(f"상세 오류: {traceback.format_exc()}")
                 
         except Exception as e:
             logger.error(f"❌ 파일 내보내기 실패: {e}")

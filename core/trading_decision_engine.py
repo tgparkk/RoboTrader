@@ -110,7 +110,7 @@ class TradingDecisionEngine:
                     
                     # 🆕 목표 수익률 저장
                     if hasattr(trading_stock, 'target_profit_rate'):
-                        trading_stock.target_profit_rate = price_info.get('target_profit', 0.015)
+                        trading_stock.target_profit_rate = price_info.get('target_profit', 0.02)
                     
                     return True, f"눌림목캔들패턴: {reason}", buy_info
                 else:
@@ -561,7 +561,7 @@ class TradingDecisionEngine:
             )
             
             if signals_improved.empty:
-                return 0.015  # 기본값 1.5%
+                return 0.02  # 기본값 2.0% (기존 1.5% → 2.0%로 상향)
             
             # 마지막 신호의 강도 정보 확인
             last_row = signals_improved.iloc[-1]
@@ -579,11 +579,11 @@ class TradingDecisionEngine:
                 if pd.notna(target) and target > 0:
                     return float(target)
                     
-            return 0.015  # 기본신호: 1.5%
+            return 0.02  # 기본신호: 2.0% (기존 1.5% → 2.0%로 상향)
             
         except Exception as e:
             self.logger.warning(f"목표수익률 계산 실패, 기본값 사용: {e}")
-            return 0.015
+            return 0.02
     
     def _check_profit_target(self, trading_stock, current_price) -> Tuple[bool, str]:
         """수익실현 조건 확인 (신뢰도별 차등 목표수익 적용)"""
@@ -782,7 +782,7 @@ class TradingDecisionEngine:
                 
                 # 신호강도별 목표수익률 및 손절기준 가져오기 (손익비 2:1)
                 target_profit_rate = getattr(trading_stock, 'target_profit_rate', 0.02)  # 기본값 2%
-                stop_loss_rate = target_profit_rate / 2.0  # 손익비 2:1
+                stop_loss_rate = target_profit_rate / 2.0  # 손익비 2:1 복원
                 
                 # 신호강도별 손절
                 if profit_rate <= -stop_loss_rate:
@@ -792,11 +792,11 @@ class TradingDecisionEngine:
                 if profit_rate >= target_profit_rate:
                     return True, f"⚡신호강도별익절 {profit_rate*100:.1f}% (기준: +{target_profit_rate*100:.1f}%)"
                 
-                # 진입저가 실시간 체크
-                entry_low_value = getattr(trading_stock, '_entry_low', None)
-                if entry_low_value and entry_low_value > 0:
-                    if current_price < entry_low_value * 0.998:  # -0.2%
-                        return True, f"⚡실시간진입저가이탈 ({current_price:.0f}<{entry_low_value*0.998:.0f})"
+                # 진입저가 실시간 체크 (주석처리: 손익비로만 판단)
+                # entry_low_value = getattr(trading_stock, '_entry_low', None)
+                # if entry_low_value and entry_low_value > 0:
+                #     if current_price < entry_low_value * 0.998:  # -0.2%
+                #         return True, f"⚡실시간진입저가이탈 ({current_price:.0f}<{entry_low_value*0.998:.0f})"
             
             # 2단계: 3분봉 기반 정밀 분석 (기존 로직 유지)
             # 1분봉 데이터를 3분봉으로 변환

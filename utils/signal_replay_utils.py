@@ -191,39 +191,62 @@ def generate_chart_for_stock(stock_code: str, target_date: str, df_3min: pd.Data
         logger = logging.getLogger(__name__)
         
     try:
-        processor = DataProcessor()
+        from visualization.chart_renderer import ChartRenderer
+        from visualization.strategy_manager import StrategyManager
+        from visualization.data_processor import DataProcessor
         
-        buy_signals = []
-        sell_signals = []
+        # 차트 렌더러 및 전략 매니저 초기화
+        chart_renderer = ChartRenderer()
+        strategy_manager = StrategyManager()
+        data_processor = DataProcessor()
         
+        # 눌림목 전략 가져오기
+        pullback_strategy = strategy_manager.get_strategy("pullback_candle_pattern")
+        if pullback_strategy is None:
+            logger.warning(f"눌림목 전략을 찾을 수 없음")
+            return
+        
+        # 지표 데이터 계산
+        indicators_data = data_processor.calculate_indicators(df_3min, pullback_strategy)
+        
+        # 매매 시뮬레이션 결과 변환
+        trade_simulation_results = []
         for trade in trades:
-            if 'buy_time' in trade and trade['buy_time']:
-                buy_signals.append({
-                    'time': trade['buy_time'],
-                    'price': trade.get('buy_price', 0),
+            if trade.get('status') != 'unexecuted':  # 미체결 제외
+                trade_simulation_results.append({
+                    'buy_time': trade.get('buy_time', ''),
+                    'buy_price': trade.get('buy_price', 0),
+                    'sell_time': trade.get('sell_time', ''),
+                    'sell_price': trade.get('sell_price', 0),
+                    'profit_rate': trade.get('profit_rate', 0.0),
                     'signal_type': trade.get('signal_type', ''),
-                    'confidence': trade.get('confidence', 0)
-                })
-            
-            if 'sell_time' in trade and trade['sell_time']:
-                sell_signals.append({
-                    'time': trade['sell_time'], 
-                    'price': trade.get('sell_price', 0),
-                    'profit_rate': trade.get('profit_rate', 0.0)
+                    'confidence': trade.get('confidence', 0),
+                    'reason': trade.get('reason', '')
                 })
         
-        processor.create_stock_chart(
-            df_3min=df_3min,
+        # 차트 생성
+        chart_path = chart_renderer.create_strategy_chart(
             stock_code=stock_code,
+            stock_name=f"종목{stock_code}",  # 종목명 대신 종목코드 사용
             target_date=target_date,
-            buy_signals=buy_signals,
-            sell_signals=sell_signals
+            strategy=pullback_strategy,
+            data=df_3min,
+            indicators_data=indicators_data,
+            selection_reason="신호 재현 분석",
+            chart_suffix="signal_replay",
+            timeframe="3min",
+            trade_simulation_results=trade_simulation_results
         )
         
-        logger.info(f"📈 [{stock_code}] 차트 생성 완료")
+        if chart_path:
+            logger.info(f"📈 [{stock_code}] 차트 생성 완료: {chart_path}")
+        else:
+            logger.warning(f"📈 [{stock_code}] 차트 생성 실패")
         
     except Exception as e:
         logger.error(f"차트 생성 오류 [{stock_code}]: {e}")
+        import traceback
+        logger.debug(f"차트 생성 오류 상세: {traceback.format_exc()}")
 
 
 def generate_timeline_analysis_log(df_3min: pd.DataFrame, signals: pd.DataFrame, 

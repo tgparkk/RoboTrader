@@ -116,22 +116,23 @@ class CandleAnalyzer:
         )
 
     @staticmethod
-    def check_prior_uptrend(data: pd.DataFrame, min_gain: float = 0.05) -> bool:
+    def check_prior_uptrend(data: pd.DataFrame, min_gain: float = 0.03) -> bool:
         """
-        선행 상승 확인 (개선된 버전)
+        선행 상승 확인 (완화된 버전)
         
         조건:
-        1. 당일 시가 대비 최고가가 min_gain 이상 상승 (기존 로직)
-        2. 연속된 N개 봉의 누적 상승률이 min_gain 이상 (신규 추가)
+        1. 현재시간부터 과거로 탐색하여 n개의 봉이 합해서 3% 이상 상승
+        2. 하락할 때는 기준 거래량의 1/4 수준 유지
+        3. 1/4를 넘는 거래량의 하락은 최대 1개만 허용
         
         Args:
             data: 분봉 데이터
-            min_gain: 최소 상승률 (기본값: 5%)
+            min_gain: 최소 상승률 (기본값: 3%)
             
         Returns:
-            bool: 선행 상승 조건 만족 여부
+            bool: 눌림목 선행 조건 만족 여부
         """
-        if len(data) < 1:
+        if len(data) < 5:  # 최소 5개 봉 필요
             return False
         
         try:
@@ -141,48 +142,89 @@ class CandleAnalyzer:
                 today = dates.iloc[-1]
                 today_data = data[dates == today].reset_index(drop=True)
                 
-                if len(today_data) == 0:
+                if len(today_data) < 5:
                     return False
             else:
                 # datetime 정보가 없으면 전체 데이터를 당일로 간주
                 today_data = data.copy()
             
-            # 방법 1: 기존 로직 - 당일 시가 대비 최고가
-            day_open = today_data['open'].iloc[0]
-            day_high = today_data['high'].max()
+            # 기준 거래량 계산 (당일 최대 거래량)
+            baseline_volume = today_data['volume'].max()
+            low_volume_threshold = baseline_volume * 0.25  # 1/4 수준
             
-            if day_open > 0:
-                single_point_gain = (day_high - day_open) / day_open
-                if single_point_gain >= min_gain:
-                    return True  # 기존 조건 만족
+            # 현재 캔들이 양봉인지 확인
+            current_candle = today_data.iloc[-1]
+            if current_candle['close'] <= current_candle['open']:
+                return False
             
-            # 방법 2: 신규 로직 - 연속된 N개 봉의 누적 상승률
-            # 다중 범위 체크: 3봉, 5봉, 7봉
-            check_ranges = [3, 5, 7]
+            # 디버그: 특정 시점 분석
+            debug_mode = (abs(current_candle['close'] - 2440) < 10 or  # 391710 09:42
+                         'datetime' in data.columns and 
+                         pd.to_datetime(data['datetime']).iloc[-1].strftime('%H:%M') == '10:00')
+            if debug_mode:
+                print(f"\n🔍 [DEBUG] 09:42 선행상승 분석 시작")
+                print(f"현재 캔들: {current_candle['close']:.0f}원 (양봉: {current_candle['close'] > current_candle['open']})")
+                print(f"기준거래량: {baseline_volume:,.0f}, 1/4수준: {low_volume_threshold:,.0f}")
+                print(f"당일 데이터 개수: {len(today_data)}")
             
-            for window_size in check_ranges:
-                if len(today_data) < window_size:
+            # 현재부터 과거로 탐색 (최대 20개 봉)
+            lookback_period = min(20, len(today_data))
+            
+            # 다양한 구간에서 상승 패턴 찾기
+            for start_offset in range(3, lookback_period):  # 최소 3개 봉부터 시작
+                if start_offset >= len(today_data):
                     continue
                 
-                # 슬라이딩 윈도우로 각 구간의 누적 상승률 체크
-                for start_idx in range(len(today_data) - window_size + 1):
-                    end_idx = start_idx + window_size - 1
+                # 구간 데이터 (현재부터 start_offset 봉 전까지)
+                segment_data = today_data.iloc[-start_offset-1:-1].reset_index(drop=True)
+                
+                if len(segment_data) < 3:
+                    continue
+                
+                # 1. 상승률 체크: 구간 시작 저가 → 구간 내 최고가
+                segment_start_low = segment_data['low'].iloc[0]
+                segment_high = segment_data['high'].max()
+                
+                if segment_start_low > 0:
+                    total_gain = (segment_high - segment_start_low) / segment_start_low
                     
-                    # 구간 시작가와 구간 내 최고가 비교
-                    segment_start_price = today_data['open'].iloc[start_idx]
-                    segment_high = today_data['high'].iloc[start_idx:end_idx+1].max()
+                    if debug_mode:
+                        print(f"구간[{start_offset}봉]: {segment_start_low:.0f}→{segment_high:.0f} = {total_gain*100:.1f}%")
                     
-                    if segment_start_price > 0:
-                        segment_gain = (segment_high - segment_start_price) / segment_start_price
+                    if total_gain >= min_gain:  # 3% 이상 상승 확인
                         
-                        # 연속 상승 조건 추가 체크 (선택사항)
-                        # 구간 내에서 지속적으로 상승하는 패턴인지 확인
-                        segment_data = today_data.iloc[start_idx:end_idx+1]
-                        is_sustained_uptrend = CandleAnalyzer._check_sustained_uptrend(segment_data)
+                        # 2. 하락 구간의 거래량 체크
+                        high_volume_decline_count = 0
                         
-                        # 누적 상승률이 조건 만족하고, 지속적 상승 패턴인 경우
-                        if segment_gain >= min_gain and is_sustained_uptrend:
-                            return True
+                        for i in range(len(segment_data)):
+                            candle = segment_data.iloc[i]
+                            
+                            # 음봉이면서 거래량이 1/4를 넘는 경우 카운트
+                            if (candle['close'] < candle['open'] and 
+                                candle['volume'] > low_volume_threshold):
+                                high_volume_decline_count += 1
+                        
+                        if debug_mode:
+                            print(f"  고거래량 하락 개수: {high_volume_decline_count}")
+                        
+                        # 3. 고거래량 하락이 3개 이하인지 확인 (완화: 1개→3개)
+                        if high_volume_decline_count <= 3:
+                            
+                            # 4. 추가 검증: 현재 캔들이 회복 신호인지 확인
+                            segment_low = segment_data['low'].min()
+                            current_close = current_candle['close']
+                            
+                            if debug_mode:
+                                print(f"  구간최저: {segment_low:.0f}, 현재가: {current_close:.0f}, 회복: {current_close > segment_low}")
+                            
+                            # 구간 내 최저점 대비 현재가가 상승했는지 확인
+                            if current_close > segment_low:
+                                if debug_mode:
+                                    print(f"✅ 선행상승 조건 만족! (구간: {start_offset}봉)")
+                                return True
+            
+            if debug_mode:
+                print("❌ 선행상승 조건 미충족")
             
             return False
             

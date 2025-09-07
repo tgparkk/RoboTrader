@@ -40,9 +40,9 @@ class RiskDetector:
         except Exception:
             pass
         
-        # 진입 양봉 저가 이탈 (0.2% 허용오차)
-        if entry_low and current_price < entry_low * 0.998:
-            risk_signals.append(RiskSignal.ENTRY_LOW_BREAK)
+        # 진입 양봉 저가 이탈 (0.2% 허용오차) - 주석처리: 손익비로만 판단
+        # if entry_low and current_price < entry_low * 0.998:
+        #     risk_signals.append(RiskSignal.ENTRY_LOW_BREAK)
         
         # 장대 음봉 + 대량 거래량
         volume_analysis = VolumeAnalyzer.analyze_volume(data)
@@ -82,9 +82,9 @@ class RiskDetector:
         if bisector_line is not None and current['close'] < bisector_line * 0.998:
             risk_signals.append(RiskSignal.BISECTOR_BREAK)
         
-        # 3. 변곡캔들 저가 이탈 (0.2% 기준)
-        if entry_low is not None and current['close'] <= entry_low * 0.998:
-            risk_signals.append(RiskSignal.ENTRY_LOW_BREAK)
+        # 3. 변곡캔들 저가 이탈 (0.2% 기준) - 주석처리: 손익비로만 판단
+        # if entry_low is not None and current['close'] <= entry_low * 0.998:
+        #     risk_signals.append(RiskSignal.ENTRY_LOW_BREAK)
         
         # 4. 지지 저점 이탈
         if current['close'] < recent_low:
