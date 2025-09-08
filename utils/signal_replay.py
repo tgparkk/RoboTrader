@@ -1,6 +1,12 @@
+from __future__ import annotations
+
 """
 실데이터 기반 매매신호(눌림목/3분봉) 재현 리포트 스크립트
 
+🎯 손절/익절 설정:
+  PROFIT_TAKE_RATE = 3.0   # 익절 수익률 (%) - 기본 3%
+  STOP_LOSS_RATE = 1.5     # 손절 수익률 (%) - 기본 1.5%
+  
 🔄 로직 전환 방법:
   # v2 로직 사용 (SHA-1: 4d2836c2 복원):
     - 157-164 라인 주석 해제
@@ -35,7 +41,14 @@
 - 전략은 눌림목만 사용합니다. 동일 캔들 중복 신호 차단으로 정확한 재매수 시뮬레이션.
 """
 
-from __future__ import annotations
+# ==================== 손절/익절 설정 ====================
+# 📊 시뮬레이션 테스트를 위한 손절/익절 비율 설정 (쉬운 수정을 위해 상단 배치)
+PROFIT_TAKE_RATE = 3.0  # 익절 수익률 (%) - 수정하여 테스트 가능
+STOP_LOSS_RATE = 1.5    # 손절 수익률 (%) - 수정하여 테스트 가능
+
+print(f"[시뮬레이션 설정] 익절 +{PROFIT_TAKE_RATE}% / 손절 -{STOP_LOSS_RATE}%")
+print("=" * 60)
+# =========================================================
 
 import argparse
 import asyncio
@@ -285,14 +298,14 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
             # 15:00부터 매수 금지 (신호 표시는 유지)
             if signal_hour >= 15:
                 if logger:
-                    logger.debug(f"⏰ [{signal_completion_time.strftime('%H:%M')}] 15시 이후 매수금지")
+                    logger.debug(f"[{signal_completion_time.strftime('%H:%M')}] 15시 이후 매수금지")
                 continue  # 15시 이후 매수 신호 건너뜀
             
             # ==================== 실시간과 완전 동일한 매수 로직 ====================
             
-            # 임시 고정: 익절 +3%, 손절 -3%
-            target_profit_rate = 0.03  # 3% 고정
-            stop_loss_rate = 0.03      # 3% 고정
+            # 상단에서 설정된 손절/익절 비율 사용
+            target_profit_rate = PROFIT_TAKE_RATE / 100.0  # % -> 소수점 변환
+            stop_loss_rate = STOP_LOSS_RATE / 100.0        # % -> 소수점 변환
             
             # 실시간과 동일한 3/5가 및 진입저가 사용
             three_fifths_price = signal.get('buy_price', 0)  # 이미 계산된 3/5가 사용
@@ -419,7 +432,7 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                     sell_price = candle_close  # 15시 종가로 매도
                     sell_reason = "market_close_15h"
                     if logger:
-                        logger.debug(f"⏰ [{stock_code}] 15시 장마감 매도: {sell_price:,.0f}원")
+                        logger.debug(f"[{stock_code}] 15시 장마감 매도: {sell_price:,.0f}원")
                     break
                 
                 # 최대/최소 수익률 추적 (종가 기준)
@@ -660,12 +673,13 @@ def main():
         if code not in times_map:
             times_map[code] = []
 
-    logger.info(f"🎯 대상 날짜: {date_str}")
-    logger.info(f"📊 처리할 종목 수: {len(codes_union)}개")
+    logger.info(f"대상 날짜: {date_str}")
+    logger.info(f"처리할 종목 수: {len(codes_union)}개")
+    logger.info(f"손익 설정: 익절 +{PROFIT_TAKE_RATE}% / 손절 -{STOP_LOSS_RATE}%")
     
     if times_map:
         specified_count = sum(1 for times_list in times_map.values() if times_list)
-        logger.info(f"⏰ 특정 시각 지정된 종목: {specified_count}개")
+        logger.info(f"특정 시각 지정된 종목: {specified_count}개")
 
     # API 매니저 초기화
     try:
