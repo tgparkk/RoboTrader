@@ -332,11 +332,11 @@ class PullbackCandlePattern:
                                           PullbackUtils.get_bisector_status(current['close'], bisector_line) if bisector_line else BisectorStatus.BROKEN)
                     return (result, []) if return_risk_signals else result
             
-            # 1-2. 당일 중 +2% 이상 봉이 나왔는지 확인
+            # 1-2. 당일 중 +2.5% 이상 봉이 나왔는지 확인
             has_large_candle = False
             for i, row in data.iterrows():
                 candle_body_pct = abs(row['close'] - row['open']) / row['open'] * 100 if row['open'] > 0 else 0
-                if candle_body_pct >= 2.0:  # 2% 이상 몸통
+                if candle_body_pct >= 2.5:  # 2.5% 이상 몸통
                     has_large_candle = True
                     break
             
