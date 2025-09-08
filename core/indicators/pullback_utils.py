@@ -123,7 +123,7 @@ class PullbackUtils:
         data: pd.DataFrame,
         entry_price: Optional[float] = None,
         entry_low: Optional[float] = None,
-        target_profit_rate: float = 0.02
+        target_profit_rate: float = 0.03
     ) -> List[RiskSignal]:
         """위험 신호 감지"""
         return RiskDetector.detect_risk_signals(data, entry_price, entry_low, target_profit_rate)
@@ -146,12 +146,13 @@ class PullbackUtils:
         volume_recovers: bool,
         has_retrace: bool,
         crosses_bisector_up: bool,
-        has_overhead_supply: bool
+        has_overhead_supply: bool,
+        data: Optional[pd.DataFrame] = None
     ) -> SignalStrength:
         """신호 강도 계산"""
         return SignalCalculator.calculate_signal_strength(
             volume_analysis, bisector_status, is_recovery_candle, volume_recovers,
-            has_retrace, crosses_bisector_up, has_overhead_supply
+            has_retrace, crosses_bisector_up, has_overhead_supply, data
         )
     
     @staticmethod

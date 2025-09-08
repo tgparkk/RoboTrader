@@ -78,7 +78,7 @@ class PriceCalculator:
             return None, None
     
     @staticmethod
-    def calculate_stop_loss_price(buy_price: float, target_profit_rate: float = 0.015) -> float:
+    def calculate_stop_loss_price(buy_price: float, target_profit_rate: float = 0.03) -> float:
         """
         손절가 계산 (손익비 2:1 적용)
         
@@ -93,7 +93,7 @@ class PriceCalculator:
         return buy_price * (1.0 - stop_loss_rate)
     
     @staticmethod
-    def calculate_profit_price(buy_price: float, target_profit_rate: float = 0.015) -> float:
+    def calculate_profit_price(buy_price: float, target_profit_rate: float = 0.03) -> float:
         """
         익절가 계산
         

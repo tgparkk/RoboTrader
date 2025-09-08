@@ -11,6 +11,56 @@ class SignalCalculator:
     """신호 강도 계산 클래스"""
     
     @staticmethod
+    def is_first_recovery_candle(data: pd.DataFrame, lookback_period: int = 10) -> bool:
+        """상승B의 첫 번째 봉인지 확인 (상승A→하락A→상승B 패턴)
+        
+        Args:
+            data: 캔들 데이터 (최신 봉이 마지막)
+            lookback_period: 패턴 확인 기간
+            
+        Returns:
+            bool: 상승B의 첫 번째 봉이면 True
+        """
+        if len(data) < 3:
+            return False
+        
+        current = data.iloc[-1]  # 현재 봉
+        prev = data.iloc[-2]     # 이전 봉
+        
+        # 1. 현재 봉이 상승 봉인지 확인
+        current_is_bullish = current['close'] > current['open']
+        if not current_is_bullish:
+            return False
+        
+        # 2. 이전 봉이 하락 봉인지 확인 (하락A의 마지막)
+        prev_is_bearish = prev['close'] <= prev['open']
+        if not prev_is_bearish:
+            return False
+            
+        # 3. 연속적인 하락 패턴이 있었는지 확인 (하락A)
+        declining_found = False
+        start_idx = max(0, len(data) - lookback_period)
+        
+        for i in range(len(data) - 2, start_idx - 1, -1):  # 이전 봉부터 역순 검색
+            candle = data.iloc[i]
+            if candle['close'] <= candle['open']:  # 하락/동가 봉
+                declining_found = True
+                break
+        
+        # 4. 그 이전에 상승 패턴이 있었는지 확인 (상승A)
+        if declining_found:
+            uptrend_found = False
+            for i in range(start_idx, len(data) - 3):  # 더 이전 봉들에서 상승 확인
+                candle = data.iloc[i]
+                if candle['close'] > candle['open']:  # 상승 봉
+                    uptrend_found = True
+                    break
+            
+            return uptrend_found
+        
+        return False
+    
+    @staticmethod
     def calculate_signal_strength(
         volume_analysis: VolumeAnalysis,
         bisector_status: BisectorStatus,
@@ -18,13 +68,27 @@ class SignalCalculator:
         volume_recovers: bool,
         has_retrace: bool,
         crosses_bisector_up: bool,
-        has_overhead_supply: bool
+        has_overhead_supply: bool,
+        data: Optional[pd.DataFrame] = None
     ) -> SignalStrength:
         """신호 강도 계산"""
         
         reasons = []
         confidence = 0
         signal_type = SignalType.WAIT
+        
+        # 🆕 눌림목 패턴 체크: 상승B의 첫 번째 봉인지 확인
+        if data is not None:
+            is_first_recovery = SignalCalculator.is_first_recovery_candle(data)
+            if not is_first_recovery:
+                return SignalStrength(
+                    signal_type=SignalType.AVOID,
+                    confidence=0,
+                    target_profit=0.01,
+                    reasons=["눌림목패턴미충족(상승B첫봉아님)"],
+                    volume_ratio=volume_analysis.volume_ratio,
+                    bisector_status=bisector_status
+                )
         
         # 거래량회복 조건 완화 (다른 강한 조건이 있으면 예외 허용)
         if not volume_recovers:

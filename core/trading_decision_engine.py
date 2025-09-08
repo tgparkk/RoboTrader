@@ -73,6 +73,17 @@ class TradingDecisionEngine:
             if self._is_already_holding(stock_code):
                 return False, f"이미 보유 중인 종목 (매수 제외)", buy_info
             
+            
+            # 동일 캔들 중복 신호 차단 - 3분 단위로 정규화해서 비교
+            raw_candle_time = combined_data['datetime'].iloc[-1]
+            # 3분 단위로 정규화 (09:00, 09:03, 09:06...)
+            minute_normalized = (raw_candle_time.minute // 3) * 3
+            current_candle_time = raw_candle_time.replace(minute=minute_normalized, second=0, microsecond=0)
+            
+            if (trading_stock.last_signal_candle_time and 
+                trading_stock.last_signal_candle_time == current_candle_time):
+                return False, f"동일 캔들 중복신호 차단 ({current_candle_time.strftime('%H:%M')})", buy_info
+            
             # 당일 손실 2회 이상이면 신규 매수 차단 (해제됨)
             # try:
             #     if self.db_manager and hasattr(self.db_manager, 'get_today_real_loss_count'):
@@ -105,12 +116,12 @@ class TradingDecisionEngine:
                         'quantity': quantity,
                         'max_buy_amount': max_buy_amount,
                         'entry_low': price_info.get('entry_low', 0),  # 손절 기준
-                        'target_profit': price_info.get('target_profit', 0.015)  # 목표 수익률
+                        'target_profit': price_info.get('target_profit', 0.03)  # 목표 수익률
                     }
                     
                     # 🆕 목표 수익률 저장
                     if hasattr(trading_stock, 'target_profit_rate'):
-                        trading_stock.target_profit_rate = price_info.get('target_profit', 0.02)
+                        trading_stock.target_profit_rate = price_info.get('target_profit', 0.03)
                     
                     return True, f"눌림목캔들패턴: {reason}", buy_info
                 else:
@@ -189,7 +200,7 @@ class TradingDecisionEngine:
             Tuple[매도신호여부, 매도사유]
         """
         try:
-            if combined_data is None or len(combined_data) < 30:
+            if combined_data is None or len(combined_data) < 15:
                 return False, "데이터 부족"
             
             # 🆕 캐시된 실시간 현재가 사용 (매도 판단용)
@@ -237,7 +248,7 @@ class TradingDecisionEngine:
             self.logger.error(f"❌ {trading_stock.stock_code} 매도 판단 오류: {e}")
             return False, f"오류: {e}"
     
-    async def execute_real_buy(self, trading_stock, buy_reason, buy_price, quantity):
+    async def execute_real_buy(self, trading_stock, buy_reason, buy_price, quantity, candle_time=None):
         """실제 매수 주문 실행 (사전 계산된 가격, 수량 사용)"""
         try:
             stock_code = trading_stock.stock_code
@@ -261,6 +272,11 @@ class TradingDecisionEngine:
                 )
                 
                 if success:
+                    # 매수 성공 시 신호 캔들 시점 업데이트 (중복 신호 방지)
+                    if candle_time:
+                        trading_stock.last_signal_candle_time = candle_time
+                        self.logger.debug(f"🎯 {stock_code} 신호 캔들 시점 저장: {candle_time.strftime('%H:%M')}")
+                    
                     self.logger.info(f"🔥 {stock_code} 실제 매수 주문 완료: {quantity}주 @{buy_price:,.0f}원")
                     return True
                 else:
@@ -350,7 +366,7 @@ class TradingDecisionEngine:
                         self.logger.info(f"📊 목표수익률 설정: {target_rate*100:.0f}% ({buy_reason})")
                     except Exception as e:
                         self.logger.warning(f"목표수익률 설정 실패, 기본값 사용: {e}")
-                        trading_stock.target_profit_rate = 0.02
+                        trading_stock.target_profit_rate = 0.03
                 
                 # 포지션 상태로 변경 (가상)
                 trading_stock.set_position(quantity, current_price)
@@ -521,9 +537,9 @@ class TradingDecisionEngine:
             current_price = data['close'].iloc[-1]
             buy_price = trading_stock.position.avg_price
             
-            # 신호강도별 손절 기준 (signal_replay.py와 동일)
-            target_profit_rate = getattr(trading_stock, 'target_profit_rate', 0.02)  # 기본값 2%
-            stop_loss_rate = target_profit_rate / 2.0  # 손익비 2:1
+            # 임시 고정: 익절 +3%, 손절 -3%
+            target_profit_rate = 0.03  # 3% 고정
+            stop_loss_rate = 0.03      # 3% 고정
             
             loss_rate = (current_price - buy_price) / buy_price
             if loss_rate <= -stop_loss_rate:
@@ -595,7 +611,7 @@ class TradingDecisionEngine:
             profit_rate = (current_price - buy_price) / buy_price
             
             # 신뢰도별 차등 목표수익률 사용
-            target_rate = getattr(trading_stock, 'target_profit_rate', 0.02)
+            target_rate = getattr(trading_stock, 'target_profit_rate', 0.03)
             
             if profit_rate >= target_rate:
                 return True, f"매수가 대비 +{target_rate*100:.0f}% 수익실현"
@@ -780,9 +796,9 @@ class TradingDecisionEngine:
             if buy_price and buy_price > 0:
                 profit_rate = (current_price - buy_price) / buy_price
                 
-                # 신호강도별 목표수익률 및 손절기준 가져오기 (손익비 2:1)
-                target_profit_rate = getattr(trading_stock, 'target_profit_rate', 0.02)  # 기본값 2%
-                stop_loss_rate = target_profit_rate / 2.0  # 손익비 2:1 복원
+                # 임시 고정: 익절 +3%, 손절 -3%
+                target_profit_rate = 0.03  # 3% 고정
+                stop_loss_rate = 0.03      # 3% 고정
                 
                 # 신호강도별 손절
                 if profit_rate <= -stop_loss_rate:

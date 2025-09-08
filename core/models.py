@@ -152,7 +152,7 @@ class TradingStock:
     selection_reason: str = ""
     prev_close: float = 0.0  # 전날 종가 (일봉 기준)
     last_update: datetime = field(default_factory=datetime.now)
-    target_profit_rate: float = 0.015  # 목표수익률 (기본값 1.5%)
+    target_profit_rate: float = 0.03  # 목표수익률 (기본값 3%)
     
     # 🆕 레이스 컨디션 방지 플래그
     order_processed: bool = False  # 주문 체결 처리 완료 플래그
@@ -163,6 +163,9 @@ class TradingStock:
     _virtual_buy_record_id: Optional[int] = None  # 가상 매수 기록 ID
     _virtual_buy_price: Optional[float] = None    # 가상 매수가
     _virtual_quantity: Optional[int] = None       # 가상 매수 수량
+    
+    # 신호 중복 방지
+    last_signal_candle_time: Optional[datetime] = None  # 마지막 매수 신호 발생 캔들 시점
     
     def change_state(self, new_state: StockState, reason: str = ""):
         """상태 변경 및 이력 기록"""
@@ -198,6 +201,8 @@ class TradingStock:
     def clear_position(self):
         """포지션 클리어"""
         self.position = None
+        # 매도 완료 시 신호 시점도 초기화 (새로운 매수 신호 허용)
+        self.last_signal_candle_time = None
     
     def set_virtual_buy_info(self, record_id: int, price: float, quantity: int):
         """가상 매수 정보 설정"""

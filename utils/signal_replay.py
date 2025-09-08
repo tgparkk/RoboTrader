@@ -32,7 +32,7 @@
 
 주의:
 - 더미 데이터 사용 없음. KIS API 설정이 유효해야 합니다.
-- 전략은 눌림목만 사용합니다. 재매수 정책에는 영향 주지 않습니다(리포팅 전용).
+- 전략은 눌림목만 사용합니다. 동일 캔들 중복 신호 차단으로 정확한 재매수 시뮬레이션.
 """
 
 from __future__ import annotations
@@ -248,11 +248,22 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
         
         trades = []
         current_position = None  # 현재 포지션 추적 (실시간과 동일하게 한 번에 하나만)
+        last_signal_candle_time = None  # 마지막 신호 발생 캔들 시점 추적 (중복 신호 방지)
         
         for signal in buy_signals:
             signal_datetime = signal['datetime']  # 라벨 시간 (09:42)
             signal_completion_time = signal['signal_time']  # 실제 신호 발생 시간 (09:45:00)
             signal_index = signal['index']
+            
+            # ==================== 동일 캔들 중복 신호 차단 (실시간과 동일) ====================
+            # 3분 단위로 정규화하여 정확한 캔들 시점 비교
+            minute_normalized = (signal_datetime.minute // 3) * 3
+            normalized_signal_time = signal_datetime.replace(minute=minute_normalized, second=0, microsecond=0)
+            
+            if last_signal_candle_time and last_signal_candle_time == normalized_signal_time:
+                if logger:
+                    logger.debug(f"⚠️ [{signal_completion_time.strftime('%H:%M')}] 동일 캔들 중복신호 차단 ({normalized_signal_time.strftime('%H:%M')})")
+                continue  # 동일한 캔들에서 발생한 신호는 무시
             
             # ==================== 실시간과 동일: 포지션 보유 중이면 매수 금지 ====================
             if current_position is not None:
@@ -262,29 +273,26 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                         logger.debug(f"⚠️ [{signal_completion_time.strftime('%H:%M')}] 포지션 보유 중(매도예정: {current_position['sell_time'].strftime('%H:%M')})으로 매수 건너뜀")
                     continue  # 포지션 보유 중이므로 매수 불가
                 else:
-                    # 매도 후 2개 3분봉(6분) 대기 조건 확인
-                    cooldown_time = current_position['sell_time'] + pd.Timedelta(minutes=6)  # 2개 3분봉 = 6분
-                    
-                    if signal_completion_time < cooldown_time:
-                        # 아직 쿨다운 기간 중
-                        if logger:
-                            logger.debug(f"⏰ [{signal_completion_time.strftime('%H:%M')}] 매도 후 쿨다운 중(쿨다운 종료: {cooldown_time.strftime('%H:%M')}), 매수 건너뜀")
-                        continue  # 쿨다운 기간 중이므로 매수 불가
-                    else:
-                        # 쿨다운 기간 완료, 새로운 매수 가능
-                        if logger:
-                            logger.debug(f"✅ [{signal_completion_time.strftime('%H:%M')}] 쿨다운 완료({cooldown_time.strftime('%H:%M')}), 새 매수 가능")
-                        current_position = None
+                    # 매도 완료 후 새로운 매수 가능 (쿨다운 제거)
+                    if logger:
+                        logger.debug(f"✅ [{signal_completion_time.strftime('%H:%M')}] 매도 완료, 새 매수 가능")
+                    current_position = None
+            
+            # ==================== 15시 이후 매수 금지 체크 ====================
+            signal_hour = signal_completion_time.hour
+            signal_minute = signal_completion_time.minute
+            
+            # 15:00부터 매수 금지 (신호 표시는 유지)
+            if signal_hour >= 15:
+                if logger:
+                    logger.debug(f"⏰ [{signal_completion_time.strftime('%H:%M')}] 15시 이후 매수금지")
+                continue  # 15시 이후 매수 신호 건너뜀
             
             # ==================== 실시간과 완전 동일한 매수 로직 ====================
             
-            # 신호 강도에 따른 목표 수익률 (실시간과 동일)
-            target_profit_rate = signal.get('target_profit', 0.015)
-            if target_profit_rate <= 0:
-                target_profit_rate = 0.015
-                
-            # 손익비 2:1로 손절매 비율 설정
-            stop_loss_rate = target_profit_rate / 2.0
+            # 임시 고정: 익절 +3%, 손절 -3%
+            target_profit_rate = 0.03  # 3% 고정
+            stop_loss_rate = 0.03      # 3% 고정
             
             # 실시간과 동일한 3/5가 및 진입저가 사용
             three_fifths_price = signal.get('buy_price', 0)  # 이미 계산된 3/5가 사용
@@ -312,6 +320,9 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
             buy_executed = True
             buy_executed_price = three_fifths_price
             actual_execution_time = signal_completion_time
+            
+            # 매수 성공 시 신호 캔들 시점 저장 (중복 신호 방지)
+            last_signal_candle_time = normalized_signal_time
             
             # (주석 처리된 미체결 로직)
             # check_candles = df_1min[
@@ -397,9 +408,19 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
             sell_reason = ""
             
             for i, row in remaining_data.iterrows():
+                candle_time = row['datetime']
                 candle_high = row['high']
                 candle_low = row['low'] 
                 candle_close = row['close']
+                
+                # ==================== 15시 장마감 매도 (최우선) ====================
+                if candle_time.hour >= 15 and candle_time.minute >= 0:
+                    sell_time = candle_time
+                    sell_price = candle_close  # 15시 종가로 매도
+                    sell_reason = "market_close_15h"
+                    if logger:
+                        logger.debug(f"⏰ [{stock_code}] 15시 장마감 매도: {sell_price:,.0f}원")
+                    break
                 
                 # 최대/최소 수익률 추적 (종가 기준)
                 close_profit_rate = ((candle_close - buy_price) / buy_price) * 100
@@ -482,6 +503,10 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                     'sell_time': sell_time,
                     'status': 'completed'
                 }
+                
+                # 매도 완료 시 신호 시점 초기화 (새로운 매수 신호 허용)
+                # 단, 쿨다운 로직이 있으므로 즉시 재매수되지는 않음
+                last_signal_candle_time = None
                 
                 trades.append({
                     'buy_time': buy_time.strftime('%H:%M'),
@@ -1064,10 +1089,20 @@ def main():
                                             
                                             # 2. 신호 상태
                                             if signal_strength:
+                                                # 15시 이후 매수금지 표시
+                                                signal_completion_time = candle_time + pd.Timedelta(minutes=3)
+                                                is_after_15h = signal_completion_time.hour >= 15
+                                                
                                                 if signal_strength.signal_type == SignalType.STRONG_BUY:
-                                                    status_parts.append("🟢강매수")
+                                                    if is_after_15h:
+                                                        status_parts.append("🟢강매수(15시이후매수금지)")
+                                                    else:
+                                                        status_parts.append("🟢강매수")
                                                 elif signal_strength.signal_type == SignalType.CAUTIOUS_BUY:
-                                                    status_parts.append("🟡조건부매수")
+                                                    if is_after_15h:
+                                                        status_parts.append("🟡조건부매수(15시이후매수금지)")
+                                                    else:
+                                                        status_parts.append("🟡조건부매수")
                                                 elif signal_strength.signal_type == SignalType.AVOID:
                                                     # 회피 이유 추가
                                                     avoid_reason = ""

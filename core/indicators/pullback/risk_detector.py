@@ -17,7 +17,7 @@ class RiskDetector:
         data: pd.DataFrame,
         entry_price: Optional[float] = None,
         entry_low: Optional[float] = None,
-        target_profit_rate: float = 0.02
+        target_profit_rate: float = 0.03
     ) -> List[RiskSignal]:
         """위험 신호 감지"""
         risk_signals = []

@@ -62,6 +62,7 @@ class TradingStockManager:
         # 재거래 설정
         self.enable_re_trading = True  # 매도 완료 후 재거래 허용 (COMPLETED 상태에서 직접 매수 판단)
         
+        
         self.logger.info("🎯 종목 거래 상태 통합 관리자 초기화 완료")
         # 주문 관리자에 역참조 등록 (정정 시 주문ID 동기화용)
         try:
@@ -347,6 +348,7 @@ class TradingStockManager:
             # 포지션 현재가 업데이트
             await self._update_position_prices()
             
+            
         except Exception as e:
             self.logger.error(f"❌ 종목 상태 모니터링 중 오류: {e}")
     
@@ -452,10 +454,18 @@ class TradingStockManager:
                                 f"매도 완료: {order.quantity}주 @{order.price:,.0f}원"
                             )
                         # 실거래 매도 기록 저장 (매칭된 매수와 손익 계산)
+                        profit_rate = 0.0
                         try:
                             from db.database_manager import DatabaseManager
                             db = DatabaseManager()
                             buy_id = db.get_last_open_real_buy(trading_stock.stock_code)
+                            
+                            # 수익률 계산을 위해 매수가 조회
+                            buy_price = None
+                            if buy_id and trading_stock.position and trading_stock.position.avg_price:
+                                buy_price = trading_stock.position.avg_price
+                                profit_rate = ((float(order.price) - buy_price) / buy_price) * 100
+                            
                             db.save_real_sell(
                                 stock_code=trading_stock.stock_code,
                                 stock_name=trading_stock.stock_name,
@@ -465,10 +475,12 @@ class TradingStockManager:
                                 reason="체결",
                                 buy_record_id=buy_id
                             )
+                            
+                            
                         except Exception as db_err:
                             self.logger.warning(f"⚠️ 실거래 매도 기록 저장 실패: {db_err}")
                         
-                        self.logger.info(f"✅ {trading_stock.stock_code} 매도 완료")
+                        self.logger.info(f"✅ {trading_stock.stock_code} 매도 완료 (수익률: {profit_rate:.2f}%)")
                         
                         # 매도 완료 후 즉시 재거래 준비 (COMPLETED 상태 유지)
                         if self.enable_re_trading:
@@ -685,10 +697,18 @@ class TradingStockManager:
                         )
                         
                         # 실거래 매도 기록 저장
+                        profit_rate = 0.0
                         try:
                             from db.database_manager import DatabaseManager
                             db = DatabaseManager()
                             buy_id = db.get_last_open_real_buy(trading_stock.stock_code)
+                            
+                            # 수익률 계산을 위해 매수가 조회 (콜백 매도)
+                            buy_price = None
+                            if buy_id and trading_stock.position and trading_stock.position.avg_price:
+                                buy_price = trading_stock.position.avg_price
+                                profit_rate = ((float(order.price) - buy_price) / buy_price) * 100
+                            
                             db.save_real_sell(
                                 stock_code=trading_stock.stock_code,
                                 stock_name=trading_stock.stock_name,
@@ -698,10 +718,12 @@ class TradingStockManager:
                                 reason="체결(콜백)",
                                 buy_record_id=buy_id
                             )
+                            
+                            
                         except Exception as db_err:
                             self.logger.warning(f"⚠️ 실거래 매도 기록 저장 실패: {db_err}")
                         
-                        self.logger.info(f"✅ 매도 체결 처리 완료 (콜백): {trading_stock.stock_code}")
+                        self.logger.info(f"✅ 매도 체결 처리 완료 (콜백): {trading_stock.stock_code} (수익률: {profit_rate:.2f}%)")
                         
                         # 매도 완료 후 즉시 재거래 준비 (COMPLETED 상태 유지)
                         if self.enable_re_trading:
@@ -792,6 +814,7 @@ class TradingStockManager:
         return {
             "enable_re_trading": self.enable_re_trading
         }
+    
     
     def remove_stock(self, stock_code: str, reason: str = "") -> bool:
         """종목 제거"""
