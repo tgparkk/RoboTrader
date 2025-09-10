@@ -179,7 +179,7 @@ class PullbackCandlePattern:
     
     @staticmethod
     def analyze_pullback_quality(data: pd.DataFrame, baseline_volumes: pd.Series, 
-                               min_pullback_candles: int = 5, 
+                               min_pullback_candles: int = 2, 
                                low_volume_threshold: float = 0.25) -> dict:
         """눌림목 품질 분석"""
         

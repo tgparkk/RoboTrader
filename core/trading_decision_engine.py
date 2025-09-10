@@ -537,9 +537,9 @@ class TradingDecisionEngine:
             current_price = data['close'].iloc[-1]
             buy_price = trading_stock.position.avg_price
             
-            # 임시 고정: 익절 +3%, 손절 -3%
+            # 임시 고정: 익절 +3%, 손절 -2%
             target_profit_rate = 0.03  # 3% 고정
-            stop_loss_rate = 0.03      # 3% 고정
+            stop_loss_rate = 0.02      # 2% 고정
             
             loss_rate = (current_price - buy_price) / buy_price
             if loss_rate <= -stop_loss_rate:
@@ -796,9 +796,9 @@ class TradingDecisionEngine:
             if buy_price and buy_price > 0:
                 profit_rate = (current_price - buy_price) / buy_price
                 
-                # 임시 고정: 익절 +3%, 손절 -3%
+                # 임시 고정: 익절 +3%, 손절 -2%
                 target_profit_rate = 0.03  # 3% 고정
-                stop_loss_rate = 0.03      # 3% 고정
+                stop_loss_rate = 0.02      # 2% 고정
                 
                 # 신호강도별 손절
                 if profit_rate <= -stop_loss_rate:

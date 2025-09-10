@@ -207,7 +207,7 @@ class DayTradingBot:
         """매매 의사결정 태스크"""
         try:
 
-            await self._check_condition_search()
+            #await self._check_condition_search()
 
             self.logger.info("🤖 매매 의사결정 태스크 시작")
             
@@ -313,10 +313,10 @@ class DayTradingBot:
             # 분봉 데이터 가져오기
             combined_data = self.intraday_manager.get_combined_chart_data(stock_code)
             if combined_data is None:
-                self.logger.debug(f"❌ {stock_code} 분봉 데이터 없음 (None)")
+                self.logger.debug(f"❌ {stock_code} 1분봉 데이터 없음 (None)")
                 return
-            if len(combined_data) < 5:
-                self.logger.debug(f"❌ {stock_code} 분봉 데이터 부족: {len(combined_data)}개 (최소 5개 필요)")
+            if len(combined_data) < 15:
+                self.logger.debug(f"❌ {stock_code} 1분봉 데이터 부족: {len(combined_data)}개 (최소 15개 필요)")
                 return
             
             # 🆕 3분봉 변환 시 완성된 봉만 자동 필터링됨 (TimeFrameConverter에서 처리)
@@ -657,7 +657,7 @@ class DayTradingBot:
     async def _check_condition_search(self):
         """장중 조건검색 체크"""
         try:
-            self.logger.debug("🔍 장중 조건검색 체크 시작")
+            #self.logger.debug("🔍 장중 조건검색 체크 시작")
             
             # 조건검색 seq 리스트 (필요에 따라 여러 조건 추가 가능)
             #condition_seqs = ["0", "1", "2"]  # 예: 0, 1, 2번 조건

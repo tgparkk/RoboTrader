@@ -45,7 +45,7 @@ def run_signal_replay(date, time_range="9:00-16:00"):
     minute = start_time.split(':')[1] if ':' in start_time else '0'
     time_parts = f"{hour}_{minute}_0"
     
-    txt_filename = f"signal_replay_{date}_{time_parts}.txt"
+    txt_filename = f"signal_qqw_replay_{date}_{time_parts}.txt"
     
     # 명령어 구성
     cmd = [
