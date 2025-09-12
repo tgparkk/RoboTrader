@@ -76,9 +76,9 @@ class PullbackUtils:
         return CandleAnalyzer.check_overhead_supply(data, lookback, threshold_hits)
     
     @staticmethod
-    def analyze_candle(data: pd.DataFrame, period: int = 10) -> CandleAnalysis:
+    def analyze_candle(data: pd.DataFrame, period: int = 10, prev_close: Optional[float] = None) -> CandleAnalysis:
         """캔들 분석 (변곡캔들 검증 로직 강화)"""
-        return CandleAnalyzer.analyze_candle(data, period)
+        return CandleAnalyzer.analyze_candle(data, period, prev_close)
     
     @staticmethod
     def check_prior_uptrend(data: pd.DataFrame, min_gain: float = 0.05, 

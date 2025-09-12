@@ -21,8 +21,8 @@ class BisectorAnalyzer:
             if bisector_line is None or bisector_line.empty:
                 return BisectorStatus.BROKEN
             
-            current_price = data['close'].iloc[-1]
-            current_bisector = bisector_line.iloc[-1]
+            current_price = float(data['close'].iloc[-1])
+            current_bisector = float(bisector_line.iloc[-1])
             
             if pd.isna(current_bisector) or current_bisector <= 0:
                 return BisectorStatus.BROKEN
@@ -58,8 +58,8 @@ class BisectorAnalyzer:
                 return False
             
             # 현재 캔들이 이등분선을 상향 돌파했는지 확인
-            open_price = current_candle['open']
-            close_price = current_candle['close']
+            open_price = float(current_candle['open'])
+            close_price = float(current_candle['close'])
             
             # 허용 오차를 고려한 돌파 확인
             bisector_with_tolerance = current_bisector * (1.0 - tolerance)

@@ -37,9 +37,9 @@ class PullbackCandlePattern:
         return PullbackUtils.analyze_volume(data, period)
     
     @staticmethod
-    def analyze_candle(data: pd.DataFrame, period: int = 10) -> CandleAnalysis:
+    def analyze_candle(data: pd.DataFrame, period: int = 10, prev_close: Optional[float] = None) -> CandleAnalysis:
         """캔들 분석"""
-        return PullbackUtils.analyze_candle(data, period)
+        return PullbackUtils.analyze_candle(data, period, prev_close)
     
     @staticmethod
     def get_bisector_status(current_price: float, bisector_line: float) -> BisectorStatus:
@@ -126,15 +126,15 @@ class PullbackCandlePattern:
         
         try:
             # 현재 캔들 정보
-            current_volume = data['volume'].iloc[-1]
-            current_baseline = baseline_volumes.iloc[-1]
+            current_volume = float(data['volume'].iloc[-1])
+            current_baseline = float(baseline_volumes.iloc[-1])
             
             # 직전 period개 캔들 분석 (현재 제외)
             recent_data = data.iloc[-period-1:-1]  # 현재 캔들 제외
             recent_baselines = baseline_volumes.iloc[-period-1:-1]
             
             # 연속 저거래량 개수 계산
-            volume_ratios = recent_data['volume'] / recent_baselines
+            volume_ratios = recent_data['volume'].astype(float) / recent_baselines.astype(float)
             low_volume_threshold = 0.25  # 25%
             
             consecutive_low_count = 0
@@ -144,8 +144,8 @@ class PullbackCandlePattern:
                 else:
                     break
             
-            # 현재 캔들의 거래량 비율
-            current_vs_threshold = current_volume / current_baseline if current_baseline > 0 else 0
+            # 현재 캔듡의 거래량 비율
+            current_vs_threshold = float(current_volume) / float(current_baseline) if float(current_baseline) > 0 else 0
             
             # 저거래량 구간 평균 비율
             avg_low_volume_ratio = volume_ratios.mean() if len(volume_ratios) > 0 else 0
@@ -256,9 +256,29 @@ class PullbackCandlePattern:
         entry_price: Optional[float] = None,
         entry_low: Optional[float] = None,
         logger: Optional[logging.Logger] = None,
-        return_risk_signals: bool = False
+        return_risk_signals: bool = False,
+        prev_close: Optional[float] = None
     ) -> Union[Optional[SignalStrength], Tuple[SignalStrength, List[RiskSignal]]]:
         """개선된 신호 생성 로직 (통합) - v1과 v2 통합"""
+        
+        # 데이터 타입 안전성 보장 - 모든 수치 컬럼을 float로 변환
+        data = data.copy()
+        numeric_columns = ['open', 'high', 'low', 'close', 'volume']
+        
+        def safe_float_convert(value):
+            """쉼표가 포함된 문자열을 안전하게 float로 변환"""
+            if pd.isna(value) or value is None:
+                return 0.0
+            try:
+                # 문자열로 변환 후 쉼표 제거
+                str_value = str(value).replace(',', '')
+                return float(str_value)
+            except (ValueError, TypeError):
+                return 0.0
+        
+        for col in numeric_columns:
+            if col in data.columns:
+                data[col] = data[col].apply(safe_float_convert)
         
         if len(data) < 5:
             result = SignalStrength(SignalType.AVOID, 0, 0, ['데이터 부족'], 0, BisectorStatus.BROKEN) if return_risk_signals else None
@@ -285,7 +305,7 @@ class PullbackCandlePattern:
             # 분석 실행 (통합)
             period = min(10, len(data) - 1)
             volume_analysis = PullbackUtils.analyze_volume(data, period, baseline_volumes)
-            candle_analysis = PullbackUtils.analyze_candle(data)
+            candle_analysis = PullbackUtils.analyze_candle(data, period, prev_close)
             recent_low = PullbackUtils.find_recent_low(data) or 0
             
             # 위험 신호 우선 체크 (통합 - v2 스타일)
@@ -305,7 +325,9 @@ class PullbackCandlePattern:
                         except:
                             candle_time = ""
                     
-                    current_candle_info = f"봉:{len(data)}개{candle_time} 종가:{current['close']:,.0f}원"
+                    # 문자열을 숫자로 변환하여 포맷팅
+                    close_price = float(current['close']) if current['close'] else 0
+                    current_candle_info = f"봉:{len(data)}개{candle_time} 종가:{close_price:,.0f}원"
                     logger.info(f"[{getattr(logger, '_stock_code', stock_code)}] {current_candle_info} | "
                                f"위험신호 감지: {[r.value for r in risk_signals]}")
                 
@@ -322,8 +344,8 @@ class PullbackCandlePattern:
             # 1. 눌림목 기본 매수 조건 체크 (3분봉 기준)
             # 1-1. 현재봉이 당일 시가보다 위에 있어야 함
             if len(data) > 0:
-                daily_open = data['open'].iloc[0]  # 당일 첫 봉(09:00)의 시가
-                current_close = current['close']
+                daily_open = float(data['open'].iloc[0])  # 당일 첫 봉(09:00)의 시가
+                current_close = float(current['close'])
                 
                 if current_close <= daily_open:
                     result = SignalStrength(SignalType.AVOID, 0, 0,
@@ -335,23 +357,26 @@ class PullbackCandlePattern:
             # 1-2. 당일 중 +2.5% 이상 봉이 나왔는지 확인
             has_large_candle = False
             for i, row in data.iterrows():
-                candle_body_pct = abs(row['close'] - row['open']) / row['open'] * 100 if row['open'] > 0 else 0
+                # 실제 전일 종가 기준으로 캔들 비율 계산
+                baseline_price = prev_close if prev_close and prev_close > 0 else (float(data['close'].iloc[0]) if len(data) > 0 else float(row['open']))
+                candle_body_pct = abs(float(row['close']) - float(row['open'])) / baseline_price * 100 if baseline_price > 0 else 0
                 if candle_body_pct >= 2.5:  # 2.5% 이상 몸통
                     has_large_candle = True
                     break
             
             if not has_large_candle:
                 result = SignalStrength(SignalType.AVOID, 0, 0,
-                                      ["2%이상봉없음-매수금지"],
+                                      ["2.5%이상봉없음-매수금지"],
                                       volume_analysis.volume_ratio,
                                       PullbackUtils.get_bisector_status(current['close'], bisector_line) if bisector_line else BisectorStatus.BROKEN)
                 return (result, []) if return_risk_signals else result
             
-            # 2. 새로운 지지 패턴 분석 (최우선 적용)
+            # 2. 새로운 지지 패턴 분석 (4단계 패턴 강제)
             support_pattern_info = PullbackCandlePattern.analyze_support_pattern(data, debug)
             
-            # 새로운 지지 패턴이 감지되고 신뢰도가 높으면 즉시 적용 (기존 로직 건너뜀)
-            if support_pattern_info['has_support_pattern'] and support_pattern_info['confidence'] >= 60:
+            # *** 4단계 패턴 완성 필수 요구 ***
+            # 상승→하락→지지→돌파 모든 단계가 완성되어야만 매수신호 발생
+            if support_pattern_info['has_support_pattern'] and support_pattern_info['confidence'] >= 70:
                 bisector_status = PullbackUtils.get_bisector_status(current['close'], bisector_line) if bisector_line else BisectorStatus.BROKEN
                 
                 signal_strength = SignalStrength(
@@ -366,17 +391,19 @@ class PullbackCandlePattern:
                 )
                 
                 if debug and logger:
+                    entry_price = support_pattern_info.get('entry_price', 0)
+                    entry_price_str = f"{entry_price:,.0f}" if isinstance(entry_price, (int, float)) and entry_price > 0 else "0"
                     logger.info(f"[{stock_code}] 새로운지지패턴감지: "
                                f"신뢰도{support_pattern_info['confidence']:.0f}%, "
-                               f"진입가{support_pattern_info.get('entry_price', 0):,.0f}원")
+                               f"진입가{entry_price_str}원")
                 
                 return (signal_strength, []) if return_risk_signals else signal_strength
             
             # 3. 기존 눌림목 패턴 로직 (새로운 지지 패턴이 감지되지 않은 경우에만)
-            # 3-1. 선행 상승 확인
-            #current_baseline_volume = baseline_volumes.iloc[-1] if len(baseline_volumes) > 0 else None
-            #has_prior_uptrend = PullbackUtils.check_prior_uptrend(data, 0.03, current_baseline_volume)
-            has_prior_uptrend = True
+            # *** 4단계 패턴이 없으면 기존 로직도 더 엄격하게 적용 ***
+            # 3-1. 선행 상승 확인 - SupportPatternAnalyzer에서 이미 검사했으므로 생략
+            # (중복 검사 제거: analyze_support_pattern 내부에서 상승 구간 이미 분석됨)
+            has_prior_uptrend = support_pattern_info.get('has_support_pattern', False)  # 4단계 패턴이 있다면 상승도 있다고 가정
             # 3-2. 눌림목 품질 분석
             pullback_quality = PullbackCandlePattern.analyze_pullback_quality(data, baseline_volumes)
             
@@ -443,52 +470,57 @@ class PullbackCandlePattern:
             if not volume_recovers:
                 mandatory_failed.append("거래량회복미충족")
             
-            # 이등분선 돌파 조건 체크 (독립적인 매수 신호)
+            # *** 이등분선 돌파 독립 신호 비활성화 ***
+            # 상승→하락→지지→돌파 4단계 패턴만 허용
+            # (이등분선 돌파만으로는 매수신호 발생 안함)
             bisector_breakout_signal = False
             
-            # 특별 디버깅 (여러 시점)
-            is_target_time = (abs(current['close'] - 35850) < 10 or  # 290650 10:00
-                             abs(current['close'] - 33950) < 10 or   # 039200 09:30
-                             abs(current['close'] - 41000) < 200)     # 일반적인 이등분선 돌파 케이스
+            # # 이등분선 돌파 조건 체크 (독립적인 매수 신호) - 주석처리
+            # # 특별 디버깅 (여러 시점)
+            # is_target_time = (abs(current['close'] - 35850) < 10 or  # 290650 10:00
+            #                  abs(current['close'] - 33950) < 10 or   # 039200 09:30
+            #                  abs(current['close'] - 41000) < 200)     # 일반적인 이등분선 돌파 케이스
+            # 
+            # if bisector_line and len(data) >= 2:
+            #     prev_close = data['close'].iloc[-2]
+            #     current_close = current['close']
+            #     
+            #     if debug and logger and is_target_time:
+            #         logger.info(f"[{stock_code}] 🔍 10:00 이등분선 돌파 분석: 직전{prev_close:.0f}, 현재{current_close:.0f}, 이등분선{bisector_line:.0f}")
+            #     
+            #     # 이등분선 아래에서 위로 돌파하는 조건
+            #     if prev_close < bisector_line and current_close > bisector_line:
+            #         bisector_breakout_signal = True
+            #         if debug and logger:
+            #             logger.info(f"[{stock_code}] ✅ 이등분선 돌파 신호 감지: {prev_close:.0f}(아래) → {current_close:.0f}(위) | 이등분선:{bisector_line:.0f}")
+            #     elif debug and logger and is_target_time:
+            #         if prev_close >= bisector_line:
+            #             logger.info(f"[{stock_code}] ❌ 직전봉이 이미 이등분선 위: 직전{prev_close:.0f} >= 이등분선{bisector_line:.0f}")
+            #         elif current_close <= bisector_line:
+            #             logger.info(f"[{stock_code}] ❌ 현재봉이 이등분선 아래: 현재{current_close:.0f} <= 이등분선{bisector_line:.0f}")
+            # elif debug and logger and is_target_time:
+            #     if not bisector_line:
+            #         logger.info(f"[{stock_code}] ❌ 이등분선 없음")
+            #     else:
+            #         logger.info(f"[{stock_code}] ❌ 데이터 부족 (직전봉 없음)")
             
-            if bisector_line and len(data) >= 2:
-                prev_close = data['close'].iloc[-2]
-                current_close = current['close']
-                
-                if debug and logger and is_target_time:
-                    logger.info(f"[{stock_code}] 🔍 10:00 이등분선 돌파 분석: 직전{prev_close:.0f}, 현재{current_close:.0f}, 이등분선{bisector_line:.0f}")
-                
-                # 이등분선 아래에서 위로 돌파하는 조건
-                if prev_close < bisector_line and current_close > bisector_line:
-                    bisector_breakout_signal = True
-                    if debug and logger:
-                        logger.info(f"[{stock_code}] ✅ 이등분선 돌파 신호 감지: {prev_close:.0f}(아래) → {current_close:.0f}(위) | 이등분선:{bisector_line:.0f}")
-                elif debug and logger and is_target_time:
-                    if prev_close >= bisector_line:
-                        logger.info(f"[{stock_code}] ❌ 직전봉이 이미 이등분선 위: 직전{prev_close:.0f} >= 이등분선{bisector_line:.0f}")
-                    elif current_close <= bisector_line:
-                        logger.info(f"[{stock_code}] ❌ 현재봉이 이등분선 아래: 현재{current_close:.0f} <= 이등분선{bisector_line:.0f}")
-            elif debug and logger and is_target_time:
-                if not bisector_line:
-                    logger.info(f"[{stock_code}] ❌ 이등분선 없음")
-                else:
-                    logger.info(f"[{stock_code}] ❌ 데이터 부족 (직전봉 없음)")
-            
-            # 눌림목 조건 완화: 선행상승 OR 회복양봉 중 하나만 충족해도 진행
-            pullback_condition_met = (has_prior_uptrend or is_recovery_candle)
+            # *** 눌림목 조건 강화: 선행상승 AND 회복양봉 AND 눌림목품질 모두 필요 ***
+            pullback_condition_met = (has_prior_uptrend and is_recovery_candle and pullback_quality['has_quality_pullback'])
             
             # 이등분선 위에 있으면 이등분선 돌파는 고려하지 않음
             above_bisector = bisector_line and current['close'] > bisector_line
             
-            if not pullback_condition_met and not bisector_breakout_signal:
-                # 모든 조건 미충족시 회피
+            # *** 4단계 패턴 강제 요구 ***
+            # 이등분선 돌파는 더이상 독립 조건으로 사용하지 않음
+            if not pullback_condition_met:
+                # 기본 눌림목 조건 미충족시 회피
                 avoid_reasons = []
                 if not has_prior_uptrend:
                     avoid_reasons.append("선행상승미충족")
                 if not is_recovery_candle:
                     avoid_reasons.append("회복양봉미충족")
-                if not above_bisector and not bisector_breakout_signal:
-                    avoid_reasons.append("이등분선조건미충족")
+                if not above_bisector:
+                    avoid_reasons.append("이등분선아래위치")
                     
                 result = SignalStrength(SignalType.AVOID, 0, 0,
                                        [f"매수조건미충족: {', '.join(avoid_reasons)}"],
@@ -518,10 +550,11 @@ class PullbackCandlePattern:
                 signal_strength.confidence *= 0.85
                 signal_strength.reasons.append("거래량회복미충족(-)")
             
-            # 이등분선 돌파 신호 보너스 (새로운 조건)
-            if bisector_breakout_signal:
-                signal_strength.confidence += 20  # 돌파 보너스 점수
-                signal_strength.reasons.append("이등분선돌파(+)")
+            # *** 이등분선 돌파 보너스 비활성화 ***
+            # 4단계 패턴 완성만 인정
+            # if bisector_breakout_signal:
+            #     signal_strength.confidence += 20  # 돌파 보너스 점수
+            #     signal_strength.reasons.append("이등분선돌파(+)")
                 
             # 대량 매물 출현 후 미회복 종목 차단
             high_volume_decline_filter = PullbackCandlePattern.check_high_volume_decline_recovery(data, baseline_volumes)
@@ -535,9 +568,10 @@ class PullbackCandlePattern:
             # 최종 신호 검증 (신뢰도 기준 - 눌림목 전용)
             confidence_threshold = 45  # 기본 기준: 45%
             
-            # 이등분선 돌파 신호가 있으면 신뢰도 기준 완화
-            if bisector_breakout_signal:
-                confidence_threshold = 35  # 완화된 기준: 35%
+            # *** 이등분선 돌파 신뢰도 완화 비활성화 ***
+            # 모든 신호는 동일한 기준 적용
+            # if bisector_breakout_signal:
+            #     confidence_threshold = 35  # 완화된 기준: 35%
                 
             if signal_strength.confidence < confidence_threshold:
                 result = SignalStrength(SignalType.AVOID, 0, 0,
@@ -568,12 +602,12 @@ class PullbackCandlePattern:
                             #logger.info(f"📈 전날 대비 상승률: {daily_gain_pct:.1f}%")
                     else:
                         # 3/5가 계산 실패시 현재가 사용
-                        signal_strength.buy_price = float(current['close'])
-                        signal_strength.entry_low = float(current['low'])
+                        signal_strength.buy_price = safe_float_convert(current['close'])
+                        signal_strength.entry_low = safe_float_convert(current['low'])
                 else:
                     # 신호 캔들을 찾을 수 없으면 현재가 사용
-                    signal_strength.buy_price = float(current['close'])
-                    signal_strength.entry_low = float(current['low'])
+                    signal_strength.buy_price = safe_float_convert(current['close'])
+                    signal_strength.entry_low = safe_float_convert(current['low'])
             
             return (signal_strength, []) if return_risk_signals else signal_strength
             

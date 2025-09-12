@@ -44,7 +44,7 @@ from __future__ import annotations
 # ==================== 손절/익절 설정 ====================
 # 📊 시뮬레이션 테스트를 위한 손절/익절 비율 설정 (쉬운 수정을 위해 상단 배치)
 PROFIT_TAKE_RATE = 3.0  # 익절 수익률 (%) - 수정하여 테스트 가능
-STOP_LOSS_RATE = 2.0    # 손절 수익률 (%) - 수정하여 테스트 가능
+STOP_LOSS_RATE = 3.0    # 손절 수익률 (%) - 수정하여 테스트 가능
 
 print(f"[시뮬레이션 설정] 익절 +{PROFIT_TAKE_RATE}% / 손절 -{STOP_LOSS_RATE}%")
 print("=" * 60)
@@ -308,8 +308,8 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
             stop_loss_rate = STOP_LOSS_RATE / 100.0        # % -> 소수점 변환
             
             # 실시간과 동일한 3/5가 및 진입저가 사용
-            three_fifths_price = signal.get('buy_price', 0)  # 이미 계산된 3/5가 사용
-            entry_low = signal.get('entry_low', 0)  # 이미 계산된 진입저가 사용
+            three_fifths_price = float(str(signal.get('buy_price', 0)).replace(',', ''))  # 이미 계산된 3/5가 사용 (float 변환, 천단위구분자 제거)
+            entry_low = float(str(signal.get('entry_low', 0)).replace(',', ''))  # 이미 계산된 진입저가 사용 (float 변환, 천단위구분자 제거)
             
             if three_fifths_price <= 0:
                 if logger:
@@ -387,9 +387,9 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                 logger.debug(f"💰 [{stock_code}] 매수 체결: {buy_price:,.0f}원 @ {buy_time.strftime('%H:%M:%S')} (실제 체결: {actual_execution_time.strftime('%H:%M:%S')})")
             
             # 진입 저가 추적 (실시간과 동일)
-            entry_low = signal.get('entry_low', 0)
+            entry_low = float(str(signal.get('entry_low', 0)).replace(',', ''))
             if entry_low <= 0:
-                entry_low = signal.get('low', 0)  # 3분봉 저가를 대체
+                entry_low = float(str(signal.get('low', 0)).replace(',', ''))  # 3분봉 저가를 대체 (float 변환, 천단위구분자 제거)
             
             # 매수 후부터 장 마감까지의 1분봉 데이터로 매도 시뮬레이션
             remaining_data = df_1min[df_1min['datetime'] > buy_time].copy()

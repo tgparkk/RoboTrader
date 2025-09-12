@@ -392,18 +392,18 @@ class DayTradingBot:
             self.logger.error(f"상세 오류 정보: {traceback.format_exc()}")
     
     async def _analyze_sell_decision(self, trading_stock):
-        """매도 판단 분석"""
+        """매도 판단 분석 (간단한 손절/익절 로직)"""
         try:
             stock_code = trading_stock.stock_code
             stock_name = trading_stock.stock_name
             
-            # 분봉 데이터 가져오기
-            combined_data = self.intraday_manager.get_combined_chart_data(stock_code)
-            if combined_data is None or len(combined_data) < 10:
+            # 실시간 현재가 정보만 확인 (간단한 손절/익절 로직)
+            current_price_info = self.intraday_manager.get_cached_current_price(stock_code)
+            if current_price_info is None:
                 return
             
-            # 매매 판단 엔진으로 매도 신호 확인
-            sell_signal, sell_reason = await self.decision_engine.analyze_sell_decision(trading_stock, combined_data)
+            # 매매 판단 엔진으로 매도 신호 확인 (combined_data 불필요)
+            sell_signal, sell_reason = await self.decision_engine.analyze_sell_decision(trading_stock, None)
             
             if sell_signal:
                 # 🆕 매도 전 종목 상태 확인

@@ -72,7 +72,7 @@ class IntradayStockManager:
         
         # 설정
         self.market_open_time = "090000"  # 장 시작 시간
-        self.max_stocks = 60  # 최대 관리 종목 수
+        self.max_stocks = 80  # 최대 관리 종목 수
         
         # 동기화
         self._lock = threading.RLock()

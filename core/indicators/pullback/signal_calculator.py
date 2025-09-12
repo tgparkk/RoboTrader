@@ -221,7 +221,18 @@ class SignalCalculator:
                 baseline_info = f", 기준거래량: {baseline_vol:,.0f}주" if baseline_vol > 0 else ""
                 
                 candle_count = len(data) if data is not None else "N/A"
-                current_candle_info = f"봉:{candle_count}개{candle_time} 종가:{current['close']:,.0f}원"
+                # 문자열을 숫자로 변환하여 포맷팅 (쉼표 제거)
+                def safe_float_convert(value):
+                    if pd.isna(value) or value is None:
+                        return 0.0
+                    try:
+                        str_value = str(value).replace(',', '')
+                        return float(str_value)
+                    except (ValueError, TypeError):
+                        return 0.0
+                
+                close_price = safe_float_convert(current['close'])
+                current_candle_info = f"봉:{candle_count}개{candle_time} 종가:{close_price:,.0f}원"
                 logger.info(f"[{getattr(logger, '_stock_code', 'UNKNOWN')}] {current_candle_info} | "
                            f"눌림목 과정 매물부담 감지 - 매수 제외{baseline_info}")
             
@@ -245,7 +256,18 @@ class SignalCalculator:
                 baseline_info = f", 기준거래량: {baseline_vol:,.0f}주" if baseline_vol > 0 else ""
                 
                 candle_count = len(data) if data is not None else "N/A"
-                current_candle_info = f"봉:{candle_count}개{candle_time} 종가:{current['close']:,.0f}원"
+                # 문자열을 숫자로 변환하여 포맷팅 (쉼표 제거)
+                def safe_float_convert(value):
+                    if pd.isna(value) or value is None:
+                        return 0.0
+                    try:
+                        str_value = str(value).replace(',', '')
+                        return float(str_value)
+                    except (ValueError, TypeError):
+                        return 0.0
+                
+                close_price = safe_float_convert(current['close'])
+                current_candle_info = f"봉:{candle_count}개{candle_time} 종가:{close_price:,.0f}원"
                 logger.info(f"[{getattr(logger, '_stock_code', 'UNKNOWN')}] {current_candle_info} | "
                            f"음봉 최대거래량 제한 - 매수 제외{baseline_info}")
             
@@ -269,7 +291,18 @@ class SignalCalculator:
                 baseline_info = f", 기준거래량: {baseline_vol:,.0f}주" if baseline_vol > 0 else ""
                 
                 candle_count = len(data) if data is not None else "N/A"
-                current_candle_info = f"봉:{candle_count}개{candle_time} 종가:{current['close']:,.0f}원"
+                # 문자열을 숫자로 변환하여 포맷팅 (쉼표 제거)
+                def safe_float_convert(value):
+                    if pd.isna(value) or value is None:
+                        return 0.0
+                    try:
+                        str_value = str(value).replace(',', '')
+                        return float(str_value)
+                    except (ValueError, TypeError):
+                        return 0.0
+                
+                close_price = safe_float_convert(current['close'])
+                current_candle_info = f"봉:{candle_count}개{candle_time} 종가:{close_price:,.0f}원"
                 logger.info(f"[{getattr(logger, '_stock_code', 'UNKNOWN')}] {current_candle_info} | "
                            f"이등분선 돌파 거래량 부족 - 매수 제외{baseline_info}")
             

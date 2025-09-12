@@ -37,19 +37,19 @@ class VolumeAnalyzer:
         if 'volume' not in data.columns or len(data) < period:
             return VolumeAnalysis(0, 0, 0, 0, 'stable', False, False, False, False)
         
-        volumes = data['volume'].values
+        volumes = data['volume'].astype(float).values
         current_volume = volumes[-1]
         
         # 기준 거래량: 당일 최대 거래량 (실시간) - 최적화: 이미 계산된 값 재사용
         if baseline_volumes is None:
             baseline_volumes = VolumeAnalyzer.calculate_daily_baseline_volume(data)
-        baseline_volume = baseline_volumes.iloc[-1]
+        baseline_volume = float(baseline_volumes.iloc[-1])
         
         # 최근 평균 거래량
         avg_recent_volume = np.mean(volumes[-period:])
         
         # 거래량 비율 계산
-        volume_ratio = current_volume / baseline_volume if baseline_volume > 0 else 0
+        volume_ratio = float(current_volume) / float(baseline_volume) if float(baseline_volume) > 0 else 0
         
         # 거래량 추세 분석
         if len(volumes) >= 3:

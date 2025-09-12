@@ -33,10 +33,10 @@ class BisectorLine:
         - 이등분선 데이터 (pandas Series) - 시간에 따라 변하는 누적 계산값
         """
         # 각 시점까지의 누적 최고가 (expanding max)
-        cumulative_high = high_data.expanding().max()
+        cumulative_high = high_data.astype(float).expanding().max()
         
         # 각 시점까지의 누적 최저가 (expanding min)
-        cumulative_low = low_data.expanding().min()
+        cumulative_low = low_data.astype(float).expanding().min()
         
         # 각 시점의 이등분선 = (그 시점까지의 최고가 + 그 시점까지의 최저가) / 2
         bisector_line = (cumulative_high + cumulative_low) / 2

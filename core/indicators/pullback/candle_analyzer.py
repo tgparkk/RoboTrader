@@ -64,7 +64,7 @@ class CandleAnalyzer:
         return len(overhead_levels) >= threshold_hits
     
     @staticmethod
-    def analyze_candle(data: pd.DataFrame, period: int = 10) -> CandleAnalysis:
+    def analyze_candle(data: pd.DataFrame, period: int = 10, prev_close: Optional[float] = None) -> CandleAnalysis:
         """캔들 분석 (변곡캔들 검증 로직 강화)"""
         if len(data) < period:
             return CandleAnalysis(False, 0, 0, 0, 0, 'stable', False, False, False)
@@ -72,15 +72,17 @@ class CandleAnalyzer:
         current = data.iloc[-1]
         
         # 기본 캔들 정보
-        is_bullish = current['close'] > current['open']
-        body_size = abs(current['close'] - current['open'])
+        is_bullish = float(current['close']) > float(current['open'])
+        body_size = abs(float(current['close']) - float(current['open']))
         
-        # 캔들 실체 크기 비율 계산 (평균가 기준)
-        avg_price = (current['high'] + current['low'] + current['close'] + current['open']) / 4
-        body_pct = (body_size / avg_price) * 100 if avg_price > 0 else 0
+        # 캔들 실체 크기 비율 계산 (실제 전일 종가 기준)
+        if prev_close is None or prev_close <= 0:
+            # prev_close가 제공되지 않았다면 직전 캔들 종가나 현재 시가 사용
+            prev_close = float(data['close'].iloc[-2]) if len(data) >= 2 else float(current['open'])
+        body_pct = (body_size / prev_close) * 100 if prev_close > 0 else 0
         
-        # 캔들 크기 계산 (high - low)
-        candle_sizes = data['high'].values - data['low'].values
+        # 캔듡 크기 계산 (high - low)
+        candle_sizes = data['high'].astype(float).values - data['low'].astype(float).values
         current_candle_size = candle_sizes[-1]
         avg_recent_candle_size = np.mean(candle_sizes[-period:])
         

@@ -47,9 +47,9 @@ class RiskDetector:
         # 장대 음봉 + 대량 거래량
         volume_analysis = VolumeAnalyzer.analyze_volume(data)
         is_large_bearish = (
-            current_candle['close'] < current_candle['open'] and  # 음봉
-            abs(current_candle['close'] - current_candle['open']) > 
-            (current_candle['high'] - current_candle['low']) * 0.6 and  # 장대
+            float(current_candle['close']) < float(current_candle['open']) and  # 음봉
+            abs(float(current_candle['close']) - float(current_candle['open'])) > 
+            (float(current_candle['high']) - float(current_candle['low'])) * 0.6 and  # 장대
             volume_analysis.is_volume_surge  # 대량거래량
         )
         
@@ -79,7 +79,7 @@ class RiskDetector:
             risk_signals.append(RiskSignal.LARGE_BEARISH_VOLUME)
         
         # 2. 이등분선 이탈 (0.2% 기준)
-        if bisector_line is not None and current['close'] < bisector_line * 0.998:
+        if bisector_line is not None and float(current['close']) < bisector_line * 0.998:
             risk_signals.append(RiskSignal.BISECTOR_BREAK)
         
         # 3. 변곡캔들 저가 이탈 (0.2% 기준) - 주석처리: 손익비로만 판단
@@ -87,11 +87,11 @@ class RiskDetector:
         #     risk_signals.append(RiskSignal.ENTRY_LOW_BREAK)
         
         # 4. 지지 저점 이탈
-        if current['close'] < recent_low:
+        if float(current['close']) < recent_low:
             risk_signals.append(RiskSignal.SUPPORT_BREAK)
         
         # 5. 목표 수익 3% 달성
-        if entry_price is not None and current['close'] >= entry_price * 1.03:
+        if entry_price is not None and float(current['close']) >= entry_price * 1.03:
             risk_signals.append(RiskSignal.TARGET_REACHED)
         
         return risk_signals

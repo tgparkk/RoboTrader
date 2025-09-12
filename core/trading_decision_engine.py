@@ -40,6 +40,17 @@ class TradingDecisionEngine:
         self.trading_manager = trading_manager
         self.api_manager = api_manager
         self.intraday_manager = intraday_manager
+    
+    def _safe_float_convert(self, value):
+        """쉼표가 포함된 문자열을 안전하게 float로 변환"""
+        if pd.isna(value) or value is None:
+            return 0.0
+        try:
+            # 문자열로 변환 후 쉼표 제거
+            str_value = str(value).replace(',', '')
+            return float(str_value)
+        except (ValueError, TypeError):
+            return 0.0
         
         # 가상 매매 설정
         self.is_virtual_mode = False  # 🆕 가상매매 모드 여부 (False: 실제매매, True: 가상매매)
@@ -104,7 +115,7 @@ class TradingDecisionEngine:
                 buy_price = price_info['buy_price']
                 if buy_price <= 0:
                     # 3/5가 계산 실패시 현재가 사용
-                    buy_price = combined_data['close'].iloc[-1]
+                    buy_price = self._safe_float_convert(combined_data['close'].iloc[-1])
                     self.logger.debug(f"⚠️ 3/5가 계산 실패, 현재가 사용: {buy_price:,.0f}원")
                 
                 max_buy_amount = self._get_max_buy_amount(trading_stock.stock_code)
@@ -139,7 +150,7 @@ class TradingDecisionEngine:
         @deprecated: generate_improved_signals에서 직접 계산하도록 변경됨
         """
         try:
-            current_price = combined_data['close'].iloc[-1]
+            current_price = self._safe_float_convert(combined_data['close'].iloc[-1])
             
             # 3/5가 계산 시도
             try:
@@ -188,59 +199,58 @@ class TradingDecisionEngine:
         
         return max_buy_amount
     
-    async def analyze_sell_decision(self, trading_stock, combined_data) -> Tuple[bool, str]:
+    async def analyze_sell_decision(self, trading_stock, combined_data=None) -> Tuple[bool, str]:
         """
-        매도 판단 분석
+        매도 판단 분석 (간단한 손절/익절 로직)
         
         Args:
             trading_stock: 거래 종목 객체
-            combined_data: 분봉 데이터
+            combined_data: 분봉 데이터 (사용하지 않음, 호환성을 위해 유지)
             
         Returns:
             Tuple[매도신호여부, 매도사유]
         """
         try:
-            if combined_data is None or len(combined_data) < 15:
-                return False, "데이터 부족"
-            
-            # 🆕 캐시된 실시간 현재가 사용 (매도 판단용)
+            # 실시간 현재가 정보만 사용 (간단한 손절/익절 로직)
             stock_code = trading_stock.stock_code
             current_price_info = self.intraday_manager.get_cached_current_price(stock_code)
             
-            if current_price_info is not None:
-                current_price = current_price_info['current_price']
-                #self.logger.debug(f"📈 {stock_code} 캐시된 실시간 현재가 사용: {current_price:,.0f}원")
-            else:
-                # 현재가 정보 없으면 분봉 데이터의 마지막 가격 사용 (폴백)
-                current_price = combined_data['close'].iloc[-1]
-                self.logger.debug(f"📊 {stock_code} 분봉 데이터 현재가 사용: {current_price:,.0f}원 (캐시 없음)")
+            if current_price_info is None:
+                return False, "실시간 현재가 정보 없음"
             
-            # 가상 포지션 정보 복원 (DB에서 미체결 포지션 조회)
-            if not trading_stock.position and self.db_manager:
-                open_positions = self.db_manager.get_virtual_open_positions()
-                stock_positions = open_positions[open_positions['stock_code'] == trading_stock.stock_code]
-                
-                if not stock_positions.empty:
-                    latest_position = stock_positions.iloc[0]
-                    buy_record_id = latest_position['id']
-                    buy_price = latest_position['buy_price']
-                    quantity = latest_position['quantity']
-                    
-                    # 가상 포지션 정보를 trading_stock에 복원
-                    trading_stock.set_virtual_buy_info(buy_record_id, buy_price, quantity)
-                    trading_stock.set_position(quantity, buy_price)
-                    
-                    self.logger.debug(f"🔄 가상 포지션 복원: {trading_stock.stock_code} {quantity}주 @{buy_price:,.0f}원")
+            current_price = current_price_info['current_price']
             
-            # 손절 조건 확인
-            stop_loss_signal, stop_reason = self._check_stop_loss_conditions(trading_stock, combined_data)
-            if stop_loss_signal:
-                return True, f"손절: {stop_reason}"
+            # 가상 포지션 정보 복원 (DB에서 미체결 포지션 조회) - 주석 처리
+            # if not trading_stock.position and self.db_manager:
+            #     open_positions = self.db_manager.get_virtual_open_positions()
+            #     stock_positions = open_positions[open_positions['stock_code'] == trading_stock.stock_code]
+            #     
+            #     if not stock_positions.empty:
+            #         latest_position = stock_positions.iloc[0]
+            #         buy_record_id = latest_position['id']
+            #         buy_price = latest_position['buy_price']
+            #         quantity = latest_position['quantity']
+            #         
+            #         # 가상 포지션 정보를 trading_stock에 복원
+            #         trading_stock.set_virtual_buy_info(buy_record_id, buy_price, quantity)
+            #         trading_stock.set_position(quantity, buy_price)
+            #         
+            #         self.logger.debug(f"🔄 가상 포지션 복원: {trading_stock.stock_code} {quantity}주 @{buy_price:,.0f}원")
             
-            # 수익실현 조건 확인 (두 전략 모두)
-            profit_signal, profit_reason = self._check_profit_target(trading_stock, current_price)
-            if profit_signal:
-                return True, profit_reason
+            # 간단한 손절/익절 조건 확인 (+3% 익절, -2% 손절)
+            stop_profit_signal, stop_reason = self._check_simple_stop_profit_conditions(trading_stock, current_price)
+            if stop_profit_signal:
+                return True, f"손익절: {stop_reason}"
+            
+            # 기존 복잡한 손절 조건 확인 (백업용)
+            # stop_loss_signal, stop_reason = self._check_stop_loss_conditions(trading_stock, combined_data)
+            # if stop_loss_signal:
+            #     return True, f"손절: {stop_reason}"
+            
+            # 수익실현 조건 확인 (복잡한 로직 - 주석 처리)
+            # profit_signal, profit_reason = self._check_profit_target(trading_stock, current_price)
+            # if profit_signal:
+            #     return True, profit_reason
             
             return False, ""
             
@@ -301,7 +311,7 @@ class TradingDecisionEngine:
                 current_price = buy_price
                 self.logger.debug(f"📊 {stock_code} 지정된 매수가로 매수: {current_price:,.0f}원")
             else:
-                current_price = combined_data['close'].iloc[-1]
+                current_price = self._safe_float_convert(combined_data['close'].iloc[-1])
                 self.logger.debug(f"📊 {stock_code} 현재가로 매수 (기본값): {current_price:,.0f}원")
                 
                 # 3/5가 계산 (별도 클래스 사용)
@@ -437,7 +447,7 @@ class TradingDecisionEngine:
                 self.logger.debug(f"📈 {stock_code} 실시간 현재가로 매도 실행: {current_price:,.0f}원")
             else:
                 # 현재가 정보 없으면 분봉 데이터의 마지막 가격 사용 (폴백)
-                current_price = combined_data['close'].iloc[-1]
+                current_price = self._safe_float_convert(combined_data['close'].iloc[-1])
                 self.logger.warning(f"📊 {stock_code} 분봉 데이터로 매도 실행: {current_price:,.0f}원 (실시간 현재가 없음)")
             
             # 가상 매수 기록 정보 가져오기
@@ -527,6 +537,35 @@ class TradingDecisionEngine:
             
         except Exception as e:
             self.logger.error(f"❌ 가상 매도 실행 오류: {e}")
+    
+    def _check_simple_stop_profit_conditions(self, trading_stock, current_price) -> Tuple[bool, str]:
+        """간단한 손절/익절 조건 확인 (매수가격 기준 +3% 익절, -2% 손절)"""
+        try:
+            if not trading_stock.position:
+                return False, ""
+            
+            # 매수가격 안전하게 변환 (current_price는 이미 float로 전달됨)
+            buy_price = self._safe_float_convert(trading_stock.position.avg_price)
+            
+            if buy_price <= 0:
+                return False, "매수가격 정보 없음"
+            
+            # 수익률 계산 (HTS 방식과 동일: 백분율로 계산)
+            profit_rate_percent = (current_price - buy_price) / buy_price * 100
+            
+            # 익절 조건: +3% 이상
+            if profit_rate_percent >= 3.0:
+                return True, f"익절 {profit_rate_percent:.1f}% (기준: +3.0%)"
+            
+            # 손절 조건: -2% 이하
+            if profit_rate_percent <= -2.0:
+                return True, f"손절 {profit_rate_percent:.1f}% (기준: -2.0%)"
+            
+            return False, ""
+            
+        except Exception as e:
+            self.logger.error(f"❌ 간단한 손절/익절 조건 확인 오류: {e}")
+            return False, ""
     
     def _check_stop_loss_conditions(self, trading_stock, data) -> Tuple[bool, str]:
         """손절 조건 확인 (신호강도별 손익비 2:1 적용)"""
@@ -700,11 +739,11 @@ class TradingDecisionEngine:
                 reasons = ' | '.join(signal_strength.reasons)
                 signal_desc = f"{signal_strength.signal_type.value} (신뢰도: {signal_strength.confidence:.0f}%)"
                 
-                # 가격 정보 생성
+                # 가격 정보 생성 (안전한 타입 변환)
                 price_info = {
-                    'buy_price': signal_strength.buy_price,
-                    'entry_low': signal_strength.entry_low,
-                    'target_profit': signal_strength.target_profit
+                    'buy_price': self._safe_float_convert(signal_strength.buy_price),
+                    'entry_low': self._safe_float_convert(signal_strength.entry_low),
+                    'target_profit': self._safe_float_convert(signal_strength.target_profit)
                 }
                 
                 # 🆕 매수 신호 발생 상세 로깅 (데이터 정보 포함)
@@ -724,13 +763,19 @@ class TradingDecisionEngine:
                     for i in range(2):
                         idx = -(2-i)
                         row = data_3min.iloc[idx]
-                        self.logger.info(f"  - 3분봉[{i+1}]: {row['datetime'].strftime('%H:%M')} C:{row['close']:,.0f} V:{row['volume']:,}")
+                        # 문자열을 숫자로 변환하여 포맷팅
+                        close_price = self._safe_float_convert(row['close'])
+                        volume = int(self._safe_float_convert(row['volume']))
+                        self.logger.info(f"  - 3분봉[{i+1}]: {row['datetime'].strftime('%H:%M')} C:{close_price:,.0f} V:{volume:,}")
                 
                 self.logger.info(f"💡 신호 상세:")
                 self.logger.info(f"  - 신호 유형: {signal_desc}")
                 self.logger.info(f"  - 신호 이유: {reasons}")
-                self.logger.info(f"  - 매수 가격: {signal_strength.buy_price:,.0f}원 (3/5가)")
-                self.logger.info(f"  - 진입 저가: {signal_strength.entry_low:,.0f}원")
+                # 안전한 타입 변환
+                buy_price = self._safe_float_convert(signal_strength.buy_price)
+                entry_low = self._safe_float_convert(signal_strength.entry_low)
+                self.logger.info(f"  - 매수 가격: {buy_price:,.0f}원 (3/5가)")
+                self.logger.info(f"  - 진입 저가: {entry_low:,.0f}원")
                 self.logger.info(f"  - 목표수익률: {signal_strength.target_profit:.1f}%")
                 
                 return True, f"{signal_desc} - {reasons}", price_info
