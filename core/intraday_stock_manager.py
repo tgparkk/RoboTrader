@@ -181,18 +181,31 @@ class IntradayStockManager:
             self.logger.info(f"📈 {stock_code} 전체 거래시간 분봉 데이터 수집 시작")
             self.logger.info(f"   선정 시간: {selected_time.strftime('%H:%M:%S')}")
             
-            # 당일 08:00부터 선정시점까지의 전체 거래시간 데이터 수집
+            # 당일 09:00부터 선정시점까지의 전체 거래시간 데이터 수집
             target_date = selected_time.strftime("%Y%m%d")
             target_hour = selected_time.strftime("%H%M%S")
             
-            #self.logger.info(f"📈 {stock_code} 당일 전체 데이터 수집 시작 (09:00 ~ {target_hour})")
-            
-            historical_data = await get_full_trading_day_data_async(
-                stock_code=stock_code,
-                target_date=target_date,
-                selected_time=target_hour,
-                start_time="090000"  # 09:00부터 시작 (KRX 정규장만)
-            )
+            # 장 초반(09:10 이전)에는 더 넓은 시간 범위로 수집하여 데이터 부족 문제 해결
+            current_hour = selected_time.strftime("%H%M")
+            if current_hour <= "0910":  # 09:10 이전
+                # 장 초반에는 09:00부터 09:15까지 수집하여 충분한 데이터 확보
+                extended_hour = "091500"  # 09:15까지 확장
+                self.logger.info(f"📈 {stock_code} 장초반 전체 데이터 수집: 09:00 ~ {extended_hour}")
+                
+                historical_data = await get_full_trading_day_data_async(
+                    stock_code=stock_code,
+                    target_date=target_date,
+                    selected_time=extended_hour,
+                    start_time="090000"  # 09:00부터 시작 (KRX 정규장만)
+                )
+            else:
+                # 장 초반이 아닌 경우 기존 로직 사용
+                historical_data = await get_full_trading_day_data_async(
+                    stock_code=stock_code,
+                    target_date=target_date,
+                    selected_time=target_hour,
+                    start_time="090000"  # 09:00부터 시작 (KRX 정규장만)
+                )
             
             if historical_data is None or historical_data.empty:
                 # 실패 시 1분씩 앞으로 이동하여 재시도
@@ -499,7 +512,7 @@ class IntradayStockManager:
             if latest_minute_data is None:
                 # 장초반 구간에서 실시간 업데이트 실패 시 전체 재수집 시도
                 current_hour = current_time.strftime("%H%M")
-                if current_hour <= "0910":  # 09:10 이전
+                if current_hour <= "0915":  # 09:15 이전까지 확장
                     self.logger.warning(f"⚠️ {stock_code} 장초반 실시간 업데이트 실패, 전체 재수집 시도")
                     return await self._collect_historical_data(stock_code)
                 else:
@@ -556,12 +569,13 @@ class IntradayStockManager:
                 self.logger.debug(f"❌ {stock_code} 데이터 부족: {data_count}/15")
                 return False
             
-            # 시작 시간 체크 (09:00대 시작 확인)
+            # 시작 시간 체크 (09:00대 시작 확인) - 장 초반에는 완화
             if 'time' in combined_data.columns:
                 start_time_str = str(combined_data.iloc[0]['time']).zfill(6)
                 start_hour = int(start_time_str[:2])
                 
-                if start_hour != 9:  # 09시만
+                # 09:00-09:15 구간에서는 09:00 시작이 아니어도 허용 (데이터 부족 문제 해결)
+                if start_hour < 9 or start_hour > 9:
                     self.logger.debug(f"❌ {stock_code} 시작 시간 문제: {start_time_str} (09시 아님)")
                     return False
                     
@@ -569,7 +583,8 @@ class IntradayStockManager:
                 start_dt = combined_data.iloc[0]['datetime']
                 if hasattr(start_dt, 'hour'):
                     start_hour = start_dt.hour
-                    if start_hour != 9:
+                    # 09:00-09:15 구간에서는 09:00 시작이 아니어도 허용
+                    if start_hour < 9 or start_hour > 9:
                         self.logger.debug(f"❌ {stock_code} 시작 시간 문제: {start_hour}시 (09시 아님)")
                         return False
             
