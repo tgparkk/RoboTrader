@@ -354,19 +354,19 @@ class PullbackCandlePattern:
                                           PullbackUtils.get_bisector_status(current['close'], bisector_line) if bisector_line else BisectorStatus.BROKEN)
                     return (result, []) if return_risk_signals else result
             
-            # 1-2. 당일 중 +2.5% 이상 봉이 나왔는지 확인
+            # 1-2. 당일 중 +1.5% 이상 봉이 나왔는지 확인
             has_large_candle = False
             for i, row in data.iterrows():
                 # 실제 전일 종가 기준으로 캔들 비율 계산
                 baseline_price = prev_close if prev_close and prev_close > 0 else (float(data['close'].iloc[0]) if len(data) > 0 else float(row['open']))
                 candle_body_pct = abs(float(row['close']) - float(row['open'])) / baseline_price * 100 if baseline_price > 0 else 0
-                if candle_body_pct >= 2.5:  # 2.5% 이상 몸통
+                if candle_body_pct >= 1.5:  # 1.5% 이상 몸통
                     has_large_candle = True
                     break
             
             if not has_large_candle:
                 result = SignalStrength(SignalType.AVOID, 0, 0,
-                                      ["2.5%이상봉없음-매수금지"],
+                                      ["1.5%이상봉없음-매수금지"],
                                       volume_analysis.volume_ratio,
                                       PullbackUtils.get_bisector_status(current['close'], bisector_line) if bisector_line else BisectorStatus.BROKEN)
                 return (result, []) if return_risk_signals else result
