@@ -351,6 +351,23 @@ class PullbackCandlePattern:
                                           PullbackUtils.get_bisector_status(current['close'], bisector_line) if bisector_line else BisectorStatus.BROKEN)
                     return (result, []) if return_risk_signals else result
             
+            # 1-2. 돌파봉 몸통이 완전히 이등분선 아래에 있으면 조기 종료 (성능 최적화)
+            if bisector_line is not None:
+                current_open = float(current['open'])
+                current_close = float(current['close'])
+                current_bisector = float(bisector_line)
+                
+                # 돌파봉 몸통의 최고점 = max(시가, 종가)
+                breakout_body_high = max(current_open, current_close)
+                
+                # 돌파봉 몸통이 완전히 이등분선 아래에 있으면 패턴 무효
+                if breakout_body_high < current_bisector:
+                    result = SignalStrength(SignalType.AVOID, 0, 0,
+                                          [f"돌파봉몸통최고점({breakout_body_high:.0f})이 이등분선({current_bisector:.0f}) 아래"],
+                                          volume_analysis.volume_ratio,
+                                          BisectorStatus.BROKEN)
+                    return (result, []) if return_risk_signals else result
+            
             # 🚀 성능 최적화: 벡터화된 대형 캔들 확인
             baseline_price = prev_close if prev_close and prev_close > 0 else (float(data['close'].iloc[0]) if len(data) > 0 else float(data['open'].iloc[0]))
             

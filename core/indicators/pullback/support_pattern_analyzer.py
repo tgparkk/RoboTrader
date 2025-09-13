@@ -168,13 +168,13 @@ class SupportPatternAnalyzer:
                     reasons=["현재 캔들 고가가 직전봉보다 낮아 고가 돌파 아님"]
                 )
             
-            # 1-4. 거래량 돌파 확인 (돌파의 핵심 조건)
-            if current_volume <= prev_volume:
-                return SupportPatternResult(
-                    has_pattern=False, uptrend_phase=None, decline_phase=None, support_phase=None,
-                    breakout_candle=None, entry_price=None, confidence=0.0, 
-                    reasons=["현재 캔들 거래량이 직전봉보다 낮아 거래량 돌파 아님"]
-                )
+        # 1-4. 거래량 돌파 확인 (돌파의 핵심 조건)
+        if current_volume <= prev_volume:
+            return SupportPatternResult(
+                has_pattern=False, uptrend_phase=None, decline_phase=None, support_phase=None,
+                breakout_candle=None, entry_price=None, confidence=0.0, 
+                reasons=["현재 캔들 거래량이 직전봉보다 낮아 거래량 돌파 아님"]
+            )
         
         # 2. 고성능 3중 반복문으로 상승-하락-지지 구간 탐색  
         # 🔥 성능 최적화 2: 구간 길이 제한으로 반복 횟수 대폭 감소
