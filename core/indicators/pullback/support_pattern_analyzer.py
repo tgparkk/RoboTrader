@@ -1,0 +1,540 @@
+"""
+지지 패턴 분석기 - 새로운 로직 구현
+상승 기준거래량 -> 저거래량 하락 -> 지지 구간 -> 돌파 양봉 패턴 감지
+"""
+
+import pandas as pd
+import numpy as np
+from typing import Dict, Optional, Tuple, List, NamedTuple
+from dataclasses import dataclass
+import logging
+
+@dataclass
+class UptrrendPhase:
+    """상승 구간 정보"""
+    start_idx: int
+    end_idx: int
+    max_volume: float  # 상승 구간의 최대 거래량 (기준거래량)
+    volume_avg: float  # 상승 구간 평균 거래량
+    price_gain: float  # 상승률
+    high_price: float  # 상승 구간의 최고가
+
+@dataclass
+class DeclinePhase:
+    """하락 구간 정보"""
+    start_idx: int
+    end_idx: int
+    decline_pct: float  # 하락률 (상승 고점 대비)
+    max_decline_price: float  # 최저점 가격
+    avg_volume_ratio: float  # 기준거래량 대비 평균 거래량 비율
+    candle_count: int  # 하락 구간 캔들 수
+
+@dataclass
+class SupportPhase:
+    """지지 구간 정보"""
+    start_idx: int
+    end_idx: int
+    support_price: float  # 지지가격 (평균)
+    price_volatility: float  # 가격 변동성 (표준편차)
+    avg_volume_ratio: float  # 기준거래량 대비 평균 거래량 비율
+    candle_count: int  # 지지 구간 캔들 수
+
+@dataclass
+class BreakoutCandle:
+    """돌파 양봉 정보"""
+    idx: int
+    body_size: float  # 몸통 크기
+    volume: float
+    volume_ratio_vs_prev: float  # 직전 봉 대비 거래량 증가율
+    body_increase_vs_support: float  # 지지구간 대비 몸통 증가율
+    
+@dataclass
+class SupportPatternResult:
+    """지지 패턴 분석 결과"""
+    has_pattern: bool
+    uptrend_phase: Optional[UptrrendPhase]
+    decline_phase: Optional[DeclinePhase]  # 하락 구간 추가
+    support_phase: Optional[SupportPhase]
+    breakout_candle: Optional[BreakoutCandle]
+    entry_price: Optional[float]  # 3/5 가격
+    confidence: float  # 신뢰도 점수 (0-100)
+    reasons: List[str]  # 판단 근거
+
+
+class SupportPatternAnalyzer:
+    """지지 패턴 분석기"""
+    
+    def __init__(self, 
+                 uptrend_min_gain: float = 0.05,  # 상승 구간 최소 상승률 5%
+                 decline_min_pct: float = 0.01,  # 하락 구간 최소 하락률 1.0%
+                 support_volume_threshold: float = 0.25,  # 지지구간 거래량 임계값 (기준거래량의 1/4)
+                 support_volatility_threshold: float = 0.005,  # 지지구간 가격변동 임계값 0.5%
+                 breakout_body_increase: float = 0.5,  # 돌파양봉 몸통 증가율 50%
+                 lookback_period: int = 200):  # 분석 기간 (당일 전체 3분봉 커버)
+        self.uptrend_min_gain = uptrend_min_gain
+        self.decline_min_pct = decline_min_pct
+        self.support_volume_threshold = support_volume_threshold
+        self.support_volatility_threshold = support_volatility_threshold
+        self.breakout_body_increase = breakout_body_increase
+        self.lookback_period = lookback_period
+    
+    def analyze(self, data: pd.DataFrame) -> SupportPatternResult:
+        """지지 패턴 분석"""
+        # 전처리 최적화: 한 번만 데이터 타입 변환 수행
+        data = self._preprocess_data(data)
+        
+        if len(data) < 5:  # 4단계 패턴을 위해 최소 5개 캔들로 완화 (상승2+하락1+지지1+돌파1)
+            return SupportPatternResult(
+                has_pattern=False, uptrend_phase=None, decline_phase=None, support_phase=None, 
+                breakout_candle=None, entry_price=None, confidence=0.0, reasons=["데이터 부족 (4단계 패턴은 최소 5개 캔들 필요)"]
+            )
+        
+        # 모든 가능한 시나리오에서 최적 패턴 검사
+        return self._analyze_all_scenarios(data)
+    
+    
+    def _preprocess_data(self, data: pd.DataFrame) -> pd.DataFrame:
+        """전처리 최적화: 데이터 타입 변환을 한 번만 수행"""
+        data = data.copy()
+        numeric_columns = ['open', 'high', 'low', 'close', 'volume']
+        
+        # NumPy 배열로 한 번에 변환하여 성능 향상
+        for col in numeric_columns:
+            if col in data.columns:
+                # 문자열에서 쉼표 제거 후 float 변환
+                if data[col].dtype == 'object':
+                    data[col] = data[col].astype(str).str.replace(',', '').astype(float)
+                else:
+                    data[col] = data[col].astype(float)
+        
+        return data
+    
+    def _analyze_all_scenarios(self, data: pd.DataFrame) -> SupportPatternResult:
+        """모든 가능한 시간 조합에서 4단계 패턴 검사 (고성능 최적화)"""
+        best_pattern = None
+        best_confidence = 0.0
+        
+        # 🔥 성능 최적화 1: 데이터 크기 제한 (최근 50개 캔들만 분석)
+        if len(data) > 50:
+            data = data.tail(50)
+        
+        # 최소 데이터 길이 확인
+        if len(data) < 5:  # 4단계 패턴을 위해 최소 5개 캔들 필요
+            return SupportPatternResult(
+                has_pattern=False, uptrend_phase=None, decline_phase=None, support_phase=None,
+                breakout_candle=None, entry_price=None, confidence=0.0, 
+                reasons=["데이터 부족 (4단계 패턴은 최소 5개 캔들 필요)"]
+            )
+        
+        # 돌파 캔들은 마지막 캔들로 고정 (현재시간)
+        breakout_idx = len(data) - 1
+        
+        # 1. 돌파양봉 사전 검증 (양봉 + 상승 돌파 확인)
+        current_candle = data.iloc[breakout_idx]
+        prev_candle = data.iloc[breakout_idx - 1] if breakout_idx > 0 else None
+        
+        # 전처리되어 이미 float이므로 직접 접근
+        current_close = current_candle['close']
+        current_open = current_candle['open']
+        current_high = current_candle['high']
+        current_volume = current_candle['volume']
+        
+        # 1-1. 양봉 확인
+        if current_close <= current_open:
+            return SupportPatternResult(
+                has_pattern=False, uptrend_phase=None, decline_phase=None, support_phase=None,
+                breakout_candle=None, entry_price=None, confidence=0.0, 
+                reasons=["현재 캔들이 음봉이므로 돌파 불가"]
+            )
+        
+        # 1-2. 상승 돌파 확인 (현재봉 > 직전봉)
+        if prev_candle is not None:
+            prev_close = prev_candle['close']
+            prev_high = prev_candle['high']
+            prev_volume = prev_candle['volume']
+            
+            if current_close <= prev_close:
+                return SupportPatternResult(
+                    has_pattern=False, uptrend_phase=None, decline_phase=None, support_phase=None,
+                    breakout_candle=None, entry_price=None, confidence=0.0, 
+                    reasons=["현재 캔들이 직전봉보다 낮아 상승 돌파 아님"]
+                )
+            
+            # 1-3. 고가 돌파 확인 (더 강한 조건)
+            if current_high <= prev_high:
+                return SupportPatternResult(
+                    has_pattern=False, uptrend_phase=None, decline_phase=None, support_phase=None,
+                    breakout_candle=None, entry_price=None, confidence=0.0, 
+                    reasons=["현재 캔들 고가가 직전봉보다 낮아 고가 돌파 아님"]
+                )
+            
+            # 1-4. 거래량 돌파 확인 (돌파의 핵심 조건)
+            if current_volume <= prev_volume:
+                return SupportPatternResult(
+                    has_pattern=False, uptrend_phase=None, decline_phase=None, support_phase=None,
+                    breakout_candle=None, entry_price=None, confidence=0.0, 
+                    reasons=["현재 캔들 거래량이 직전봉보다 낮아 거래량 돌파 아님"]
+                )
+        
+        # 2. 고성능 3중 반복문으로 상승-하락-지지 구간 탐색  
+        # 🔥 성능 최적화 2: 구간 길이 제한으로 반복 횟수 대폭 감소
+        max_uptrend_length = min(20, len(data) - 4)  # 상승구간 최대 20개 캔들
+        
+        for uptrend_start in range(max(0, len(data) - 25), len(data) - 4):  # 최근 25개만 탐색
+            for uptrend_end in range(uptrend_start + 1, min(uptrend_start + max_uptrend_length, len(data) - 3)):  # 최소 2개 캔들
+                
+                # 상승구간 검증 - 메모리 복사 최소화
+                uptrend = self._validate_uptrend(data, uptrend_start, uptrend_end)
+                if not uptrend:
+                    continue
+                
+                # 하락구간 탐색 (상승구간 이후)
+                max_decline_end = min(uptrend_end + 12, len(data) - 2)  # 하락구간 제한
+                for decline_start in range(uptrend_end + 1, min(uptrend_end + 6, len(data) - 2)):
+                    for decline_end in range(decline_start + 1, min(decline_start + 12, max_decline_end)):  # 최소 2개, 최대 12개 캔들
+                        
+                        # 하락구간 검증 - 메모리 복사 최소화
+                        decline = self._validate_decline(data, uptrend, decline_start, decline_end)
+                        if not decline:
+                            continue
+                        
+                        # 지지구간 탐색 (하락구간 이후) - 🔥 성능 최적화 3: 지지구간 제한
+                        max_support_start = min(decline_end + 6, len(data) - 1)  # 지지구간 시작 제한
+                        for support_start in range(decline_end + 1, max_support_start):
+                            for support_end in range(support_start, min(support_start + 10, len(data) - 1)):  # 최대 10개 캔들
+                                
+                                # 지지구간 검증 - 메모리 복사 최소화
+                                support = self._validate_support(data, uptrend, decline, support_start, support_end)
+                                if not support:
+                                    continue
+                                
+                                # 3. 돌파양봉 검증 (마지막 캔들 고정)
+                                breakout = self._validate_breakout(data, support, uptrend.max_volume, breakout_idx)
+                                if not breakout:
+                                    continue
+                                
+                                # 4. 완전한 4단계 패턴 발견 - 신뢰도 계산
+                                confidence = self._calculate_confidence(uptrend, decline, support, breakout)
+                                
+                                # 5. 더 좋은 패턴이면 업데이트
+                                if confidence > best_confidence:
+                                    best_confidence = confidence
+                                    entry_price = self._calculate_entry_price(data, breakout)
+                                    reasons = [
+                                        f"상승구간: 인덱스{uptrend_start}~{uptrend_end} +{uptrend.price_gain:.1%}",
+                                        f"하락구간: 인덱스{decline_start}~{decline_end} -{decline.decline_pct:.1%}",
+                                        f"지지구간: 인덱스{support_start}~{support_end} {support.candle_count}개봉",
+                                        f"돌파양봉: 인덱스{breakout_idx} 신뢰도{confidence:.1f}%",
+                                        f"고성능최적화"
+                                    ]
+                                    
+                                    best_pattern = SupportPatternResult(
+                                        has_pattern=True,
+                                        uptrend_phase=uptrend,
+                                        decline_phase=decline,
+                                        support_phase=support,
+                                        breakout_candle=breakout,
+                                        entry_price=entry_price,
+                                        confidence=confidence,
+                                        reasons=reasons
+                                    )
+                                    
+                                    # 🔥 성능 최적화 4: 조기 종료 (80% 이상 신뢰도면 즉시 종료)
+                                    if confidence >= 80.0:
+                                        return best_pattern
+        
+        return best_pattern or SupportPatternResult(
+            has_pattern=False, uptrend_phase=None, decline_phase=None, support_phase=None,
+            breakout_candle=None, entry_price=None, confidence=0.0, 
+            reasons=["모든 시나리오에서 4단계 패턴 미발견"]
+        )
+    
+    def _validate_uptrend(self, data: pd.DataFrame, start_idx: int, end_idx: int) -> Optional[UptrrendPhase]:
+        """상승구간 검증 - 메모리 복사 최소화"""
+        if end_idx - start_idx + 1 < 2:  # 최소 2개 캔들
+            return None
+        
+        # 직접 인덱스 접근으로 메모리 복사 제거 (전처리되어 float이므로 safe_float 불필요)
+        start_price = data.iloc[start_idx]['close']
+        end_price = data.iloc[end_idx]['close']
+        
+        if start_price <= 0:  # 0으로 나누기 방지
+            return None
+            
+        price_gain = (end_price / start_price - 1)
+        
+        if price_gain < self.uptrend_min_gain:  # 최소 상승률 미달
+            return None
+        
+        # 직접 인덱스 접근으로 거래량 계산
+        volumes = data.iloc[start_idx:end_idx+1]['volume'].values
+        max_volume = volumes.max() if len(volumes) > 0 else 0
+        avg_volume = volumes.mean() if len(volumes) > 0 else 0
+        
+        # 직접 인덱스 접근으로 고점 가격 계산
+        highs = data.iloc[start_idx:end_idx+1]['high'].values
+        high_price = highs.max() if len(highs) > 0 else end_price
+        
+        return UptrrendPhase(
+            start_idx=start_idx,
+            end_idx=end_idx,
+            max_volume=max_volume,
+            volume_avg=avg_volume,
+            price_gain=price_gain,
+            high_price=high_price
+        )
+    
+    def _validate_decline(self, data: pd.DataFrame, uptrend: UptrrendPhase, start_idx: int, end_idx: int) -> Optional[DeclinePhase]:
+        """하락구간 검증 - 메모리 복사 최소화"""
+        if end_idx - start_idx + 1 < 2:  # 최소 2개 캔들
+            return None
+        
+        # 직접 인덱스 접근으로 메모리 복사 제거
+        uptrend_high_price = data.iloc[start_idx]['close']  # 하락 시작가
+        closes = data.iloc[start_idx:end_idx+1]['close'].values
+        min_price = closes.min() if len(closes) > 0 else uptrend_high_price
+        
+        if uptrend_high_price <= 0:  # 0으로 나누기 방지
+            return None
+        
+        # 첫 하락봉이 직전봉(상승구간 마지막 봉)과 같거나 아래에 있어야 함
+        first_decline_close = data.iloc[start_idx]['close']
+        if first_decline_close > uptrend_high_price:  # 첫 하락봉이 직전봉보다 높으면 하락이 아님
+            return None
+            
+        decline_pct = (uptrend_high_price - min_price) / uptrend_high_price
+        
+        if decline_pct < self.decline_min_pct:  # 최소 하락률 미달
+            return None
+        
+        # 직접 인덱스 접근으로 거래량 비율 계산
+        volumes = data.iloc[start_idx:end_idx+1]['volume'].values
+        avg_volume = volumes.mean() if len(volumes) > 0 else 0
+        avg_volume_ratio = avg_volume / uptrend.max_volume if uptrend.max_volume > 0 else 0
+        
+        return DeclinePhase(
+            start_idx=start_idx,
+            end_idx=end_idx,
+            decline_pct=decline_pct,
+            max_decline_price=min_price,
+            avg_volume_ratio=avg_volume_ratio,
+            candle_count=end_idx - start_idx + 1
+        )
+    
+    def _validate_support(self, data: pd.DataFrame, uptrend: UptrrendPhase, decline: DeclinePhase, start_idx: int, end_idx: int) -> Optional[SupportPhase]:
+        """지지구간 검증 - 메모리 복사 최소화"""
+        if end_idx - start_idx + 1 < 1:  # 최소 1개 캔들
+            return None
+        
+        # 직접 인덱스 접근으로 거래량 비율 계산
+        volumes = data.iloc[start_idx:end_idx+1]['volume'].values
+        avg_volume = volumes.mean() if len(volumes) > 0 else 0
+        avg_volume_ratio = avg_volume / uptrend.max_volume if uptrend.max_volume > 0 else 0
+        
+        if avg_volume_ratio > self.support_volume_threshold:  # 거래량이 너무 높음
+            return None
+        
+        # 직접 인덱스 접근으로 지지가격 계산
+        closes = data.iloc[start_idx:end_idx+1]['close'].values
+        support_price = closes.mean() if len(closes) > 0 else 0
+        
+        # 상승구간 고점과의 가격 차이 확인 (최소 2% 이상 떨어져야 함)
+        uptrend_high_price = uptrend.high_price
+        if uptrend_high_price > 0:
+            price_diff_ratio = (uptrend_high_price - support_price) / uptrend_high_price
+            if price_diff_ratio < 0.02:  # 상승구간 고점 대비 2% 미만 하락
+                return None
+        
+        # NumPy로 가격 변동성 계산
+        if len(closes) > 1 and support_price > 0:
+            price_volatility = closes.std() / support_price
+        else:
+            price_volatility = 0.0
+        
+        if price_volatility > self.support_volatility_threshold:  # 변동성이 너무 높음
+            return None
+        
+        return SupportPhase(
+            start_idx=start_idx,
+            end_idx=end_idx,
+            support_price=support_price,
+            avg_volume_ratio=avg_volume_ratio,
+            price_volatility=price_volatility,
+            candle_count=end_idx - start_idx + 1
+        )
+    
+    def _validate_breakout(self, data: pd.DataFrame, support: SupportPhase, max_volume: float, breakout_idx: int) -> Optional[BreakoutCandle]:
+        """돌파양봉 검증"""
+        if breakout_idx >= len(data):
+            return None
+        
+        # 직접 인덱스 접근으로 돌파봉 데이터 처리 (전처리되어 float이므로 safe_float 불필요)
+        breakout_close = data.iloc[breakout_idx]['close']
+        breakout_open = data.iloc[breakout_idx]['open']
+        breakout_volume = data.iloc[breakout_idx]['volume']
+        
+        # 양봉 확인
+        if breakout_close <= breakout_open:
+            return None
+        
+        # 직접 인덱스 접근으로 지지구간 몸통 계산 (메모리 복사 제거)
+        support_closes = data.iloc[support.start_idx:support.end_idx+1]['close'].values
+        support_opens = data.iloc[support.start_idx:support.end_idx+1]['open'].values
+        support_bodies = abs(support_closes - support_opens)
+        support_avg_body = support_bodies.mean() if len(support_bodies) > 0 else 0
+        
+        # 돌파봉 몸통
+        breakout_body = abs(breakout_close - breakout_open)
+        
+        # 직접 인덱스 접근으로 직전봉 몸통 계산
+        if breakout_idx > 0:
+            prev_open = data.iloc[breakout_idx - 1]['open']
+            prev_close = data.iloc[breakout_idx - 1]['close']
+            prev_body = abs(prev_close - prev_open)
+            prev_body_mid = prev_body / 2  # 직전봉 몸통의 중간 높이
+            prev_body_5_3 = prev_body * (5/3)  # 직전봉 몸통의 5/3 크기
+            
+            # 돌파봉 조건: 
+            # 1. 시가가 직전봉 몸통 중간보다 위에 있거나
+            # 2. 종가가 직전봉 몸통의 5/3 이상이어야 함
+            # 직접 인덱스 접근으로 빠른 계산
+            prev_low = data.iloc[breakout_idx - 1]['low']
+            prev_high = data.iloc[breakout_idx - 1]['high']
+            
+            # 직전봉 몸통 중간 높이 위치 계산
+            if prev_close > prev_open:  # 양봉인 경우
+                prev_body_mid_price = prev_open + prev_body_mid
+            else:  # 음봉인 경우
+                prev_body_mid_price = prev_close + prev_body_mid
+            
+            # 조건 확인
+            condition1 = breakout_open > prev_body_mid_price  # 시가가 직전봉 몸통 중간보다 위
+            condition2 = breakout_body >= prev_body_5_3  # 돌파봉 몸통이 직전봉 몸통의 5/3 이상
+            
+            if not (condition1 or condition2):
+                return None
+        else:
+            # 직전봉이 없으면 기존 조건만 적용
+            pass
+        
+        # 몸통 증가율
+        body_increase = (breakout_body / support_avg_body - 1) if support_avg_body > 0 else 0
+        
+        if body_increase < self.breakout_body_increase:  # 몸통 증가 부족
+            return None
+        
+        # 직접 인덱스 접근으로 거래량 비율 계산
+        prev_volume = data.iloc[breakout_idx-1]['volume'] if breakout_idx > 0 else max_volume
+        volume_ratio_vs_prev = (breakout_volume / prev_volume - 1) if prev_volume > 0 else 0
+        
+        return BreakoutCandle(
+            idx=breakout_idx,
+            body_size=breakout_body,
+            volume=breakout_volume,
+            body_increase_vs_support=body_increase,
+            volume_ratio_vs_prev=volume_ratio_vs_prev
+        )
+    
+    
+    def _calculate_entry_price(self, data: pd.DataFrame, breakout: BreakoutCandle) -> float:
+        """3/5 진입가격 계산"""
+        candle = data.iloc[breakout.idx]
+        
+        # 3/5 가격 = 저가 + (고가 - 저가) * 0.6
+        low_price = float(candle['low'])
+        high_price = float(candle['high'])
+        entry_price = low_price + (high_price - low_price) * 0.6
+        
+        return entry_price
+    
+    def _calculate_confidence(self, uptrend: UptrrendPhase, decline: DeclinePhase, support: SupportPhase, breakout: BreakoutCandle) -> float:
+        """신뢰도 점수 계산 (0-100)"""
+        # 4단계 패턴이 모두 완성되면 기본 75점에서 시작
+        confidence = 75.0
+        
+        # 1. 상승 구간 품질 (추가 10점)
+        if uptrend.price_gain >= 0.05:  # 5% 이상 상승
+            confidence += 8
+        elif uptrend.price_gain >= 0.03:  # 3% 이상 상승
+            confidence += 4
+        
+        if uptrend.max_volume > uptrend.volume_avg * 1.5:  # 최대거래량이 평균의 1.5배 이상
+            confidence += 2
+        
+        # 2. 하락 구간 품질 (추가 8점)
+        if decline.decline_pct >= 0.03:  # 3% 이상 하락
+            confidence += 5
+        elif decline.decline_pct >= 0.015:  # 1.5% 이상 하락
+            confidence += 2
+        
+        if decline.avg_volume_ratio <= 0.5:  # 하락시 거래량이 기준거래량 50% 이하 (매물부담 적음)
+            confidence += 3
+        
+        # 3. 지지 구간 품질 (추가 7점)
+        if support.candle_count >= 3:  # 3개 이상 봉
+            confidence += 2
+        
+        if support.avg_volume_ratio <= 0.25:  # 거래량 비율 25% 이하
+            confidence += 3
+        
+        if support.price_volatility <= 0.003:  # 가격변동성 0.3% 이하
+            confidence += 2
+        
+        # 4. 돌파 양봉 품질 (추가 10점)
+        if breakout.body_increase_vs_support >= 0.8:  # 80% 이상 증가
+            confidence += 7
+        elif breakout.body_increase_vs_support >= 0.5:  # 50% 이상 증가
+            confidence += 4
+        
+        if breakout.volume_ratio_vs_prev >= 0.2:  # 20% 이상 거래량 증가
+            confidence += 3
+        
+        return min(confidence, 100.0)
+
+    def get_debug_info(self, data: pd.DataFrame) -> Dict:
+        """디버그 정보 반환"""
+        result = self.analyze(data)
+        
+        debug_info = {
+            'has_pattern': result.has_pattern,
+            'confidence': result.confidence,
+            'reasons': result.reasons
+        }
+        
+        if result.uptrend_phase:
+            debug_info['uptrend'] = {
+                'start_idx': result.uptrend_phase.start_idx,
+                'end_idx': result.uptrend_phase.end_idx, 
+                'price_gain': f"{result.uptrend_phase.price_gain:.2%}",
+                'max_volume': f"{result.uptrend_phase.max_volume:,.0f}"
+            }
+        
+        if result.decline_phase:
+            debug_info['decline'] = {
+                'start_idx': result.decline_phase.start_idx,
+                'end_idx': result.decline_phase.end_idx,
+                'decline_pct': f"{result.decline_phase.decline_pct:.2%}",
+                'max_decline_price': f"{result.decline_phase.max_decline_price:,.0f}",
+                'candle_count': result.decline_phase.candle_count
+            }
+        
+        if result.support_phase:
+            debug_info['support'] = {
+                'start_idx': result.support_phase.start_idx,
+                'end_idx': result.support_phase.end_idx,
+                'candle_count': result.support_phase.candle_count,
+                'avg_volume_ratio': f"{result.support_phase.avg_volume_ratio:.1%}",
+                'price_volatility': f"{result.support_phase.price_volatility:.3%}"
+            }
+        
+        if result.breakout_candle:
+            debug_info['breakout'] = {
+                'idx': result.breakout_candle.idx,
+                'body_increase': f"{result.breakout_candle.body_increase_vs_support:.1%}",
+                'volume_increase': f"{result.breakout_candle.volume_ratio_vs_prev:.1%}"
+            }
+            
+        if result.entry_price:
+            debug_info['entry_price'] = f"{result.entry_price:,.0f}"
+        
+        return debug_info
