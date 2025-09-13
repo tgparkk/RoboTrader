@@ -39,13 +39,17 @@ def generate_date_range(start_date, end_date):
 
 def run_signal_replay(date, time_range="9:00-16:00"):
     """지정된 날짜에 대해 signal_replay 실행"""
+    # signal_replay_log 폴더 생성
+    log_dir = "signal_replay_log"
+    os.makedirs(log_dir, exist_ok=True)
+    
     # 시간 범위를 파일명 형식으로 변환 (9:00-16:00 -> 9_9_0)
     start_time = time_range.split('-')[0]
     hour = start_time.split(':')[0]
     minute = start_time.split(':')[1] if ':' in start_time else '0'
     time_parts = f"{hour}_{minute}_0"
     
-    txt_filename = f"signal_new2_replay_{date}_{time_parts}.txt"
+    txt_filename = os.path.join(log_dir, f"signal_new2_replay_{date}_{time_parts}.txt")
     
     # 명령어 구성
     cmd = [
@@ -55,7 +59,8 @@ def run_signal_replay(date, time_range="9:00-16:00"):
         '--txt-path', txt_filename
     ]
     
-    print(f"🔄 실행 중: {date} ({txt_filename})")
+    print(f"🔄 실행 중: {date}")
+    print(f"   출력 파일: {txt_filename}")
     print(f"   명령어: {' '.join(cmd)}")
     
     try:

@@ -136,6 +136,12 @@ class DatabaseManager:
                     )
                 ''')
                 
+                # 기존 stock_prices 테이블에 인덱스 추가 (조회 성능 향상)
+                cursor.execute('''
+                    CREATE INDEX IF NOT EXISTS idx_stock_prices_stock_datetime 
+                    ON stock_prices(stock_code, date_time)
+                ''')
+                
                 # 가상 매매 기록 테이블
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS virtual_trading_records (
@@ -305,6 +311,113 @@ class DatabaseManager:
             self.logger.error(f"가격 데이터 저장 실패 ({stock_code}): {e}")
             return False
     
+    def save_minute_data(self, stock_code: str, date_str: str, df_minute: pd.DataFrame) -> bool:
+        """1분봉 데이터를 기존 stock_prices 테이블에 저장"""
+        try:
+            if df_minute is None or df_minute.empty:
+                return True
+            
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                # 기존 데이터 삭제 (해당 종목, 해당 날짜의 모든 데이터)
+                start_datetime = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 00:00:00"
+                end_datetime = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 23:59:59"
+                
+                cursor.execute('''
+                    DELETE FROM stock_prices 
+                    WHERE stock_code = ? 
+                    AND date_time >= ? 
+                    AND date_time <= ?
+                ''', (stock_code, start_datetime, end_datetime))
+                
+                # 새 데이터 삽입
+                for _, row in df_minute.iterrows():
+                    cursor.execute('''
+                        INSERT OR REPLACE INTO stock_prices 
+                        (stock_code, date_time, open_price, high_price, low_price, close_price, volume, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        stock_code,
+                        row['datetime'].strftime('%Y-%m-%d %H:%M:%S'),
+                        row['open'],
+                        row['high'],
+                        row['low'],
+                        row['close'],
+                        row['volume'],
+                        now_kst().strftime('%Y-%m-%d %H:%M:%S')
+                    ))
+                
+                conn.commit()
+                self.logger.debug(f"{stock_code} 1분봉 데이터 {len(df_minute)}개 저장 ({date_str})")
+                return True
+                
+        except Exception as e:
+            self.logger.error(f"1분봉 데이터 저장 실패 ({stock_code}, {date_str}): {e}")
+            return False
+    
+    def get_minute_data(self, stock_code: str, date_str: str) -> Optional[pd.DataFrame]:
+        """1분봉 데이터를 기존 stock_prices 테이블에서 조회"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                start_datetime = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 00:00:00"
+                end_datetime = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 23:59:59"
+                
+                query = '''
+                    SELECT date_time, open_price, high_price, low_price, close_price, volume
+                    FROM stock_prices 
+                    WHERE stock_code = ? 
+                    AND date_time >= ? 
+                    AND date_time <= ?
+                    ORDER BY date_time
+                '''
+                
+                df = pd.read_sql_query(query, conn, params=(stock_code, start_datetime, end_datetime))
+                
+                if df.empty:
+                    return None
+                
+                # datetime 컬럼을 datetime 타입으로 변환
+                df['datetime'] = pd.to_datetime(df['date_time'])
+                df = df.drop('date_time', axis=1)  # 원본 컬럼 제거
+                
+                # 컬럼명을 표준 형식으로 변경
+                df = df.rename(columns={
+                    'open_price': 'open',
+                    'high_price': 'high',
+                    'low_price': 'low',
+                    'close_price': 'close'
+                })
+                
+                self.logger.debug(f"{stock_code} 1분봉 데이터 {len(df)}개 조회 ({date_str})")
+                return df
+                
+        except Exception as e:
+            self.logger.error(f"1분봉 데이터 조회 실패 ({stock_code}, {date_str}): {e}")
+            return None
+    
+    def has_minute_data(self, stock_code: str, date_str: str) -> bool:
+        """해당 종목의 해당 날짜 1분봉 데이터가 DB에 있는지 확인"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                start_datetime = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 00:00:00"
+                end_datetime = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 23:59:59"
+                
+                cursor.execute('''
+                    SELECT COUNT(1) FROM stock_prices 
+                    WHERE stock_code = ? 
+                    AND date_time >= ? 
+                    AND date_time <= ?
+                ''', (stock_code, start_datetime, end_datetime))
+                
+                count = cursor.fetchone()[0]
+                return count > 0
+                
+        except Exception as e:
+            self.logger.error(f"1분봉 데이터 존재 확인 실패 ({stock_code}, {date_str}): {e}")
+            return False
+
     def get_candidate_history(self, days: int = 30) -> pd.DataFrame:
         """후보 종목 선정 이력 조회"""
         try:

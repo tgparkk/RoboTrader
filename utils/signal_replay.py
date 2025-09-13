@@ -104,7 +104,7 @@ def calculate_trading_signals_once(df_3min: pd.DataFrame, *, debug_logs: bool = 
                                  logger: Optional[logging.Logger] = None,
                                  log_level: int = logging.INFO,
                                  stock_code: str = "UNKNOWN") -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """3분봉 데이터에 대해 한 번만 신호를 계산하여 재사용. (성능 최적화)
+    """3분봉 데이터에 대해 신호를 계산
     
     모든 함수에서 공통으로 사용하는 신호 계산 함수
     09시 이전 데이터는 PullbackCandlePattern 내부에서 제외
@@ -124,6 +124,8 @@ def calculate_trading_signals_once(df_3min: pd.DataFrame, *, debug_logs: bool = 
     # 전역 변수에도 현재 처리 중인 종목코드 설정
     current_processing_stock['code'] = stock_code
     
+    if logger:
+        logger.info(f"🔧 [{stock_code}] 신호 계산 시작...")
         
     signals = PullbackCandlePattern.generate_trading_signals(
         df_3min,
@@ -142,9 +144,12 @@ def calculate_trading_signals_once(df_3min: pd.DataFrame, *, debug_logs: bool = 
     
     elapsed = time.time() - start_time
     
+    # 결과 반환
+    result = (signals, pd.DataFrame())  # 신호 강도 정보는 signals에 포함됨
+    
     # 이제 signals에 신호 강도 정보가 포함되어 있음 (use_improved_logic=True)
     if logger:
-        logger.debug(f"⚡ {stock_code} 신호 계산 완료: {elapsed:.2f}초, {len(signals)}행")
+        logger.info(f"✅ [{stock_code}] 신호 계산 완료: {elapsed:.2f}초, {len(signals)}행")
         
         # 신호 강도 정보가 있는지 확인
         if signals is not None and not signals.empty:
@@ -171,7 +176,7 @@ def list_all_buy_signals(df_3min: pd.DataFrame, *, logger: Optional[logging.Logg
         
         buy_signals = []
         
-        # 각 3분봉 시점에서 실시간과 동일한 방식으로 신호 체크
+        # 각 3분봉 시점에서 실시간과 동일한 방식으로 신호 체크 (시계열 순서 유지)
         for i in range(len(df_3min)):
             # 해당 시점까지의 데이터만 사용 (실시간과 동일)
             current_data = df_3min.iloc[:i+1].copy()
@@ -180,16 +185,7 @@ def list_all_buy_signals(df_3min: pd.DataFrame, *, logger: Optional[logging.Logg
                 continue
             
             # ==================== 신호 생성 로직 선택 ====================
-            # 🔄 v2 로직 사용 (SHA-1: 4d2836c2 복원) - 주석 처리하여 비활성화
-            # signal_strength, risk_signals = PullbackCandlePattern.generate_improved_signals_v2(
-            #     current_data,
-            #     entry_price=None,
-            #     entry_low=None,
-            #     debug=True,
-            #     logger=logger
-            # )
-            
-            # 🔄 현재 로직 사용 (개선된 버전) - 주석 해제하여 사용
+            # 🔄 현재 로직 사용 (개선된 버전)
             signal_strength = PullbackCandlePattern.generate_improved_signals(
                 current_data,
                 stock_code=stock_code,
@@ -697,12 +693,11 @@ def main():
         try:
             logger.info(f"🔄 [{stock_code}] 처리 시작...")
             
-            # 데이터 조회 (DataProcessor 사용)
+            # 데이터 조회 (파일 캐시 우선, 없으면 API 호출)
             from visualization.data_processor import DataProcessor
             from core.timeframe_converter import TimeFrameConverter
             from utils.korean_time import now_kst
             from datetime import datetime
-            
             # 오늘 날짜인지 확인
             today_str = now_kst().strftime("%Y%m%d")
             
@@ -761,7 +756,7 @@ def main():
     all_trades: Dict[str, List[Dict[str, object]]] = {}
     all_stock_data: Dict[str, pd.DataFrame] = {}  # 🆕 상세 분석용 데이터 저장
     
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         # 모든 종목을 병렬로 처리
         future_to_stock = {
             executor.submit(process_single_stock, code): code 

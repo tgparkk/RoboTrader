@@ -40,7 +40,16 @@ class TradingDecisionEngine:
         self.trading_manager = trading_manager
         self.api_manager = api_manager
         self.intraday_manager = intraday_manager
-    
+        
+        # 가상 매매 설정
+        self.is_virtual_mode = False  # 🆕 가상매매 모드 여부 (False: 실제매매, True: 가상매매)
+        
+        # 🆕 가상매매 관리자 초기화
+        from core.virtual_trading_manager import VirtualTradingManager
+        self.virtual_trading = VirtualTradingManager(db_manager=db_manager, api_manager=api_manager)
+        
+        self.logger.info("🧠 매매 판단 엔진 초기화 완료")
+
     def _safe_float_convert(self, value):
         """쉼표가 포함된 문자열을 안전하게 float로 변환"""
         if pd.isna(value) or value is None:
@@ -51,15 +60,6 @@ class TradingDecisionEngine:
             return float(str_value)
         except (ValueError, TypeError):
             return 0.0
-        
-        # 가상 매매 설정
-        self.is_virtual_mode = False  # 🆕 가상매매 모드 여부 (False: 실제매매, True: 가상매매)
-        
-        # 🆕 가상매매 관리자 초기화
-        from core.virtual_trading_manager import VirtualTradingManager
-        self.virtual_trading = VirtualTradingManager(db_manager=db_manager, api_manager=api_manager)
-        
-        self.logger.info("🧠 매매 판단 엔진 초기화 완료")
     
     async def analyze_buy_decision(self, trading_stock, combined_data) -> Tuple[bool, str, dict]:
         """

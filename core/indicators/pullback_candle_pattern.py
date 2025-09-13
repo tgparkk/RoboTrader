@@ -261,24 +261,19 @@ class PullbackCandlePattern:
     ) -> Union[Optional[SignalStrength], Tuple[SignalStrength, List[RiskSignal]]]:
         """개선된 신호 생성 로직 (통합) - v1과 v2 통합"""
         
-        # 데이터 타입 안전성 보장 - 모든 수치 컬럼을 float로 변환
+        # 🚀 성능 최적화: 데이터 타입 변환 최적화
         data = data.copy()
         numeric_columns = ['open', 'high', 'low', 'close', 'volume']
         
-        def safe_float_convert(value):
-            """쉼표가 포함된 문자열을 안전하게 float로 변환"""
-            if pd.isna(value) or value is None:
-                return 0.0
-            try:
-                # 문자열로 변환 후 쉼표 제거
-                str_value = str(value).replace(',', '')
-                return float(str_value)
-            except (ValueError, TypeError):
-                return 0.0
-        
+        # 벡터화된 변환 (apply 대신 pandas 내장 함수 사용)
         for col in numeric_columns:
             if col in data.columns:
-                data[col] = data[col].apply(safe_float_convert)
+                # 이미 숫자 타입이면 스킵
+                if pd.api.types.is_numeric_dtype(data[col]):
+                    data[col] = data[col].astype(float)
+                else:
+                    # 문자열인 경우에만 변환 (벡터화)
+                    data[col] = pd.to_numeric(data[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0.0)
         
         if len(data) < 5:
             result = SignalStrength(SignalType.AVOID, 0, 0, ['데이터 부족'], 0, BisectorStatus.BROKEN) if return_risk_signals else None
@@ -290,8 +285,10 @@ class PullbackCandlePattern:
             logger._stock_code = stock_code
         
         try:
-            # 기본 분석 통합 (v1과 v2 최적화된 버전 통합)
+            # 기본 분석 수행
             current = data.iloc[-1]
+            
+            # 계산 수행
             baseline_volumes = PullbackUtils.calculate_daily_baseline_volume(data)
             
             # 이등분선 계산 (통합)
@@ -354,15 +351,16 @@ class PullbackCandlePattern:
                                           PullbackUtils.get_bisector_status(current['close'], bisector_line) if bisector_line else BisectorStatus.BROKEN)
                     return (result, []) if return_risk_signals else result
             
-            # 1-2. 당일 중 +1.5% 이상 봉이 나왔는지 확인
-            has_large_candle = False
-            for i, row in data.iterrows():
-                # 실제 전일 종가 기준으로 캔들 비율 계산
-                baseline_price = prev_close if prev_close and prev_close > 0 else (float(data['close'].iloc[0]) if len(data) > 0 else float(row['open']))
-                candle_body_pct = abs(float(row['close']) - float(row['open'])) / baseline_price * 100 if baseline_price > 0 else 0
-                if candle_body_pct >= 1.5:  # 1.5% 이상 몸통
-                    has_large_candle = True
-                    break
+            # 🚀 성능 최적화: 벡터화된 대형 캔들 확인
+            baseline_price = prev_close if prev_close and prev_close > 0 else (float(data['close'].iloc[0]) if len(data) > 0 else float(data['open'].iloc[0]))
+            
+            if baseline_price > 0:
+                # 벡터화된 계산 (iterrows 대신 pandas 내장 함수)
+                candle_bodies = abs(data['close'] - data['open'])
+                candle_body_pcts = (candle_bodies / baseline_price * 100)
+                has_large_candle = (candle_body_pcts >= 1.5).any()
+            else:
+                has_large_candle = False
             
             if not has_large_candle:
                 result = SignalStrength(SignalType.AVOID, 0, 0,
