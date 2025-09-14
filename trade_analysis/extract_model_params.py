@@ -88,7 +88,7 @@ def extract_lightgbm_params(model) -> Dict[str, Any]:
 
 def extract_all_model_params():
     """모든 모델 파라미터 추출"""
-    model_dir = Path("trade_analysis/ml_models")
+    model_dir = Path("ml_models")
     
     if not model_dir.exists():
         print("❌ ML 모델 디렉토리가 존재하지 않습니다.")
@@ -180,7 +180,7 @@ def extract_all_model_params():
             print(f"   [실패] 라벨 인코더 분석 실패: {e}")
     
     # 결과 저장
-    output_path = "trade_analysis/extracted_model_params.py"
+    output_path = "extracted_model_params.py"
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write('#!/usr/bin/env python3\n')
         f.write('"""\n')

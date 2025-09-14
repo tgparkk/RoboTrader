@@ -207,7 +207,7 @@ class DayTradingBot:
         """매매 의사결정 태스크"""
         try:
 
-            #await self._check_condition_search()
+            await self._check_condition_search()
 
             self.logger.info("🤖 매매 의사결정 태스크 시작")
             
@@ -694,13 +694,30 @@ class DayTradingBot:
                     change_rate = stock_data.get('chgrate', '')
                     
                     if stock_code:
-                        # 전날 종가 조회 (일봉 데이터)
+                        # 전날 종가 조회 (일봉 데이터) - 주말 안전 처리
                         prev_close = 0.0
                         try:
-                            daily_data = self.api_manager.get_ohlcv_data(stock_code, "D", 2)
+                            # 충분한 기간의 데이터 요청 (주말 고려하여 7일)
+                            daily_data = self.api_manager.get_ohlcv_data(stock_code, "D", 7)
                             if daily_data is not None and len(daily_data) >= 2:
                                 if hasattr(daily_data, 'iloc'):  # DataFrame
-                                    prev_close = float(daily_data.iloc[-2]['stck_clpr'])
+                                    # 데이터 정렬 (날짜순)
+                                    daily_data = daily_data.sort_values('stck_bsop_date')
+                                    
+                                    # 오늘 데이터가 있는지 확인
+                                    last_date = daily_data.iloc[-1]['stck_bsop_date']
+                                    if isinstance(last_date, str):
+                                        last_date = datetime.strptime(last_date, '%Y%m%d').date()
+                                    elif hasattr(last_date, 'date'):
+                                        last_date = last_date.date()
+                                    
+                                    # 오늘 데이터가 있으면 전날(iloc[-2]), 없으면 마지막 거래일(iloc[-1]) 사용
+                                    if last_date == now_kst().date() and len(daily_data) >= 2:
+                                        prev_close = float(daily_data.iloc[-2]['stck_clpr'])
+                                        self.logger.debug(f"📊 {stock_code}: 전날 종가 {prev_close} (오늘 데이터 제외)")
+                                    else:
+                                        prev_close = float(daily_data.iloc[-1]['stck_clpr'])
+                                        self.logger.debug(f"📊 {stock_code}: 전날 종가 {prev_close} (마지막 거래일)")
                                 elif len(daily_data) >= 2:  # List
                                     prev_close = daily_data[-2].close_price
                         except Exception as e:

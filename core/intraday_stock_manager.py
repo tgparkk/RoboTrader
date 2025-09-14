@@ -267,14 +267,15 @@ class IntradayStockManager:
                 # 시간 컬럼이 없으면 전체 데이터 사용
                 filtered_data = historical_data.copy()
             
-            # 📊 ML용 일봉 데이터 수집 (60일치)
-            daily_data = await self._collect_daily_data_for_ml(stock_code)
+            # 📊 ML용 일봉 데이터 수집 (실시간에서는 비활성화)
+            # daily_data = await self._collect_daily_data_for_ml(stock_code)
+            daily_data = pd.DataFrame()  # 실시간에서는 일봉데이터 수집하지 않음
             
             # 메모리에 저장
             with self._lock:
                 if stock_code in self.selected_stocks:
                     self.selected_stocks[stock_code].historical_data = filtered_data
-                    self.selected_stocks[stock_code].daily_data = daily_data if daily_data is not None else pd.DataFrame()
+                    self.selected_stocks[stock_code].daily_data = daily_data  # 빈 DataFrame 저장
                     self.selected_stocks[stock_code].data_complete = True
                     self.selected_stocks[stock_code].last_update = now_kst()
             

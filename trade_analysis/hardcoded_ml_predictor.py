@@ -13,11 +13,7 @@ from datetime import datetime
 import logging
 
 # 추출된 파라미터 import
-try:
-    from .extracted_model_params import EXTRACTED_PARAMS, get_model_params, get_feature_importances, get_scaler_params
-except ImportError:
-    # 직접 실행 시
-    from extracted_model_params import EXTRACTED_PARAMS, get_model_params, get_feature_importances, get_scaler_params
+from .extracted_model_params import EXTRACTED_PARAMS, get_model_params, get_feature_importances, get_scaler_params
 
 logger = logging.getLogger(__name__)
 
@@ -182,7 +178,7 @@ class HardcodedMLPredictor:
 
 # 테스트 코드
 if __name__ == "__main__":
-    print("하드코딩된 ML 예측기 테스트")
+    print("🧪 하드코딩된 ML 예측기 테스트")
     print("=" * 40)
     
     # 예측기 초기화
@@ -193,9 +189,9 @@ if __name__ == "__main__":
     print(f"예측기 상태: {status}")
     
     if status['is_ready']:
-        # 가상의 특성으로 테스트 (69개 특성 사용)
+        # 가상의 특성으로 테스트
         test_features = {
-            f'feature_{i}': np.random.random() for i in range(69)
+            f'feature_{i}': np.random.random() for i in range(50)
         }
         
         print(f"\n테스트 특성: {len(test_features)}개")
@@ -204,13 +200,13 @@ if __name__ == "__main__":
         result = predictor.predict_trade_outcome_fast(test_features)
         
         if 'error' in result:
-            print(f"[실패] 예측 실패: {result['error']}")
+            print(f"❌ 예측 실패: {result['error']}")
         else:
             rec = result['recommendation']
-            print(f"\n[예측결과]")
+            print(f"\n🎯 예측 결과:")
             print(f"   액션: {rec['action']}")
             print(f"   승률: {rec['win_probability']:.1%}")
             print(f"   예상수익: {rec['expected_profit']:.2f}%")
             print(f"   신뢰도: {rec['confidence']:.1%}")
     else:
-        print("[실패] 예측기 초기화 실패")
+        print("❌ 예측기 초기화 실패")

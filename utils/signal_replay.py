@@ -236,7 +236,7 @@ def list_all_buy_signals(df_3min: pd.DataFrame, *, logger: Optional[logging.Logg
 
 
 def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = None, *, logger: Optional[logging.Logger] = None, stock_code: str = "UNKNOWN") -> List[Dict[str, object]]:
-    """매수신호 발생 시점에서 1분봉 기준으로 실제 거래를 시뮬레이션"""
+    """매수신호 발생 시점에서 1분봉 기준으로 실제 거래를 시뮬레이션 (ML 필터 적용)"""
     
     if df_3min is None or df_3min.empty:
         return []
@@ -254,6 +254,20 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
             if logger:
                 logger.info(f"매수 신호 없음 - 거래 시뮬레이션 불가 [{stock_code}]")
             return []
+        
+        # 🆕 ML 필터 초기화 (시뮬레이션용) - 임시 비활성화
+        ml_filter_enabled = False  # ML 문제로 임시 비활성화
+        decision_engine = None
+        
+        try:
+            # TradingDecisionEngine 초기화 (시뮬레이션용)
+            decision_engine = TradingDecisionEngine()
+            if logger:
+                logger.info(f"🧠 [{stock_code}] ML 필터 초기화 완료")
+        except Exception as e:
+            ml_filter_enabled = False
+            if logger:
+                logger.warning(f"⚠️ [{stock_code}] ML 필터 초기화 실패: {e}")
         
         trades = []
         current_position = None  # 현재 포지션 추적 (실시간과 동일하게 한 번에 하나만)
@@ -311,6 +325,89 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                 if logger:
                     logger.warning(f"⚠️ [{stock_code}] 3/5가 정보 없음, 거래 건너뜀")
                 continue
+            
+            # ==================== 🆕 ML 필터 적용 (시뮬레이션) ====================
+            if ml_filter_enabled and decision_engine:
+                try:
+                    # 🆕 실제 분봉 데이터를 ML에 전달하도록 수정
+                    from core.models import TradingStock, StockState
+                    
+                    # Mock TradingStock 객체 생성 (ML 필터용)
+                    mock_trading_stock = TradingStock(stock_code, f"{stock_code}_NAME", StockState.SELECTED, None)
+                    
+                    # 🆕 시뮬레이션용 intraday_manager Mock 생성 (실제 분봉 + 일봉 데이터 전달용)
+                    class MockIntradayManager:
+                        def __init__(self, minute_data, daily_data=None):
+                            self.minute_data = minute_data
+                            self.daily_data = daily_data
+                            # TradingDecisionEngine에서 사용하는 selected_stocks 구조 모방
+                            self.selected_stocks = {}
+                            if daily_data is not None:
+                                from trade_analysis.intraday_stock_manager import StockMinuteData
+                                mock_stock_data = StockMinuteData(
+                                    stock_code=stock_code,
+                                    stock_name=f"{stock_code}_NAME",
+                                    selected_time=pd.Timestamp.now(),
+                                    daily_data=daily_data
+                                )
+                                self.selected_stocks[stock_code] = mock_stock_data
+                        
+                        def get_cached_minute_data(self, stock_code):
+                            return self.minute_data
+                        
+                        def get_cached_current_price(self, stock_code):
+                            if self.minute_data is not None and len(self.minute_data) > 0:
+                                return {'current_price': self.minute_data['close'].iloc[-1]}
+                            return None
+                        
+                        def get_cached_daily_data(self, stock_code):
+                            return self.daily_data
+                    
+                    # 일봉 데이터 수집 (시뮬레이션용)
+                    daily_data = None
+                    try:
+                        from trade_analysis.ml_data_collector import MLDataCollector
+                        collector = MLDataCollector()
+                        daily_data = collector.collect_daily_data(stock_code, 60)
+                        if daily_data is not None:
+                            if logger:
+                                logger.info(f"📊 [{stock_code}] 일봉 데이터 수집 성공: {len(daily_data)}개")
+                        else:
+                            if logger:
+                                logger.warning(f"⚠️ [{stock_code}] 일봉 데이터 수집 실패")
+                    except Exception as e:
+                        if logger:
+                            logger.warning(f"⚠️ [{stock_code}] 일봉 데이터 수집 오류: {e}")
+                    
+                    # decision_engine에 Mock intraday_manager 설정 (일봉데이터 포함)
+                    original_intraday_manager = decision_engine.intraday_manager
+                    decision_engine.intraday_manager = MockIntradayManager(df_1min, daily_data)
+                    
+                    # ML 필터 적용 (비동기 함수를 동기적으로 실행)
+                    import asyncio
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        ml_pass, ml_reason, ml_result = loop.run_until_complete(
+                            decision_engine._apply_hardcoded_ml_filter(mock_trading_stock, "pullback_pattern")
+                        )
+                    finally:
+                        loop.close()
+                        # 원래 intraday_manager 복원
+                        decision_engine.intraday_manager = original_intraday_manager
+                    
+                    if not ml_pass:
+                        if logger:
+                            logger.info(f"🚫 [{stock_code}] ML 필터 차단: {ml_reason}")
+                        continue  # ML 필터에서 차단된 신호는 건너뜀
+                    else:
+                        if logger:
+                            logger.info(f"✅ [{stock_code}] ML 필터 승인: {ml_reason}")
+                            
+                except Exception as e:
+                    if logger:
+                        logger.warning(f"⚠️ [{stock_code}] ML 필터 적용 실패: {e}")
+                    # ML 필터 실패 시 신호 통과 (안전 장치)
             
             # ==================== 매수 체결 가정 (미체결 개념 주석 처리) ====================
             

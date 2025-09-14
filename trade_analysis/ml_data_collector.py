@@ -30,7 +30,7 @@ from api.kis_market_api import get_inquire_daily_itemchartprice
 from api.kis_auth import auth
 from utils.korean_time import now_kst
 from utils.logger import setup_logger
-from .ml_feature_engineer import MLFeatureEngineer
+from ml_feature_engineer import MLFeatureEngineer
 
 logger = setup_logger(__name__)
 

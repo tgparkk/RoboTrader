@@ -48,25 +48,26 @@ class TradingDecisionEngine:
         from core.virtual_trading_manager import VirtualTradingManager
         self.virtual_trading = VirtualTradingManager(db_manager=db_manager, api_manager=api_manager)
         
-        # ML 설정 로드
+        # ML 설정 로드 (실시간에서는 비활성화)
         try:
             from config.ml_settings import MLSettings
-            self.use_ml_filter = MLSettings.USE_ML_FILTER
-            self.use_hardcoded_ml = MLSettings.USE_HARDCODED_ML
+            self.use_ml_filter = False  # 실시간에서는 ML 필터 비활성화
+            self.use_hardcoded_ml = False  # 실시간에서는 하드코딩 ML 비활성화
             self.ml_settings = MLSettings
         except ImportError:
             self.use_ml_filter = False
             self.use_hardcoded_ml = False
             self.ml_settings = None
         
-        # ML 예측기 초기화
+        # ML 예측기 초기화 (비활성화)
         self.ml_predictor = None
         self.hardcoded_ml_predictor = None
         
-        if self.use_hardcoded_ml:
-            self._initialize_hardcoded_ml()
-        elif self.use_ml_filter:
-            self._initialize_ml_predictor()
+        # 실시간에서는 ML 사용하지 않음
+        # if self.use_hardcoded_ml:
+        #     self._initialize_hardcoded_ml()
+        # elif self.use_ml_filter:
+        #     self._initialize_ml_predictor()
         
         self.logger.info("🧠 매매 판단 엔진 초기화 완료")
 
@@ -106,13 +107,11 @@ class TradingDecisionEngine:
             
             stock_code = trading_stock.stock_code
             
-            # 간단한 특성 생성 (실제로는 더 정교한 특성 추출 필요)
-            test_features = {
-                f'feature_{i}': 0.5 for i in range(69)  # 69개 특성 (스케일러 기준)
-            }
+            # 실제 특성 추출 (2단계 구현)
+            real_features = await self._extract_real_time_features(trading_stock)
             
             # 빠른 예측 실행
-            ml_result = self.hardcoded_ml_predictor.predict_trade_outcome_fast(test_features)
+            ml_result = self.hardcoded_ml_predictor.predict_trade_outcome_fast(real_features)
             
             if "error" in ml_result:
                 self.logger.warning(f"⚠️ {stock_code} 하드코딩 ML 예측 오류: {ml_result['error']}")
@@ -124,10 +123,10 @@ class TradingDecisionEngine:
             win_probability = recommendation.get('win_probability', 0.0)
             expected_profit = recommendation.get('expected_profit', 0.0)
             
-            # 필터링 조건
+            # 필터링 조건 (완화된 임계값)
             if action in ['STRONG_BUY', 'BUY']:
                 return True, f"⚡ML승인: {action} (승률:{win_probability:.1%})", ml_result
-            elif action == 'WEAK_BUY' and win_probability >= 0.55:
+            elif action == 'WEAK_BUY' and win_probability >= 0.45:  # 55% → 45%로 완화
                 return True, f"⚡ML조건부승인: {action} (승률:{win_probability:.1%})", ml_result
             else:
                 return False, f"⚡ML차단: {action} (승률:{win_probability:.1%})", ml_result
@@ -135,6 +134,96 @@ class TradingDecisionEngine:
         except Exception as e:
             self.logger.error(f"❌ 하드코딩 ML 필터 적용 오류: {e}")
             return True, "ML 필터 오류 - 신호 통과", {}
+    
+    async def _extract_real_time_features(self, trading_stock) -> Dict[str, float]:
+        """
+        실시간 특성 추출 (2단계 구현)
+        
+        Args:
+            trading_stock: 거래 종목 객체
+            
+        Returns:
+            69개 특성 딕셔너리
+        """
+        try:
+            # 실시간 특성 추출기 import
+            from trade_analysis.realtime_feature_extractor import RealtimeFeatureExtractor
+            
+            extractor = RealtimeFeatureExtractor()
+            stock_code = trading_stock.stock_code
+            
+            # 분봉 데이터 가져오기 (가능한 경우)
+            minute_data = None
+            current_price = None
+            
+            # intraday_manager에서 분봉 데이터 조회 시도
+            if self.intraday_manager:
+                try:
+                    # 캐시된 분봉 데이터 조회
+                    minute_data = self.intraday_manager.get_cached_minute_data(stock_code)
+                    
+                    # 캐시된 현재가 조회
+                    current_price_info = self.intraday_manager.get_cached_current_price(stock_code)
+                    if current_price_info:
+                        current_price = current_price_info.get('current_price')
+                        
+                except Exception as e:
+                    self.logger.debug(f"분봉 데이터 조회 실패 ({stock_code}): {e}")
+            
+            # 일봉 데이터 조회 (intraday_manager에서 캐시된 데이터 사용)
+            daily_data = None
+            
+            # intraday_manager에서 캐시된 일봉 데이터 조회
+            if self.intraday_manager:
+                try:
+                    # StockMinuteData 객체에서 daily_data 필드 조회
+                    if hasattr(self.intraday_manager, 'selected_stocks') and stock_code in self.intraday_manager.selected_stocks:
+                        stock_data = self.intraday_manager.selected_stocks[stock_code]
+                        daily_data = stock_data.daily_data
+                        if daily_data is not None and not daily_data.empty:
+                            self.logger.debug(f"📊 {stock_code} 캐시된 일봉 데이터 사용: {len(daily_data)}개")
+                        else:
+                            self.logger.debug(f"⚠️ {stock_code} 캐시된 일봉 데이터 없음")
+                    else:
+                        self.logger.debug(f"⚠️ {stock_code} 종목이 intraday_manager에 등록되지 않음")
+                except Exception as e:
+                    self.logger.debug(f"캐시된 일봉 데이터 조회 실패 ({stock_code}): {e}")
+            
+            # 캐시된 데이터가 없으면 폴백 (시뮬레이션용)
+            if daily_data is None or daily_data.empty:
+                try:
+                    from trade_analysis.ml_data_collector import MLDataCollector
+                    collector = MLDataCollector()
+                    daily_data = collector.collect_daily_data(stock_code, 60)
+                    if daily_data is not None:
+                        self.logger.debug(f"📊 {stock_code} 폴백 일봉 데이터 수집 성공: {len(daily_data)}개")
+                    else:
+                        self.logger.debug(f"⚠️ {stock_code} 폴백 일봉 데이터 수집 실패")
+                except Exception as e:
+                    self.logger.debug(f"⚠️ {stock_code} 폴백 일봉 데이터 수집 오류: {e}")
+            
+            # 분봉 데이터가 있으면 실제 특성 추출
+            if minute_data is not None and len(minute_data) > 10:
+                self.logger.debug(f"🔄 {stock_code} 실제 특성 추출 (분봉: {len(minute_data)}개, 일봉: {len(daily_data) if daily_data is not None else 0}개)")
+                features = extractor.extract_features_from_minute_data(minute_data, daily_data, current_price)
+                
+                # 특성 품질 로깅 (주요 특성만)
+                if len(features) >= 10:
+                    self.logger.debug(f"   주요 특성: 가격={features['feature_0']:.3f}, "
+                                    f"변화율={features['feature_1']:.3f}, "
+                                    f"볼륨={features['feature_20']:.3f}, "
+                                    f"일봉MA5={features['feature_60']:.3f}")
+                
+                return features
+            else:
+                # 데이터가 없으면 기본 특성 사용 (1단계 방식)
+                self.logger.debug(f"⚠️ {stock_code} 분봉 데이터 부족, 기본 특성 사용")
+                return {f'feature_{i}': 0.5 for i in range(69)}
+                
+        except Exception as e:
+            self.logger.warning(f"❌ 실시간 특성 추출 실패 ({stock_code}): {e}")
+            # 에러 시 기본 특성 반환
+            return {f'feature_{i}': 0.5 for i in range(69)}
     
     # 기존 ML 필터 (비활성화)
     # async def _apply_ml_filter(self, trading_stock, signal_type: str = "pullback_pattern") -> Tuple[bool, str, Dict[str, Any]]:

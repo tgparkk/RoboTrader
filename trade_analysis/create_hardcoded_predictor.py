@@ -22,14 +22,14 @@ def create_hardcoded_predictor():
     print("=" * 60)
     
     # 추출된 파라미터 파일이 있는지 확인
-    params_file = Path("trade_analysis/extracted_model_params.py")
+    params_file = Path("extracted_model_params.py")
     if not params_file.exists():
         print("❌ extracted_model_params.py 파일이 없습니다.")
         print("   먼저 python trade_analysis/extract_model_params.py를 실행하세요.")
         return
     
     # 하드코딩된 예측기 코드 생성
-    output_path = "trade_analysis/hardcoded_ml_predictor.py"
+    output_path = "hardcoded_ml_predictor.py"
     
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write('''#!/usr/bin/env python3
