@@ -48,7 +48,98 @@ class TradingDecisionEngine:
         from core.virtual_trading_manager import VirtualTradingManager
         self.virtual_trading = VirtualTradingManager(db_manager=db_manager, api_manager=api_manager)
         
+        # ML 설정 로드
+        try:
+            from config.ml_settings import MLSettings
+            self.use_ml_filter = MLSettings.USE_ML_FILTER
+            self.use_hardcoded_ml = MLSettings.USE_HARDCODED_ML
+            self.ml_settings = MLSettings
+        except ImportError:
+            self.use_ml_filter = False
+            self.use_hardcoded_ml = False
+            self.ml_settings = None
+        
+        # ML 예측기 초기화
+        self.ml_predictor = None
+        self.hardcoded_ml_predictor = None
+        
+        if self.use_hardcoded_ml:
+            self._initialize_hardcoded_ml()
+        elif self.use_ml_filter:
+            self._initialize_ml_predictor()
+        
         self.logger.info("🧠 매매 판단 엔진 초기화 완료")
+
+    def _initialize_hardcoded_ml(self):
+        """하드코딩된 경량 ML 예측기 초기화"""
+        try:
+            from trade_analysis.hardcoded_ml_predictor import HardcodedMLPredictor
+            
+            self.hardcoded_ml_predictor = HardcodedMLPredictor()
+            
+            if self.hardcoded_ml_predictor.is_ready:
+                self.logger.info("⚡ 하드코딩된 경량 ML 예측기 초기화 완료")
+            else:
+                self.logger.warning("⚠️ 하드코딩된 ML 예측기 준비 실패")
+                self.use_hardcoded_ml = False
+                
+        except Exception as e:
+            self.logger.error(f"❌ 하드코딩된 ML 예측기 초기화 실패: {e}")
+            self.use_hardcoded_ml = False
+            self.hardcoded_ml_predictor = None
+    
+    # 기존 ML 관련 메소드들 (현재 비활성화)
+    # def _initialize_ml_predictor(self):
+    #     """ML 예측기 초기화 (선택적) - 현재 비활성화"""  
+    #     pass
+    
+    async def _apply_hardcoded_ml_filter(self, trading_stock, signal_type: str = "pullback_pattern") -> Tuple[bool, str, Dict[str, Any]]:
+        """
+        하드코딩된 경량 ML 필터 적용 (빠른 예측)
+        
+        Returns:
+            Tuple[통과여부, 사유, ML예측결과]
+        """
+        try:
+            if not self.use_hardcoded_ml or not self.hardcoded_ml_predictor:
+                return True, "하드코딩된 ML 비활성화", {}
+            
+            stock_code = trading_stock.stock_code
+            
+            # 간단한 특성 생성 (실제로는 더 정교한 특성 추출 필요)
+            test_features = {
+                f'feature_{i}': 0.5 for i in range(69)  # 69개 특성 (스케일러 기준)
+            }
+            
+            # 빠른 예측 실행
+            ml_result = self.hardcoded_ml_predictor.predict_trade_outcome_fast(test_features)
+            
+            if "error" in ml_result:
+                self.logger.warning(f"⚠️ {stock_code} 하드코딩 ML 예측 오류: {ml_result['error']}")
+                return True, "ML 예측 오류 - 신호 통과", {}
+            
+            # 예측 결과 분석
+            recommendation = ml_result.get('recommendation', {})
+            action = recommendation.get('action', 'SKIP')
+            win_probability = recommendation.get('win_probability', 0.0)
+            expected_profit = recommendation.get('expected_profit', 0.0)
+            
+            # 필터링 조건
+            if action in ['STRONG_BUY', 'BUY']:
+                return True, f"⚡ML승인: {action} (승률:{win_probability:.1%})", ml_result
+            elif action == 'WEAK_BUY' and win_probability >= 0.55:
+                return True, f"⚡ML조건부승인: {action} (승률:{win_probability:.1%})", ml_result
+            else:
+                return False, f"⚡ML차단: {action} (승률:{win_probability:.1%})", ml_result
+                
+        except Exception as e:
+            self.logger.error(f"❌ 하드코딩 ML 필터 적용 오류: {e}")
+            return True, "ML 필터 오류 - 신호 통과", {}
+    
+    # 기존 ML 필터 (비활성화)
+    # async def _apply_ml_filter(self, trading_stock, signal_type: str = "pullback_pattern") -> Tuple[bool, str, Dict[str, Any]]:
+    #     """기존 ML 필터 - 현재 비활성화 (백테스팅 전용)"""
+    #     return True, "기존 ML 필터 비활성화", {}
 
     def _safe_float_convert(self, value):
         """쉼표가 포함된 문자열을 안전하게 float로 변환"""
@@ -122,19 +213,30 @@ class TradingDecisionEngine:
                 quantity = int(max_buy_amount // buy_price) if buy_price > 0 else 0
                 
                 if quantity > 0:
+                    # ML 필터 적용 (매수 정보 생성 전에)
+                    ml_pass, ml_reason, ml_result = await self._apply_hardcoded_ml_filter(trading_stock, "pullback_pattern")
+                    
+                    if not ml_pass:
+                        return False, f"눌림목캔들패턴: {reason} + ML차단: {ml_reason}", {'buy_price': 0, 'quantity': 0, 'max_buy_amount': 0}
+                    
+                    # 매수 정보 생성 (ML 승인 후)
                     buy_info = {
                         'buy_price': buy_price,
                         'quantity': quantity,
                         'max_buy_amount': max_buy_amount,
                         'entry_low': price_info.get('entry_low', 0),  # 손절 기준
-                        'target_profit': price_info.get('target_profit', 0.03)  # 목표 수익률
+                        'target_profit': price_info.get('target_profit', 0.03),  # 목표 수익률
+                        'ml_prediction': ml_result  # ML 예측 결과 추가
                     }
                     
                     # 🆕 목표 수익률 저장
                     if hasattr(trading_stock, 'target_profit_rate'):
                         trading_stock.target_profit_rate = price_info.get('target_profit', 0.03)
                     
-                    return True, f"눌림목캔들패턴: {reason}", buy_info
+                    # ML 승인 정보를 매수 사유에 추가
+                    final_reason = f"눌림목캔들패턴: {reason} + {ml_reason}"
+                    
+                    return True, final_reason, buy_info
                 else:
                     return False, "수량 계산 실패", buy_info
             

@@ -267,9 +267,8 @@ class IntradayStockManager:
                 # 시간 컬럼이 없으면 전체 데이터 사용
                 filtered_data = historical_data.copy()
             
-            # 과거 29일 일봉 데이터 수집 (가격박스 계산용) - 임시 비활성화
-            # daily_data = await PriceBox.collect_daily_data_for_price_box(stock_code, self.logger)
-            daily_data = pd.DataFrame()  # 빈 데이터프레임으로 대체
+            # 📊 ML용 일봉 데이터 수집 (60일치)
+            daily_data = await self._collect_daily_data_for_ml(stock_code)
             
             # 메모리에 저장
             with self._lock:
@@ -1191,5 +1190,36 @@ class IntradayStockManager:
             
         except Exception as e:
             return {'has_issues': True, 'issues': [f'품질검사 오류: {str(e)[:30]}']}
+    
+    async def _collect_daily_data_for_ml(self, stock_code: str) -> pd.DataFrame:
+        """
+        ML 예측용 일봉 데이터 수집 (60일치)
+        
+        Args:
+            stock_code: 종목코드
+            
+        Returns:
+            pd.DataFrame: 일봉 데이터 (60일치) 
+        """
+        try:
+            self.logger.info(f"📈 {stock_code} ML용 일봉 데이터 수집 시작 (60일)")
+            
+            # ML 데이터 컬렉터 사용
+            from trade_analysis.ml_data_collector import MLDataCollector
+            ml_collector = MLDataCollector()
+            
+            # 60일치 일봉 데이터 수집
+            daily_data = ml_collector.collect_daily_data(stock_code, days=60)
+            
+            if daily_data is not None and not daily_data.empty:
+                self.logger.info(f"✅ {stock_code} 일봉 데이터 수집 성공: {len(daily_data)}일치")
+                return daily_data
+            else:
+                self.logger.warning(f"⚠️ {stock_code} 일봉 데이터 수집 실패 - 빈 데이터")
+                return pd.DataFrame()
+                
+        except Exception as e:
+            self.logger.error(f"❌ {stock_code} 일봉 데이터 수집 오류: {e}")
+            return pd.DataFrame()
     
     
