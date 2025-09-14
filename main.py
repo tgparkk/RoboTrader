@@ -207,7 +207,7 @@ class DayTradingBot:
         """매매 의사결정 태스크"""
         try:
 
-            await self._check_condition_search()
+            #await self._check_condition_search()
 
             self.logger.info("🤖 매매 의사결정 태스크 시작")
             
