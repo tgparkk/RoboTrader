@@ -235,7 +235,7 @@ class DataCollectionConfig:
 @dataclass
 class OrderManagementConfig:
     """주문 관리 설정"""
-    buy_timeout_seconds: int = 300
+    buy_timeout_seconds: int = 180
     sell_timeout_seconds: int = 180
     max_adjustments: int = 3
     adjustment_threshold_percent: float = 0.5
@@ -285,7 +285,7 @@ class TradingConfig:
                 candidate_stocks=json_data.get('data_collection', {}).get('candidate_stocks', [])
             ),
             order_management=OrderManagementConfig(
-                buy_timeout_seconds=json_data.get('order_management', {}).get('buy_timeout_seconds', 300),
+                buy_timeout_seconds=json_data.get('order_management', {}).get('buy_timeout_seconds', 180),
                 sell_timeout_seconds=json_data.get('order_management', {}).get('sell_timeout_seconds', 180),
                 max_adjustments=json_data.get('order_management', {}).get('max_adjustments', 3),
                 adjustment_threshold_percent=json_data.get('order_management', {}).get('adjustment_threshold_percent', 0.5),

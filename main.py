@@ -20,6 +20,7 @@ from core.candidate_selector import CandidateSelector, CandidateStock
 from core.intraday_stock_manager import IntradayStockManager
 from core.trading_stock_manager import TradingStockManager
 from core.trading_decision_engine import TradingDecisionEngine
+from core.fund_manager import FundManager
 from db.database_manager import DatabaseManager
 from api.kis_api_manager import KISAPIManager
 from config.settings import load_trading_config
@@ -55,12 +56,13 @@ class DayTradingBot:
         )  # 🆕 거래 상태 통합 관리자
         self.db_manager = DatabaseManager()
         self.decision_engine = TradingDecisionEngine(
-            db_manager=self.db_manager, 
+            db_manager=self.db_manager,
             telegram_integration=self.telegram,
             trading_manager=self.trading_manager,
             api_manager=self.api_manager,
             intraday_manager=self.intraday_manager
         )  # 🆕 매매 판단 엔진
+        self.fund_manager = FundManager()  # 🆕 자금 관리자
         self.chart_generator = None  # 🆕 장 마감 후 차트 생성기 (지연 초기화)
         
         
@@ -145,7 +147,17 @@ class DayTradingBot:
                 self.logger.error("❌ API 초기화 실패")
                 return False
             self.logger.info("✅ API 매니저 초기화 완료")
-            
+
+            # 1.5. 자금 관리자 초기화 (API 초기화 후)
+            balance_info = self.api_manager.get_account_balance()
+            if balance_info:
+                total_funds = float(balance_info.account_balance) if hasattr(balance_info, 'account_balance') else 10000000
+                self.fund_manager.update_total_funds(total_funds)
+                self.logger.info(f"💰 자금 관리자 초기화 완료: {total_funds:,.0f}원")
+            else:
+                self.logger.warning("⚠️ 잔고 조회 실패 - 기본값 1천만원으로 설정")
+                self.fund_manager.update_total_funds(10000000)
+
             # 2. 시장 상태 확인
             market_status = get_market_status()
             self.logger.info(f"📊 현재 시장 상태: {market_status}")
@@ -232,15 +244,35 @@ class DayTradingBot:
                     last_condition_check = current_time
                 
                 # 매매 판단 시스템 실행 (5초 주기)
-                await self._execute_trading_decision()
+                # 실시간 잔고 조회 후 자금 관리자 업데이트
+                balance_info = self.api_manager.get_account_balance()
+                if balance_info:
+                    self.fund_manager.update_total_funds(float(balance_info.account_balance))
+
+                # 현재 가용 자금 계산 (총 자금의 10% 기준)
+                fund_status = self.fund_manager.get_status()
+                current_available_funds = fund_status['available_funds']
+                max_investment_per_stock = fund_status['total_funds'] * 0.1  # 종목당 최대 10%
+
+                self.logger.debug(f"💰 현재 자금 상황: 가용={current_available_funds:,.0f}원, 종목당최대={max_investment_per_stock:,.0f}원")
+
+                await self._execute_trading_decision(current_available_funds)
                 await asyncio.sleep(5)  # 5초 주기
                 
         except Exception as e:
             self.logger.error(f"❌ 매매 의사결정 태스크 오류: {e}")
     
-    async def _execute_trading_decision(self):
-        """매매 판단 시스템 실행"""
+    async def _execute_trading_decision(self, available_funds: float = None):
+        """매매 판단 시스템 실행
+
+        Args:
+            available_funds: 사용 가능한 자금 (미리 계산된 값)
+        """
         try:
+            # 자금 정보 로깅
+            if available_funds is not None:
+                self.logger.debug(f"💰 전달된 가용 자금: {available_funds:,.0f}원")
+
             # TradingStockManager에서 관리 중인 종목들 확인
             from core.models import StockState
             
@@ -274,7 +306,7 @@ class DayTradingBot:
             if buy_decision_candidates and not is_after_Npm:
                 self.logger.debug(f"🔍 매수 판단 대상: SELECTED={len(selected_stocks)}개, COMPLETED={len(completed_stocks)}개 (총 {len(buy_decision_candidates)}개)")
                 for trading_stock in buy_decision_candidates:
-                    await self._analyze_buy_decision(trading_stock)
+                    await self._analyze_buy_decision(trading_stock, available_funds)
             else:
                 if is_after_Npm:
                     self.logger.debug("📊 15시 이후이므로 매수 금지")
@@ -296,8 +328,13 @@ class DayTradingBot:
         except Exception as e:
             self.logger.error(f"❌ 매매 판단 시스템 오류: {e}")
     
-    async def _analyze_buy_decision(self, trading_stock):
-        """매수 판단 분석 (완성된 3분봉만 사용)"""
+    async def _analyze_buy_decision(self, trading_stock, available_funds: float = None):
+        """매수 판단 분석 (완성된 3분봉만 사용)
+
+        Args:
+            trading_stock: 거래 대상 주식
+            available_funds: 사용 가능한 자금 (미리 계산된 값)
+        """
         try:
             stock_code = trading_stock.stock_code
             stock_name = trading_stock.stock_name
@@ -346,7 +383,33 @@ class DayTradingBot:
             
             if buy_signal and buy_info.get('quantity', 0) > 0:
                 self.logger.info(f"🚀 {stock_code}({stock_name}) 매수 신호 발생: {buy_reason}")
-                
+
+                # 🆕 매수 전 자금 확인 (전달받은 available_funds 활용)
+                if available_funds is not None:
+                    # 전달받은 가용 자금 기준으로 종목당 최대 투자 금액 계산 (10%)
+                    fund_status = self.fund_manager.get_status()
+                    max_buy_amount = min(available_funds, fund_status['total_funds'] * 0.1)
+                else:
+                    # 기존 방식 (fallback)
+                    max_buy_amount = self.fund_manager.get_max_buy_amount(stock_code)
+
+                required_amount = buy_info['buy_price'] * buy_info['quantity']
+
+                if required_amount > max_buy_amount:
+                    self.logger.warning(f"⚠️ {stock_code} 자금 부족: 필요={required_amount:,.0f}원, 가용={max_buy_amount:,.0f}원")
+                    # 가용 자금에 맞게 수량 조정
+                    if max_buy_amount > 0:
+                        adjusted_quantity = int(max_buy_amount / buy_info['buy_price'])
+                        if adjusted_quantity > 0:
+                            buy_info['quantity'] = adjusted_quantity
+                            self.logger.info(f"💰 {stock_code} 수량 조정: {adjusted_quantity}주 (투자금: {adjusted_quantity * buy_info['buy_price']:,.0f}원)")
+                        else:
+                            self.logger.warning(f"❌ {stock_code} 매수 포기: 최소 1주도 매수 불가")
+                            return
+                    else:
+                        self.logger.warning(f"❌ {stock_code} 매수 포기: 가용 자금 없음")
+                        return
+
                 # 🆕 매수 전 종목 상태 확인
                 current_stock = self.trading_manager.get_trading_stock(stock_code)
                 if current_stock:

@@ -70,6 +70,38 @@ if project_root not in sys.path:
 # 전역 변수로 현재 처리 중인 종목코드 추적
 current_processing_stock = {'code': 'UNKNOWN'}
 
+def load_daily_data(stock_code: str) -> Optional[pd.DataFrame]:
+    """일봉 데이터 로드"""
+    try:
+        daily_cache_dir = Path("cache/daily_data")
+        daily_file = daily_cache_dir / f"{stock_code}_daily.pkl"
+        
+        if not daily_file.exists():
+            return None
+            
+        with open(daily_file, 'rb') as f:
+            data = pickle.load(f)
+        
+        # 컬럼명 정리 및 데이터 타입 변환
+        if 'stck_bsop_date' in data.columns:
+            data['date'] = pd.to_datetime(data['stck_bsop_date'])
+        if 'stck_clpr' in data.columns:
+            data['close'] = pd.to_numeric(data['stck_clpr'], errors='coerce')
+        if 'stck_oprc' in data.columns:
+            data['open'] = pd.to_numeric(data['stck_oprc'], errors='coerce')
+        if 'stck_hgpr' in data.columns:
+            data['high'] = pd.to_numeric(data['stck_hgpr'], errors='coerce')
+        if 'stck_lwpr' in data.columns:
+            data['low'] = pd.to_numeric(data['stck_lwpr'], errors='coerce')
+        if 'acml_vol' in data.columns:
+            data['volume'] = pd.to_numeric(data['acml_vol'], errors='coerce')
+            
+        return data.sort_values('date').reset_index(drop=True)
+        
+    except Exception as e:
+        print(f"일봉 데이터 로드 실패 {stock_code}: {e}")
+        return None
+
 import pandas as pd
 
 from utils.logger import setup_logger

@@ -39,7 +39,7 @@ class FundManager:
         
         # 설정
         self.max_position_ratio = 0.1  # 종목당 최대 투자 비율 (10%)
-        self.max_total_investment_ratio = 0.8  # 전체 자금 대비 최대 투자 비율 (80%)
+        self.max_total_investment_ratio = 0.9  # 전체 자금 대비 최대 투자 비율 (90%)
         
         self.logger.info(f"💰 자금 관리자 초기화 완료 - 초기자금: {initial_funds:,.0f}원")
     

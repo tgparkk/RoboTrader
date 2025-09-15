@@ -328,6 +328,11 @@ class SupportPatternAnalyzer:
         avg_volume = volumes.mean() if len(volumes) > 0 else 0
         avg_volume_ratio = avg_volume / uptrend.max_volume if uptrend.max_volume > 0 else 0
         
+        # 🆕 하락 시 거래량 조건 대폭 완화: 기준거래량의 1/2 초과가 3개 이하만 허용
+        high_volume_count = np.sum(volumes / uptrend.max_volume > 0.5) if uptrend.max_volume > 0 else 0
+        if high_volume_count > 3:  # 50% 초과 거래량이 4개 이상이면 제외
+            return None
+        
         return DeclinePhase(
             start_idx=start_idx,
             end_idx=end_idx,
@@ -347,7 +352,9 @@ class SupportPatternAnalyzer:
         avg_volume = volumes.mean() if len(volumes) > 0 else 0
         avg_volume_ratio = avg_volume / uptrend.max_volume if uptrend.max_volume > 0 else 0
         
-        if avg_volume_ratio > self.support_volume_threshold:  # 거래량이 너무 높음
+        # 🆕 지지구간 거래량 조건 대폭 완화: 1/2 초과가 2개 이하만 허용
+        support_high_volume_count = np.sum(volumes / uptrend.max_volume > 0.5) if uptrend.max_volume > 0 else 0
+        if support_high_volume_count > 2:  # 50% 초과 거래량이 3개 이상이면 제외
             return None
         
         # NumPy 배열로 지지가격 계산 (로직 변경 없이)
