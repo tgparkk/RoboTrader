@@ -56,7 +56,7 @@ class SupportPatternResult:
     decline_phase: Optional[DeclinePhase]  # 하락 구간 추가
     support_phase: Optional[SupportPhase]
     breakout_candle: Optional[BreakoutCandle]
-    entry_price: Optional[float]  # 3/5 가격
+    entry_price: Optional[float]  # 4/5 가격 (시가/종가 기준)
     confidence: float  # 신뢰도 점수 (0-100)
     reasons: List[str]  # 판단 근거
 
@@ -328,9 +328,9 @@ class SupportPatternAnalyzer:
         avg_volume = volumes.mean() if len(volumes) > 0 else 0
         avg_volume_ratio = avg_volume / uptrend.max_volume if uptrend.max_volume > 0 else 0
         
-        # 🆕 하락 시 거래량 조건 대폭 완화: 기준거래량의 1/2 초과가 3개 이하만 허용
-        high_volume_count = np.sum(volumes / uptrend.max_volume > 0.5) if uptrend.max_volume > 0 else 0
-        if high_volume_count > 3:  # 50% 초과 거래량이 4개 이상이면 제외
+        # 🆕 하락 시 거래량 조건 강화: 기준거래량의 4/10(40%) 이하가 아니면 매수 안함
+        high_volume_count = np.sum(volumes / uptrend.max_volume > 0.4) if uptrend.max_volume > 0 else 0
+        if high_volume_count > 0:  # 40% 초과 거래량이 1개라도 있으면 제외
             return None
         
         return DeclinePhase(
@@ -460,14 +460,14 @@ class SupportPatternAnalyzer:
     
     
     def _calculate_entry_price(self, data: pd.DataFrame, numpy_arrays: Dict[str, np.ndarray], breakout: BreakoutCandle) -> float:
-        """3/5 진입가격 계산"""
-        # NumPy 배열로 빠른 인덱스 접근 (로직 변경 없이)
-        low_price = numpy_arrays['low'][breakout.idx]
-        high_price = numpy_arrays['high'][breakout.idx]
-        
-        # 3/5 가격 = 저가 + (고가 - 저가) * 0.6
-        entry_price = low_price + (high_price - low_price) * 0.6
-        
+        """4/5 진입가격 계산 - 시가/종가 기준"""
+        # 시가와 종가 가져오기
+        open_price = numpy_arrays['open'][breakout.idx]
+        close_price = numpy_arrays['close'][breakout.idx]
+
+        # 4/5 가격 = 시가 + (종가 - 시가) * 0.8
+        entry_price = open_price + (close_price - open_price) * 0.8
+
         return entry_price
     
     def _calculate_confidence(self, uptrend: UptrrendPhase, decline: DeclinePhase, support: SupportPhase, breakout: BreakoutCandle) -> float:
@@ -490,7 +490,7 @@ class SupportPatternAnalyzer:
         elif decline.decline_pct >= 0.015:  # 1.5% 이상 하락
             confidence += 2
         
-        if decline.avg_volume_ratio <= 0.5:  # 하락시 거래량이 기준거래량 50% 이하 (매물부담 적음)
+        if decline.avg_volume_ratio <= 0.3:  # 하락시 거래량이 기준거래량 30% 이하 (매물부담 적음)
             confidence += 3
         
         # 3. 지지 구간 품질 (추가 7점)

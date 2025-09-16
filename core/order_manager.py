@@ -59,20 +59,20 @@ class OrderManager:
             self.logger.error(f"❌ 3분봉 시간 계산 오류: {e}")
             return now_kst()
     
-    def _has_3_candles_passed(self, order_candle_time: datetime) -> bool:
-        """주문 시점부터 3분봉 3개가 지났는지 확인"""
+    def _has_4_candles_passed(self, order_candle_time: datetime) -> bool:
+        """주문 시점부터 3분봉 4개가 지났는지 확인"""
         try:
             if order_candle_time is None:
                 return False
 
-            # 3분봉 3개 = 9분 후 (실제 시각 기준 비교: 장마감 15:30 클램프에 걸려 무한 대기되는 문제 방지)
+            # 3분봉 4개 = 12분 후 (실제 시각 기준 비교: 장마감 15:30 클램프에 걸려 무한 대기되는 문제 방지)
             now_time = now_kst()
-            three_candles_later = order_candle_time + timedelta(minutes=9)
+            four_candles_later = order_candle_time + timedelta(minutes=12)
 
-            return now_time >= three_candles_later
+            return now_time >= four_candles_later
             
         except Exception as e:
-            self.logger.error(f"❌ 3분봉 경과 확인 오류: {e}")
+            self.logger.error(f"❌ 4분봉 경과 확인 오류: {e}")
             return False
     
     async def place_buy_order(self, stock_code: str, quantity: int, price: float, 
@@ -280,10 +280,10 @@ class OrderManager:
                     await self._handle_timeout(order_id)
                     continue  # 취소된 주문은 더 이상 처리하지 않음
                 
-                # 2-1. 매수 주문의 3분봉 체크 (3봉 후 취소)
+                # 2-1. 매수 주문의 4분봉 체크 (4봉 후 취소)
                 if order.order_type == OrderType.BUY and order.order_3min_candle_time:
-                    if self._has_3_candles_passed(order.order_3min_candle_time):
-                        await self._handle_3candle_timeout(order_id)
+                    if self._has_4_candles_passed(order.order_3min_candle_time):
+                        await self._handle_4candle_timeout(order_id)
                         continue  # 취소된 주문은 더 이상 처리하지 않음
                 
                 # 3. 가격 변동 시 정정 검토 (비활성화)
@@ -562,8 +562,8 @@ class OrderManager:
             except:
                 pass
     
-    async def _handle_3candle_timeout(self, order_id: str):
-        """3분봉 기준 타임아웃 처리 (매수 주문 후 3봉 지나면 취소)"""
+    async def _handle_4candle_timeout(self, order_id: str):
+        """3분봉 기준 타임아웃 처리 (매수 주문 후 4봉 지나면 취소)"""
         try:
             if order_id not in self.pending_orders:
                 return
@@ -571,7 +571,7 @@ class OrderManager:
             order = self.pending_orders[order_id]
             current_candle = self._get_current_3min_candle_time()
             
-            self.logger.warning(f"📊 매수 주문 3봉 타임아웃: {order_id} ({order.stock_code}) "
+            self.logger.warning(f"📊 매수 주문 4봉 타임아웃: {order_id} ({order.stock_code}) "
                               f"주문봉: {order.order_3min_candle_time.strftime('%H:%M') if order.order_3min_candle_time else 'N/A'} "
                               f"현재봉: {current_candle.strftime('%H:%M')}")
             
@@ -585,9 +585,9 @@ class OrderManager:
                         'stock_code': order.stock_code,
                         'stock_name': f'Stock_{order.stock_code}',
                         'order_type': order.order_type.value
-                    }, "3분봉 3개 경과")
+                    }, "3분봉 4개 경과")
             else:
-                # 🆕 3분봉 타임아웃 취소 실패 시에도 강제로 상태 정리
+                # 🆕 4분봉 타임아웃 취소 실패 시에도 강제로 상태 정리
                 if order_id in self.pending_orders:
                     order = self.pending_orders[order_id]
                     order.status = OrderStatus.TIMEOUT

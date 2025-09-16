@@ -4,7 +4,7 @@
     "candidate_stocks": []
   },
   "order_management": {
-    "buy_timeout_seconds": 180,
+    "buy_timeout_seconds": 240,
     "sell_timeout_seconds": 180,
     "max_adjustments": 3,
     "adjustment_threshold_percent": 0.5,

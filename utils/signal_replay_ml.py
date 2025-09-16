@@ -381,11 +381,50 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                     logger.warning(f"⚠️ [{stock_code}] 3/5가 정보 없음, 거래 건너뜀")
                 continue
             
-            # ==================== 매수 체결 가정 (미체결 개념 주석 처리) ====================
+            # ==================== 🆕 돌파봉 4/5 가격 조건 체크 ====================
             
-            # 미체결 개념을 제거하고 항상 양봉의 3/5 가격으로 매수했다고 가정
-            # 실제 신호 발생 시점부터 매수 시도
-            # 예: 09:42 라벨 → 09:45:00 신호 발생 → 09:45:00에 3/5가로 매수
+            # 돌파봉의 4/5 가격이 다음 2개의 3분봉까지 나오지 않으면 매수하지 않음 (하지만 기록은 유지)
+            signal_index = signal['index']
+            next_2_candles_start = signal_index + 1
+            next_2_candles_end = signal_index + 3  # 다음 2개 3분봉 (signal_index+1, signal_index+2)
+            
+            # 다음 2개 3분봉 데이터가 있는지 확인
+            if next_2_candles_end < len(df_3min):
+                next_2_candles = df_3min.iloc[next_2_candles_start:next_2_candles_end]
+                
+                # 다음 2개 3분봉 중 하나라도 4/5 가격 이하로 떨어지는지 확인
+                price_reached = False
+                for _, candle in next_2_candles.iterrows():
+                    if candle['low'] <= three_fifths_price:
+                        price_reached = True
+                        if logger:
+                            logger.debug(f"✅ [{stock_code}] 4/5가 도달: {candle['datetime'].strftime('%H:%M')} "
+                                       f"저가 {candle['low']:,.0f}원 ≤ 4/5가 {three_fifths_price:,.0f}원")
+                        break
+                
+                if not price_reached:
+                    if logger:
+                        logger.info(f"🚫 [{stock_code}] 4/5가 미도달: 다음 2개 3분봉에서 "
+                                  f"4/5가({three_fifths_price:,.0f}원) 이하로 떨어지지 않음 - 매수 건너뜀 (기록은 유지)")
+                    # 매수하지 않지만 기록은 유지하기 위해 continue 대신 빈 거래 기록 추가
+                    trades.append({
+                        'stock_code': stock_code,
+                        'buy_time': signal_completion_time,
+                        'buy_price': three_fifths_price,
+                        'sell_time': None,
+                        'sell_price': None,
+                        'quantity': 0,  # 수량 0으로 기록
+                        'profit_loss': 0,
+                        'profit_loss_rate': 0,
+                        'reason': f"4/5가 미도달 - {signal.get('reasons', 'pullback_pattern')}",
+                        'signal_index': signal_index,
+                        'entry_low': entry_low
+                    })
+                    continue  # 다음 신호로 넘어감
+            
+            # ==================== 매수 체결 가정 ====================
+            
+            # 3/5 가격 조건을 통과한 경우에만 매수 실행
             signal_time_start = signal_completion_time  # 신호 발생 시점에 매수
             
             # 디버그: 시간 정보 출력
@@ -394,7 +433,7 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                            f"신호 발생: {signal_completion_time.strftime('%H:%M')}, "
                            f"매수가: {three_fifths_price:,.0f}원")
             
-            # 항상 매수 성공으로 가정
+            # 3/5 가격 조건 통과 시 매수 성공으로 가정
             buy_executed = True
             buy_executed_price = three_fifths_price
             actual_execution_time = signal_completion_time
