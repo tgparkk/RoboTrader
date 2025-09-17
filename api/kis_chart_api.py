@@ -775,7 +775,7 @@ async def get_full_trading_day_data_async(stock_code: str, target_date: str = ""
                         stock_code=stock_code,
                         input_date=attempt_date,
                         input_hour=end_time,
-                        past_data_yn="Y"
+                        past_data_yn="N"
                     )
                     if result is None:
                         return None

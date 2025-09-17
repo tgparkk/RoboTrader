@@ -302,6 +302,7 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                 logger.warning(f"⚠️ [{stock_code}] ML 필터 초기화 실패: {e}")
         
         trades = []
+        missed_opportunities = []  # 매수 못한 종목들 추적
         current_position = None  # 현재 포지션 추적 (실시간과 동일하게 한 번에 하나만)
         last_signal_candle_time = None  # 마지막 신호 발생 캔들 시점 추적 (중복 신호 방지)
         
@@ -443,44 +444,84 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
             
             # ==================== 🆕 돌파봉 4/5 가격 조건 체크 ====================
             
-            # 돌파봉의 4/5 가격이 다음 2개의 3분봉까지 나오지 않으면 매수하지 않음 (하지만 기록은 유지)
+            # 돌파봉이 확정된 후, 다음 2개의 3분봉에서 4/5가에 도달하는지 확인
             signal_index = signal['index']
-            next_2_candles_start = signal_index + 1
-            next_2_candles_end = signal_index + 3  # 다음 2개 3분봉 (signal_index+1, signal_index+2)
+            next_2_candles_start = signal_index + 1  # 돌파봉 다음 봉부터
+            next_2_candles_end = signal_index + 3    # 돌파봉 + 다음 2개 봉
+            
+            # 4/5가 도달 여부 확인
+            price_reached = False
+            
+            if logger:
+                logger.debug(f"🔍 [{stock_code}] 4/5가 체크: 돌파봉인덱스={signal_index}, 4/5가={three_fifths_price:,.0f}원, "
+                           f"다음2봉범위={next_2_candles_start}~{next_2_candles_end-1}, 전체데이터길이={len(df_3min)}")
             
             # 다음 2개 3분봉 데이터가 있는지 확인
-            if next_2_candles_end < len(df_3min):
+            if next_2_candles_end <= len(df_3min):
                 next_2_candles = df_3min.iloc[next_2_candles_start:next_2_candles_end]
                 
+                if logger:
+                    logger.debug(f"🔍 [{stock_code}] 다음 2개 3분봉 데이터: {len(next_2_candles)}개")
+                    for idx, (_, candle) in enumerate(next_2_candles.iterrows()):
+                        actual_idx = next_2_candles_start + idx
+                        logger.debug(f"  봉{idx+1}(인덱스{actual_idx}): {candle['datetime'].strftime('%H:%M')} "
+                                   f"저가={candle['low']:,.0f}원, 4/5가={three_fifths_price:,.0f}원, "
+                                   f"도달여부={candle['low'] <= three_fifths_price}")
+                
                 # 다음 2개 3분봉 중 하나라도 4/5 가격 이하로 떨어지는지 확인
-                price_reached = False
-                for _, candle in next_2_candles.iterrows():
+                for idx, (_, candle) in enumerate(next_2_candles.iterrows()):
                     if candle['low'] <= three_fifths_price:
                         price_reached = True
+                        actual_idx = next_2_candles_start + idx
                         if logger:
                             logger.debug(f"✅ [{stock_code}] 4/5가 도달: {candle['datetime'].strftime('%H:%M')} "
-                                       f"저가 {candle['low']:,.0f}원 ≤ 4/5가 {three_fifths_price:,.0f}원")
+                                       f"저가 {candle['low']:,.0f}원 ≤ 4/5가 {three_fifths_price:,.0f}원 (인덱스{actual_idx})")
                         break
+            else:
+                # 데이터가 부족한 경우도 4/5가 미도달로 처리
+                if logger:
+                    logger.debug(f"⚠️ [{stock_code}] 다음 2개 3분봉 데이터 부족 - 4/5가 미도달로 처리")
+            
+            if not price_reached:
+                if logger:
+                    logger.info(f"🚫 [{stock_code}] 4/5가 미도달: 다음 2개 3분봉에서 "
+                              f"4/5가({three_fifths_price:,.0f}원) 이하로 떨어지지 않음 - 매수 건너뜀 (기록은 유지)")
                 
-                if not price_reached:
-                    if logger:
-                        logger.info(f"🚫 [{stock_code}] 4/5가 미도달: 다음 2개 3분봉에서 "
-                                  f"4/5가({three_fifths_price:,.0f}원) 이하로 떨어지지 않음 - 매수 건너뜀 (기록은 유지)")
-                    # 매수하지 않지만 기록은 유지하기 위해 continue 대신 빈 거래 기록 추가
-                    trades.append({
-                        'stock_code': stock_code,
-                        'buy_time': signal_completion_time,
-                        'buy_price': three_fifths_price,
-                        'sell_time': None,
-                        'sell_price': None,
-                        'quantity': 0,  # 수량 0으로 기록
-                        'profit_loss': 0,
-                        'profit_loss_rate': 0,
-                        'reason': f"4/5가 미도달 - {signal.get('reasons', 'pullback_pattern')}",
-                        'signal_index': signal_index,
-                        'entry_low': entry_low
-                    })
-                    continue  # 다음 신호로 넘어감
+                # 매수 못한 기회를 missed_opportunities에 추가
+                missed_opportunity = {
+                    'stock_code': stock_code,
+                    'signal_time': signal_completion_time,
+                    'target_price': three_fifths_price,
+                    'signal_index': signal_index,
+                    'entry_low': entry_low,
+                    'reason': f"4/5가 미도달 - {signal.get('reasons', 'pullback_pattern')}",
+                    'signal_strength': signal.get('confidence', 0),
+                    'virtual_profit_rate': None  # 나중에 계산
+                }
+                
+                # 가상 수익률 계산 (매수 성공했다면 결과가 어땠을지)
+                virtual_profit_rate = _calculate_virtual_profit_rate(
+                    df_1min, signal_completion_time, three_fifths_price, entry_low
+                )
+                missed_opportunity['virtual_profit_rate'] = virtual_profit_rate
+                
+                missed_opportunities.append(missed_opportunity)
+                
+                # 매수하지 않지만 기록은 유지하기 위해 continue 대신 빈 거래 기록 추가
+                trades.append({
+                    'stock_code': stock_code,
+                    'buy_time': signal_completion_time,
+                    'buy_price': three_fifths_price,
+                    'sell_time': None,
+                    'sell_price': None,
+                    'quantity': 0,  # 수량 0으로 기록
+                    'profit_loss': 0,
+                    'profit_loss_rate': 0,
+                    'reason': f"4/5가 미도달 - {signal.get('reasons', 'pullback_pattern')}",
+                    'signal_index': signal_index,
+                    'entry_low': entry_low
+                })
+                continue  # 다음 신호로 넘어감
             
             # ==================== 매수 체결 가정 ====================
             
@@ -735,17 +776,76 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
             logger.info(f"   전체 거래: {len(trades)}건")
             logger.info(f"   완료 거래: {len(completed_trades)}건")
             logger.info(f"   성공 거래: {len(successful_trades)}건")
+            logger.info(f"   매수 못한 기회: {len(missed_opportunities)}건")
             
             if completed_trades:
                 avg_profit = sum(t['profit_rate'] for t in completed_trades) / len(completed_trades)
                 logger.info(f"   평균 수익률: {avg_profit:.2f}%")
+            
+            if missed_opportunities:
+                virtual_profits = [m['virtual_profit_rate'] for m in missed_opportunities if m['virtual_profit_rate'] is not None]
+                if virtual_profits:
+                    avg_virtual_profit = sum(virtual_profits) / len(virtual_profits)
+                    logger.info(f"   매수 못한 기회 평균 가상 수익률: {avg_virtual_profit:.2f}%")
         
-        return trades
+        # trades와 missed_opportunities를 함께 반환
+        return {
+            'trades': trades,
+            'missed_opportunities': missed_opportunities
+        }
     
     except Exception as e:
         if logger:
             logger.error(f"거래 시뮬레이션 실패 [{stock_code}]: {e}")
-        return []
+        return {'trades': [], 'missed_opportunities': []}
+
+
+def _calculate_virtual_profit_rate(df_1min: pd.DataFrame, signal_time, target_price: float, entry_low: float) -> float:
+    """매수 성공했다면 결과가 어땠을지 가상 수익률 계산"""
+    try:
+        if df_1min is None or df_1min.empty:
+            return 0.0
+        
+        # 신호 시간 이후의 1분봉 데이터 필터링
+        signal_datetime = pd.to_datetime(signal_time)
+        future_data = df_1min[df_1min['datetime'] >= signal_datetime].copy()
+        
+        if future_data.empty:
+            return 0.0
+        
+        # 매수가를 target_price로 가정
+        buy_price = target_price
+        
+        # 손절가 설정 (entry_low 기준)
+        stop_loss_price = entry_low * 0.98  # 2% 추가 손절
+        
+        # 목표가 설정 (매수가 대비 3% 수익)
+        target_profit_price = buy_price * 1.03
+        
+        # 최대 보유 시간 (2시간 = 120분)
+        max_hold_minutes = 120
+        end_time = signal_datetime + pd.Timedelta(minutes=max_hold_minutes)
+        future_data = future_data[future_data['datetime'] <= end_time]
+        
+        if future_data.empty:
+            return 0.0
+        
+        # 각 1분봉에서 매도 조건 확인
+        for _, candle in future_data.iterrows():
+            # 손절 조건 확인
+            if candle['low'] <= stop_loss_price:
+                return (stop_loss_price / buy_price - 1) * 100
+            
+            # 목표가 도달 조건 확인
+            if candle['high'] >= target_profit_price:
+                return (target_profit_price / buy_price - 1) * 100
+        
+        # 2시간 후에도 조건 미달성 시 마지막 가격으로 계산
+        last_price = future_data.iloc[-1]['close']
+        return (last_price / buy_price - 1) * 100
+        
+    except Exception as e:
+        return 0.0
 
 
 def _check_technical_sell_signals(data_3min: pd.DataFrame, entry_low: float):
@@ -902,7 +1002,16 @@ def main():
                 return stock_code, []
 
             # 거래 시뮬레이션 실행
-            trades = simulate_trades(df_3min, df_1min, logger=logger, stock_code=stock_code)
+            simulation_result = simulate_trades(df_3min, df_1min, logger=logger, stock_code=stock_code)
+            
+            # 반환값 처리 (기존 호환성 유지)
+            if isinstance(simulation_result, dict):
+                trades = simulation_result.get('trades', [])
+                missed_opportunities = simulation_result.get('missed_opportunities', [])
+            else:
+                # 기존 형식 (리스트)인 경우
+                trades = simulation_result
+                missed_opportunities = []
             
             # 차트 생성 (옵션)
             if args.charts and trades:
@@ -913,16 +1022,17 @@ def main():
                 except Exception as chart_error:
                     logger.warning(f"⚠️  [{stock_code}] 차트 생성 실패: {chart_error}")
             
-            logger.info(f"✅ [{stock_code}] 처리 완료 - {len(trades)}건 거래")
-            return stock_code, trades, df_1min
+            logger.info(f"✅ [{stock_code}] 처리 완료 - {len(trades)}건 거래, {len(missed_opportunities)}건 매수 못한 기회")
+            return stock_code, trades, df_1min, missed_opportunities
             
         except Exception as e:
             logger.error(f"❌ [{stock_code}] 처리 실패: {e}")
-            return stock_code, [], pd.DataFrame()
+            return stock_code, [], pd.DataFrame(), []
 
     # 병렬 처리 실행
     all_trades: Dict[str, List[Dict[str, object]]] = {}
     all_stock_data: Dict[str, pd.DataFrame] = {}  # 🆕 상세 분석용 데이터 저장
+    all_missed_opportunities: Dict[str, List[Dict[str, object]]] = {}  # 🆕 매수 못한 기회들
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         # 모든 종목을 병렬로 처리
@@ -934,23 +1044,34 @@ def main():
         for future in concurrent.futures.as_completed(future_to_stock):
             stock_code = future_to_stock[future]
             try:
-                processed_code, trades, stock_data = future.result()
+                result = future.result()
+                if len(result) == 4:  # 새로운 형식 (missed_opportunities 포함)
+                    processed_code, trades, stock_data, missed_opportunities = result
+                    all_missed_opportunities[processed_code] = missed_opportunities
+                else:  # 기존 형식 (하위 호환성)
+                    processed_code, trades, stock_data = result
+                    all_missed_opportunities[processed_code] = []
+                
                 all_trades[processed_code] = trades
                 all_stock_data[processed_code] = stock_data  # 🆕 1분봉 데이터 저장
             except Exception as exc:
                 logger.error(f"❌ [{stock_code}] 병렬 처리 중 예외 발생: {exc}")
                 all_trades[stock_code] = []
                 all_stock_data[stock_code] = pd.DataFrame()
+                all_missed_opportunities[stock_code] = []
 
     # 결과 요약
     total_trades = sum(len(trades) for trades in all_trades.values())
+    total_missed_opportunities = sum(len(missed) for missed in all_missed_opportunities.values())
     successful_stocks = sum(1 for trades in all_trades.values() if trades)
+    stocks_with_missed_opportunities = sum(1 for missed in all_missed_opportunities.values() if missed)
     
     logger.info(f"" + "="*60)
     logger.info(f"🎯 전체 처리 완료")
     logger.info(f"📊 처리된 종목: {len(codes_union)}개")
     logger.info(f"✅ 거래가 있는 종목: {successful_stocks}개")
     logger.info(f"💰 총 거래 건수: {total_trades}건")
+    logger.info(f"🚫 매수 못한 기회: {total_missed_opportunities}건 ({stocks_with_missed_opportunities}개 종목)")
 
     # 선택 날짜별 통계 (DB에서 selection_date 정보가 있을 때만)
     if stock_selection_map:
@@ -1148,6 +1269,26 @@ def main():
                                     # 체결 + 미결제
                                     lines.append(f"    {trade['buy_time']} 매수[pullback_pattern] @{trade['buy_price']:,.0f} → 미결제 ({trade.get('reason', '알수없음')})")
                         else:
+                            lines.append("    없음")
+                        
+                        # 🆕 매수 못한 기회 섹션 추가
+                        missed_opportunities = all_missed_opportunities.get(stock_code, [])
+                        if missed_opportunities:
+                            lines.append("  매수 못한 기회:")
+                            for missed in missed_opportunities:
+                                signal_time = missed['signal_time'].strftime('%H:%M')
+                                target_price = missed['target_price']
+                                virtual_profit = missed.get('virtual_profit_rate', 0)
+                                reason = missed.get('reason', '알수없음')
+                                
+                                if virtual_profit is not None:
+                                    profit_status = f"가상수익률: {virtual_profit:+.2f}%"
+                                else:
+                                    profit_status = "가상수익률: 계산불가"
+                                
+                                lines.append(f"    {signal_time} 신호[pullback_pattern] @{target_price:,.0f} → {reason} ({profit_status})")
+                        else:
+                            lines.append("  매수 못한 기회:")
                             lines.append("    없음")
                         
                         # ==================== 🆕 상세 3분봉 분석 추가 ====================

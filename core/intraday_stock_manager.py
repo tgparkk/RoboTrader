@@ -268,8 +268,8 @@ class IntradayStockManager:
                 filtered_data = historical_data.copy()
             
             # 📊 ML용 일봉 데이터 수집 (실시간에서는 비활성화)
-            # daily_data = await self._collect_daily_data_for_ml(stock_code)
-            daily_data = pd.DataFrame()  # 실시간에서는 일봉데이터 수집하지 않음
+            daily_data = await self._collect_daily_data_for_ml(stock_code)
+            # daily_data = pd.DataFrame()  # 실시간에서는 일봉데이터 수집하지 않음
             
             # 메모리에 저장
             with self._lock:
@@ -776,6 +776,39 @@ class IntradayStockManager:
             elif realtime_data.empty:
                 combined_data = historical_data.copy()
                 self.logger.error(f"📊 {stock_code} 과거 데이터만 사용: {len(combined_data)}건")
+                
+                # 데이터 부족 시 자동 수집 시도
+                if len(combined_data) < 15:
+                    try:
+                        from trade_analysis.data_sufficiency_checker import collect_minute_data_from_api, save_minute_data_to_cache
+                        from utils.korean_time import now_kst
+                        
+                        today = now_kst().strftime('%Y%m%d')
+                        self.logger.info(f"🔄 {stock_code} 데이터 부족으로 자동 수집 시도...")
+                        
+                        # API에서 직접 분봉 데이터 수집
+                        minute_data = collect_minute_data_from_api(stock_code, today)
+                        if minute_data is not None and not minute_data.empty:
+                            # 캐시에 저장
+                            save_minute_data_to_cache(stock_code, today, minute_data)
+                            
+                            # historical_data에 추가
+                            with self._lock:
+                                if stock_code in self.selected_stocks:
+                                    self.selected_stocks[stock_code].historical_data = minute_data
+                                    self.selected_stocks[stock_code].data_complete = True
+                                    self.selected_stocks[stock_code].last_update = now_kst()
+                            
+                            # 수정된 데이터로 다시 결합
+                            combined_data = minute_data.copy()
+                            self.logger.info(f"✅ {stock_code} 자동 수집 완료: {len(combined_data)}개")
+                        else:
+                            self.logger.warning(f"❌ {stock_code} 자동 수집 실패")
+                            return None
+                            
+                    except Exception as e:
+                        self.logger.error(f"❌ {stock_code} 자동 수집 중 오류: {e}")
+                        return None
             else:
                 combined_data = pd.concat([historical_data, realtime_data], ignore_index=True)
                 #self.logger.debug(f"📊 {stock_code} 과거+실시간 데이터 결합: {len(historical_data)}+{len(realtime_data)}={len(combined_data)}건")
@@ -1205,12 +1238,23 @@ class IntradayStockManager:
         try:
             self.logger.info(f"📈 {stock_code} ML용 일봉 데이터 수집 시작 (60일)")
             
-            # ML 데이터 컬렉터 사용
-            from trade_analysis.ml_data_collector import MLDataCollector
-            ml_collector = MLDataCollector()
+            # 기존 API를 사용하여 일봉 데이터 수집
+            from api.kis_market_api import get_inquire_daily_itemchartprice
+            from datetime import timedelta
+            from utils.korean_time import now_kst
             
             # 60일치 일봉 데이터 수집
-            daily_data = ml_collector.collect_daily_data(stock_code, days=60)
+            end_date = now_kst().strftime("%Y%m%d")
+            start_date = (now_kst() - timedelta(days=60)).strftime("%Y%m%d")
+            
+            daily_data = get_inquire_daily_itemchartprice(
+                div_code="J",
+                itm_no=stock_code,
+                inqr_strt_dt=start_date,
+                inqr_end_dt=end_date,
+                period_code="D",  # 일봉
+                adj_prc="1"  # 수정주가
+            )
             
             if daily_data is not None and not daily_data.empty:
                 self.logger.info(f"✅ {stock_code} 일봉 데이터 수집 성공: {len(daily_data)}일치")

@@ -354,7 +354,30 @@ class DayTradingBot:
                 return
             if len(combined_data) < 15:
                 self.logger.debug(f"❌ {stock_code} 1분봉 데이터 부족: {len(combined_data)}개 (최소 15개 필요)")
-                return
+                
+                # 데이터 부족 시 자동 수집 시도
+                try:
+                    from trade_analysis.data_sufficiency_checker import check_and_collect_data
+                    from utils.korean_time import now_kst
+                    
+                    today = now_kst().strftime('%Y%m%d')
+                    self.logger.info(f"🔄 {stock_code} 데이터 부족으로 자동 수집 시도...")
+                    
+                    if check_and_collect_data(stock_code, today, 15):
+                        # 수집 후 다시 데이터 확인
+                        combined_data = self.intraday_manager.get_combined_chart_data(stock_code)
+                        if combined_data is None or len(combined_data) < 15:
+                            self.logger.warning(f"❌ {stock_code} 자동 수집 후에도 데이터 부족: {len(combined_data) if combined_data is not None else 0}개")
+                            return
+                        else:
+                            self.logger.info(f"✅ {stock_code} 자동 수집 완료: {len(combined_data)}개")
+                    else:
+                        self.logger.warning(f"❌ {stock_code} 자동 수집 실패")
+                        return
+                        
+                except Exception as e:
+                    self.logger.error(f"❌ {stock_code} 자동 수집 중 오류: {e}")
+                    return
             
             # 🆕 3분봉 변환 시 완성된 봉만 자동 필터링됨 (TimeFrameConverter에서 처리)
             from core.timeframe_converter import TimeFrameConverter
@@ -416,22 +439,22 @@ class DayTradingBot:
                     self.logger.debug(f"🔍 매수 전 상태 확인: {stock_code} 현재상태={current_stock.state.value}")
                 
                 # [리얼매매 코드 - 활성화]
-                try:
-                    # 3분 단위로 정규화된 캔들 시점을 전달하여 중복 신호 방지
-                    raw_candle_time = data_3min['datetime'].iloc[-1]
-                    minute_normalized = (raw_candle_time.minute // 3) * 3
-                    current_candle_time = raw_candle_time.replace(minute=minute_normalized, second=0, microsecond=0)
-                    await self.decision_engine.execute_real_buy(
-                        trading_stock, 
-                        buy_reason, 
-                        buy_info['buy_price'], 
-                        buy_info['quantity'],
-                        candle_time=current_candle_time
-                    )
-                    # 상태는 주문 처리 로직에서 자동으로 변경됨 (SELECTED -> BUY_PENDING -> POSITIONED)
-                    self.logger.info(f"🔥 실제 매수 주문 완료: {stock_code}({stock_name}) - {buy_reason}")
-                except Exception as e:
-                    self.logger.error(f"❌ 실제 매수 처리 오류: {e}")
+                # try:
+                #     # 3분 단위로 정규화된 캔들 시점을 전달하여 중복 신호 방지
+                #     raw_candle_time = data_3min['datetime'].iloc[-1]
+                #     minute_normalized = (raw_candle_time.minute // 3) * 3
+                #     current_candle_time = raw_candle_time.replace(minute=minute_normalized, second=0, microsecond=0)
+                #     await self.decision_engine.execute_real_buy(
+                #         trading_stock, 
+                #         buy_reason, 
+                #         buy_info['buy_price'], 
+                #         buy_info['quantity'],
+                #         candle_time=current_candle_time
+                #     )
+                #     # 상태는 주문 처리 로직에서 자동으로 변경됨 (SELECTED -> BUY_PENDING -> POSITIONED)
+                #     self.logger.info(f"🔥 실제 매수 주문 완료: {stock_code}({stock_name}) - {buy_reason}")
+                # except Exception as e:
+                #     self.logger.error(f"❌ 실제 매수 처리 오류: {e}")
                     
                 # [가상매매 코드 - 주석처리]
                 # try:
@@ -477,20 +500,19 @@ class DayTradingBot:
                 # 매도 후보로 변경
                 success = self.trading_manager.move_to_sell_candidate(stock_code, sell_reason)
                 if success:
-                    # [실제 매도 주문 실행 - 활성화]
-                    try:
-                        await self.decision_engine.execute_real_sell(trading_stock, sell_reason)
-                        self.logger.info(f"📉 실제 매도 주문 완료: {stock_code}({stock_name}) - {sell_reason}")
-                    except Exception as e:
-                        self.logger.error(f"❌ 실제 매도 처리 오류: {e}")
+                    # # [실제 매도 주문 실행 - 활성화]
+                    # try:
+                    #     await self.decision_engine.execute_real_sell(trading_stock, sell_reason)
+                    #     self.logger.info(f"📉 실제 매도 주문 완료: {stock_code}({stock_name}) - {sell_reason}")
+                    # except Exception as e:
+                    #     self.logger.error(f"❌ 실제 매도 처리 오류: {e}")
                     
                     # [가상매매 코드 - 주석처리]
-                    # try:
-                    #     await self.decision_engine.execute_virtual_sell(trading_stock, combined_data, sell_reason)
-                    #     self.logger.info(f"📉 가상 매도 완료 처리: {stock_code}({stock_name}) - {sell_reason}")
-                    # except Exception as e:
-                    #     self.logger.error(f"❌ 가상 매도 처리 오류: {e}")
-                        
+                    try:
+                        await self.decision_engine.execute_virtual_sell(trading_stock, combined_data, sell_reason)
+                        self.logger.info(f"📉 가상 매도 완료 처리: {stock_code}({stock_name}) - {sell_reason}")
+                    except Exception as e:
+                        self.logger.error(f"❌ 가상 매도 처리 오류: {e}")
         except Exception as e:
             self.logger.error(f"❌ {trading_stock.stock_code} 매도 판단 오류: {e}")
     
