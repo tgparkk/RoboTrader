@@ -146,3 +146,4 @@ Thumbs.db
 *.bak
 *.backup
 *.old
+/realtime_data

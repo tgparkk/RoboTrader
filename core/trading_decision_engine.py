@@ -56,6 +56,17 @@ class TradingDecisionEngine:
         # 🆕 쿨다운 관리
         self.stock_cooldown_end = {}  # 종목별 쿨다운 종료 시간 추적
         
+        # 🆕 일봉 기반 패턴 필터 초기화
+        try:
+            from core.indicators.daily_pattern_filter import DailyPatternFilter
+            self.daily_pattern_filter = DailyPatternFilter(logger=self.logger)
+            self.use_daily_filter = True
+            self.logger.info("📊 일봉 기반 패턴 필터 초기화 완료")
+        except Exception as e:
+            self.logger.warning(f"⚠️ 일봉 패턴 필터 초기화 실패: {e}")
+            self.daily_pattern_filter = None
+            self.use_daily_filter = False
+        
         # ML 설정 로드 (실시간에서는 비활성화)
         try:
             from config.ml_settings import MLSettings
@@ -317,6 +328,22 @@ class TradingDecisionEngine:
                 quantity = int(max_buy_amount // buy_price) if buy_price > 0 else 0
                 
                 if quantity > 0:
+                    # 🆕 일봉 기반 패턴 필터 적용
+                    if self.use_daily_filter and self.daily_pattern_filter:
+                        current_time = now_kst()
+                        signal_date = current_time.strftime("%Y%m%d")
+                        signal_time = current_time.strftime("%H:%M")
+                        
+                        filter_result = self.daily_pattern_filter.apply_filter(
+                            stock_code, signal_date, signal_time
+                        )
+                        
+                        if not filter_result.passed:
+                            self.logger.debug(f"🚫 {stock_code} 일봉 필터 차단: {filter_result.reason}")
+                            return False, f"눌림목캔들패턴: {reason} + 일봉필터차단: {filter_result.reason}", {'buy_price': 0, 'quantity': 0, 'max_buy_amount': 0}
+                        else:
+                            self.logger.debug(f"✅ {stock_code} 일봉 필터 통과: {filter_result.reason} (점수: {filter_result.score:.2f})")
+                    
                     # ML 필터 적용 (매수 정보 생성 전에)
                     ml_pass, ml_reason, ml_result = await self._apply_hardcoded_ml_filter(trading_stock, "pullback_pattern")
                     

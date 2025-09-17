@@ -324,6 +324,21 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                 logger.info(f"매수 신호 없음 - 거래 시뮬레이션 불가 [{stock_code}]")
             return []
         
+        # 🆕 일봉 기반 패턴 필터 초기화 (시뮬레이션용)
+        daily_filter_enabled = False
+        daily_pattern_filter = None
+        
+        try:
+            from core.indicators.daily_pattern_filter import DailyPatternFilter
+            daily_pattern_filter = DailyPatternFilter(logger=logger)
+            daily_filter_enabled = True
+            if logger:
+                logger.info(f"📊 [{stock_code}] 일봉 패턴 필터 초기화 완료")
+        except Exception as e:
+            daily_filter_enabled = False
+            if logger:
+                logger.warning(f"⚠️ [{stock_code}] 일봉 패턴 필터 초기화 실패: {e}")
+        
         trades = []
         missed_opportunities = []  # 매수 못한 종목들 추적
         current_position = None  # 현재 포지션 추적 (실시간과 동일하게 한 번에 하나만)
@@ -396,6 +411,29 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                 if logger:
                     logger.warning(f"⚠️ [{stock_code}] 3/5가 정보 없음, 거래 건너뜀")
                 continue
+            
+            # ==================== 🆕 일봉 기반 패턴 필터 적용 (시뮬레이션) ====================
+            if daily_filter_enabled and daily_pattern_filter:
+                try:
+                    signal_date = signal_completion_time.strftime("%Y%m%d")
+                    signal_time = signal_completion_time.strftime("%H:%M")
+                    
+                    filter_result = daily_pattern_filter.apply_filter(
+                        stock_code, signal_date, signal_time
+                    )
+                    
+                    if not filter_result.passed:
+                        if logger:
+                            logger.debug(f"🚫 [{signal_completion_time.strftime('%H:%M')}] {stock_code} 일봉 필터 차단: {filter_result.reason}")
+                        continue  # 일봉 필터에 걸리면 거래 건너뜀
+                    else:
+                        if logger:
+                            logger.debug(f"✅ [{signal_completion_time.strftime('%H:%M')}] {stock_code} 일봉 필터 통과: {filter_result.reason} (점수: {filter_result.score:.2f})")
+                            
+                except Exception as e:
+                    if logger:
+                        logger.warning(f"⚠️ [{stock_code}] 일봉 필터 적용 실패: {e}")
+                    # 필터 오류 시에도 거래 진행 (안전장치)
             
             # ==================== 🆕 돌파봉 4/5 가격 조건 체크 ====================
             
