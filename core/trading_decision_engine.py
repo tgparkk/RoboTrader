@@ -48,6 +48,14 @@ class TradingDecisionEngine:
         from core.virtual_trading_manager import VirtualTradingManager
         self.virtual_trading = VirtualTradingManager(db_manager=db_manager, api_manager=api_manager)
         
+        # 🆕 설정 파일에서 쿨다운 시간 로드
+        from config.settings import load_trading_config
+        self.trading_config = load_trading_config()
+        self.buy_cooldown_minutes = self.trading_config.order_management.buy_cooldown_minutes
+        
+        # 🆕 쿨다운 관리
+        self.stock_cooldown_end = {}  # 종목별 쿨다운 종료 시간 추적
+        
         # ML 설정 로드 (실시간에서는 비활성화)
         try:
             from config.ml_settings import MLSettings
@@ -264,6 +272,13 @@ class TradingDecisionEngine:
             if self._is_already_holding(stock_code):
                 return False, f"이미 보유 중인 종목 (매수 제외)", buy_info
             
+            # 🆕 30분 쿨다운 체크
+            current_time = now_kst()
+            if stock_code in self.stock_cooldown_end:
+                cooldown_end_time = self.stock_cooldown_end[stock_code]
+                if current_time < cooldown_end_time:
+                    remaining_minutes = int((cooldown_end_time - current_time).total_seconds() / 60)
+                    return False, f"30분 쿨다운 중 ({remaining_minutes}분 남음)", buy_info
             
             # 동일 캔들 중복 신호 차단 - 3분 단위로 정규화해서 비교
             raw_candle_time = combined_data['datetime'].iloc[-1]
@@ -334,6 +349,19 @@ class TradingDecisionEngine:
         except Exception as e:
             self.logger.error(f"❌ {trading_stock.stock_code} 매수 판단 오류: {e}")
             return False, f"오류: {e}", {'buy_price': 0, 'quantity': 0, 'max_buy_amount': 0}
+    
+    def set_buy_cooldown(self, stock_code: str, cooldown_minutes: int = None):
+        """매수 성공 시 쿨다운 설정"""
+        from datetime import timedelta
+        current_time = now_kst()
+        
+        # 설정 파일의 값을 사용 (파라미터가 없으면)
+        if cooldown_minutes is None:
+            cooldown_minutes = self.buy_cooldown_minutes
+            
+        cooldown_end_time = current_time + timedelta(minutes=cooldown_minutes)
+        self.stock_cooldown_end[stock_code] = cooldown_end_time
+        self.logger.info(f"⏰ {stock_code} {cooldown_minutes}분 쿨다운 설정: {cooldown_end_time.strftime('%H:%M')}까지")
     
     def _calculate_buy_price(self, combined_data) -> float:
         """매수가 계산 (3/5가 또는 현재가)

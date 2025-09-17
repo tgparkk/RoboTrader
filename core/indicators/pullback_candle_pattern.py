@@ -20,7 +20,6 @@ from core.indicators.pullback_utils import (
 from typing import List, Tuple
 from core.indicators.pullback.volume_analyzer import VolumeAnalyzer
 from core.indicators.pullback.support_pattern_analyzer import SupportPatternAnalyzer
-from core.indicators.failed_signal_tracker import failed_signal_tracker
 
 
 class PullbackCandlePattern:
@@ -348,23 +347,6 @@ class PullbackCandlePattern:
                 support_start = support_info.get('start_idx', 0) if support_info else 0
                 support_end = support_info.get('end_idx', 0) if support_info else 0
                 
-                # 중복 패턴 확인
-                is_duplicate, duplicate_reason = failed_signal_tracker.is_duplicate_pattern(
-                    stock_code=stock_code,
-                    current_time=current_time,
-                    uptrend_start=uptrend_start, uptrend_end=uptrend_end,
-                    decline_start=decline_start, decline_end=decline_end,
-                    support_start=support_start, support_end=support_end
-                )
-                
-                if is_duplicate:
-                    # 중복 신호로 판단되면 회피
-                    result = SignalStrength(
-                        SignalType.AVOID, 0, 0, [f"중복신호방지: {duplicate_reason}"], 
-                        volume_analysis.volume_ratio, BisectorStatus.BROKEN
-                    )
-                    return (result, []) if return_risk_signals else result
-                
                 # 매수 신호 발생
                 signal_strength = SignalStrength(
                     signal_type=SignalType.STRONG_BUY if support_pattern_info['confidence'] >= 80 else SignalType.CAUTIOUS_BUY,
@@ -659,37 +641,3 @@ class PullbackCandlePattern:
                             stock_code: str = "UNKNOWN", debug: bool = False) -> List[RiskSignal]:
         """매도 신호 생성"""
         return PullbackUtils.detect_risk_signals(data, entry_price, entry_low)
-    
-    @staticmethod
-    def record_failed_signal(stock_code: str, signal_time: datetime, 
-                           support_pattern_info: dict, failure_reason: str):
-        """실패한 신호 패턴 기록"""
-        try:
-            debug_info = support_pattern_info.get('debug_info', {})
-            uptrend_info = debug_info.get('uptrend', {})
-            decline_info = debug_info.get('decline', {})
-            support_info = debug_info.get('support', {})
-            
-            # 구간 인덱스 추출
-            uptrend_start = uptrend_info.get('start_idx', 0) if uptrend_info else 0
-            uptrend_end = uptrend_info.get('end_idx', 0) if uptrend_info else 0
-            decline_start = decline_info.get('start_idx', 0) if decline_info else 0
-            decline_end = decline_info.get('end_idx', 0) if decline_info else 0
-            support_start = support_info.get('start_idx', 0) if support_info else 0
-            support_end = support_info.get('end_idx', 0) if support_info else 0
-            
-            # 실패한 신호 패턴 저장
-            failed_signal_tracker.add_failed_signal(
-                stock_code=stock_code,
-                signal_time=signal_time,
-                uptrend_start=uptrend_start, uptrend_end=uptrend_end,
-                decline_start=decline_start, decline_end=decline_end,
-                support_start=support_start, support_end=support_end,
-                entry_price=support_pattern_info.get('entry_price', 0),
-                failure_reason=failure_reason,
-                confidence=support_pattern_info.get('confidence', 0)
-            )
-            
-        except Exception as e:
-            # 실패 기록 중 오류가 발생해도 메인 로직에 영향 없도록
-            pass

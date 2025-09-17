@@ -55,7 +55,7 @@ import asyncio
 from typing import Dict, List, Tuple, Optional
 import io
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 import sys
 import os
 import sqlite3
@@ -305,6 +305,12 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
         missed_opportunities = []  # 매수 못한 종목들 추적
         current_position = None  # 현재 포지션 추적 (실시간과 동일하게 한 번에 하나만)
         last_signal_candle_time = None  # 마지막 신호 발생 캔들 시점 추적 (중복 신호 방지)
+        # 🆕 설정 파일에서 쿨다운 시간 로드
+        from config.settings import load_trading_config
+        trading_config = load_trading_config()
+        buy_cooldown_minutes = trading_config.order_management.buy_cooldown_minutes
+        
+        stock_cooldown_end = {}  # 종목별 쿨다운 종료 시간 추적
         
         for signal in buy_signals:
             signal_datetime = signal['datetime']  # 라벨 시간 (09:42)
@@ -333,6 +339,15 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                     if logger:
                         logger.debug(f"✅ [{signal_completion_time.strftime('%H:%M')}] 매도 완료, 새 매수 가능")
                     current_position = None
+            
+            # ==================== 쿨다운 체크 ====================
+            if stock_code in stock_cooldown_end:
+                cooldown_end_time = stock_cooldown_end[stock_code]
+                if signal_completion_time < cooldown_end_time:
+                    remaining_minutes = int((cooldown_end_time - signal_completion_time).total_seconds() / 60)
+                    if logger:
+                        logger.debug(f"🚫 [{signal_completion_time.strftime('%H:%M')}] {stock_code} 쿨다운 중: {remaining_minutes}분 남음")
+                    continue  # 쿨다운 중이므로 매수 신호 건너뜀
             
             # ==================== 15시 이후 매수 금지 체크 ====================
             signal_hour = signal_completion_time.hour
@@ -482,46 +497,7 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                 if logger:
                     logger.debug(f"⚠️ [{stock_code}] 다음 2개 3분봉 데이터 부족 - 4/5가 미도달로 처리")
             
-            if not price_reached:
-                if logger:
-                    logger.info(f"🚫 [{stock_code}] 4/5가 미도달: 다음 2개 3분봉에서 "
-                              f"4/5가({three_fifths_price:,.0f}원) 이하로 떨어지지 않음 - 매수 건너뜀 (기록은 유지)")
-                
-                # 매수 못한 기회를 missed_opportunities에 추가
-                missed_opportunity = {
-                    'stock_code': stock_code,
-                    'signal_time': signal_completion_time,
-                    'target_price': three_fifths_price,
-                    'signal_index': signal_index,
-                    'entry_low': entry_low,
-                    'reason': f"4/5가 미도달 - {signal.get('reasons', 'pullback_pattern')}",
-                    'signal_strength': signal.get('confidence', 0),
-                    'virtual_profit_rate': None  # 나중에 계산
-                }
-                
-                # 가상 수익률 계산 (매수 성공했다면 결과가 어땠을지)
-                virtual_profit_rate = _calculate_virtual_profit_rate(
-                    df_1min, signal_completion_time, three_fifths_price, entry_low
-                )
-                missed_opportunity['virtual_profit_rate'] = virtual_profit_rate
-                
-                missed_opportunities.append(missed_opportunity)
-                
-                # 매수하지 않지만 기록은 유지하기 위해 continue 대신 빈 거래 기록 추가
-                trades.append({
-                    'stock_code': stock_code,
-                    'buy_time': signal_completion_time,
-                    'buy_price': three_fifths_price,
-                    'sell_time': None,
-                    'sell_price': None,
-                    'quantity': 0,  # 수량 0으로 기록
-                    'profit_loss': 0,
-                    'profit_loss_rate': 0,
-                    'reason': f"4/5가 미도달 - {signal.get('reasons', 'pullback_pattern')}",
-                    'signal_index': signal_index,
-                    'entry_low': entry_low
-                })
-                continue  # 다음 신호로 넘어감
+            # 4/5가 도달 조건을 제거하고 5분 타임아웃 조건으로 통합
             
             # ==================== 매수 체결 가정 ====================
             
@@ -542,54 +518,64 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
             # 매수 성공 시 신호 캔들 시점 저장 (중복 신호 방지)
             last_signal_candle_time = normalized_signal_time
             
-            # (주석 처리된 미체결 로직)
-            # check_candles = df_1min[
-            #     (df_1min['datetime'] >= signal_time_start) & 
-            #     (df_1min['datetime'] < signal_time_end)
-            # ].copy()
-            # 
-            # if check_candles.empty:
-            #     if logger:
-            #         logger.debug(f"⚠️ [{stock_code}] 체결 검증용 1분봉 데이터 없음, 거래 건너뜀")
-            #     continue
-            # 
-            # # 5분 내에 3/5가 이하로 떨어지는 시점 찾기 (체결 가능성만 확인)
-            # for _, candle in check_candles.iterrows():
-            #     # 해당 1분봉의 저가가 3/5가 이하면 체결 가능
-            #     if candle['low'] <= three_fifths_price:
-            #         buy_executed = True
-            #         actual_execution_time = candle['datetime']
-            #         # 체결가는 3/5가로 고정 (지정가 주문과 동일)
-            #         break
-            # 
-            # if not buy_executed:
-            #     # 5분 내에 3/5가 이하로 떨어지지 않음 → 매수 미체결
-            #     if logger:
-            #         logger.debug(f"💸 [{stock_code}] 매수 미체결: 5분 내 3/5가({three_fifths_price:,.0f}원) 도달 실패")
-            #     
-            #     # 미체결 신호도 기록에 추가
-            #     trades.append({
-            #         'buy_time': signal_completion_time.strftime('%H:%M'),
-            #         'buy_price': 0,
-            #         'sell_time': '',
-            #         'sell_price': 0,
-            #         'profit_rate': 0.0,
-            #         'status': 'unexecuted',
-            #         'signal_type': signal.get('signal_type', ''),
-            #         'confidence': signal.get('confidence', 0),
-            #         'target_profit': target_profit_rate,
-            #         'max_profit_rate': 0.0,
-            #         'max_loss_rate': 0.0,
-            #         'duration_minutes': 0,
-            #         'reason': f'미체결: 5분 내 3/5가({three_fifths_price:,.0f}원) 도달 실패'
-            #     })
-            #     continue
+            # 🆕 3분봉 기준: 돌파봉의 다음 2개 3분봉(6분) 타임아웃 적용
+            signal_time_start = signal_completion_time
+            signal_time_end = signal_completion_time + timedelta(minutes=6)  # 6분 타임아웃 (다음 2개 3분봉)
+            
+            check_candles = df_1min[
+                (df_1min['datetime'] >= signal_time_start) & 
+                (df_1min['datetime'] < signal_time_end)
+            ].copy()
+            
+            if check_candles.empty:
+                if logger:
+                    logger.debug(f"⚠️ [{stock_code}] 체결 검증용 1분봉 데이터 없음, 거래 건너뜀")
+                continue
+            
+            # 6분 내에 3/5가 이하로 떨어지는 시점 찾기 (체결 가능성만 확인)
+            buy_executed = False
+            for _, candle in check_candles.iterrows():
+                # 해당 1분봉의 저가가 3/5가 이하면 체결 가능
+                if candle['low'] <= three_fifths_price:
+                    buy_executed = True
+                    actual_execution_time = candle['datetime']
+                    # 체결가는 3/5가로 고정 (지정가 주문과 동일)
+                    break
+            
+            if not buy_executed:
+                # 6분 내에 3/5가 이하로 떨어지지 않음 → 매수 미체결
+                if logger:
+                    logger.debug(f"💸 [{stock_code}] 매수 미체결: 6분 내 3/5가({three_fifths_price:,.0f}원) 도달 실패")
+                
+                # 미체결 신호도 기록에 추가
+                trades.append({
+                    'buy_time': signal_completion_time.strftime('%H:%M'),
+                    'buy_price': 0,
+                    'sell_time': '',
+                    'sell_price': 0,
+                    'profit_rate': 0.0,
+                    'status': 'unexecuted',
+                    'signal_type': signal.get('signal_type', ''),
+                    'confidence': signal.get('confidence', 0),
+                    'target_profit': target_profit_rate,
+                    'max_profit_rate': 0.0,
+                    'max_loss_rate': 0.0,
+                    'duration_minutes': 0,
+                    'reason': f'미체결: 6분 내 3/5가({three_fifths_price:,.0f}원) 도달 실패'
+                })
+                continue
             
             # 체결 성공 - 매수 시간은 신호 발생 시점으로 기록
             buy_time = signal_completion_time  # 09:45:00 (신호 발생 시점)
             buy_price = buy_executed_price
             if logger:
                 logger.debug(f"💰 [{stock_code}] 매수 체결: {buy_price:,.0f}원 @ {buy_time.strftime('%H:%M:%S')} (실제 체결: {actual_execution_time.strftime('%H:%M:%S')})")
+            
+            # 🆕 쿨다운 설정 (매수 성공 시)
+            cooldown_end_time = actual_execution_time + timedelta(minutes=buy_cooldown_minutes)
+            stock_cooldown_end[stock_code] = cooldown_end_time
+            if logger:
+                logger.debug(f"⏰ [{stock_code}] {buy_cooldown_minutes}분 쿨다운 설정: {cooldown_end_time.strftime('%H:%M')}까지")
             
             # 진입 저가 추적 (실시간과 동일)
             entry_low = float(str(signal.get('entry_low', 0)).replace(',', ''))

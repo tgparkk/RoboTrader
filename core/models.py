@@ -241,6 +241,7 @@ class OrderManagementConfig:
     adjustment_threshold_percent: float = 0.5
     market_order_threshold_percent: float = 2.0
     buy_budget_ratio: float = 0.20
+    buy_cooldown_minutes: int = 20
 
 
 @dataclass
@@ -290,7 +291,8 @@ class TradingConfig:
                 max_adjustments=json_data.get('order_management', {}).get('max_adjustments', 3),
                 adjustment_threshold_percent=json_data.get('order_management', {}).get('adjustment_threshold_percent', 0.5),
                 market_order_threshold_percent=json_data.get('order_management', {}).get('market_order_threshold_percent', 2.0),
-                buy_budget_ratio=json_data.get('order_management', {}).get('buy_budget_ratio', 0.20)
+                buy_budget_ratio=json_data.get('order_management', {}).get('buy_budget_ratio', 0.20),
+                buy_cooldown_minutes=json_data.get('order_management', {}).get('buy_cooldown_minutes', 20)
             ),
             risk_management=RiskManagementConfig(
                 max_position_count=json_data.get('risk_management', {}).get('max_position_count', 20),

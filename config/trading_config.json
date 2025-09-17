@@ -4,12 +4,13 @@
     "candidate_stocks": []
   },
   "order_management": {
-    "buy_timeout_seconds": 240,
+    "buy_timeout_seconds": 300,
     "sell_timeout_seconds": 180,
     "max_adjustments": 3,
     "adjustment_threshold_percent": 0.5,
     "market_order_threshold_percent": 2.0,
-    "buy_budget_ratio": 0.05
+    "buy_budget_ratio": 0.05,
+    "buy_cooldown_minutes": 20
   },
   "risk_management": {
     "max_position_count": 20,
