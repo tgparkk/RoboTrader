@@ -4,42 +4,6 @@
   "loss_patterns": 106,
   "win_rate": 0.4619289340101523,
   "feature_analysis": {
-    "volatility_20d": {
-      "win_mean": 5.87403741509836,
-      "loss_mean": 6.0903658209115985,
-      "win_std": 2.3841001569542484,
-      "loss_std": 2.8803198635323652,
-      "difference": -0.21632840581323887,
-      "weight": 0.04109254287470726,
-      "t_stat": -0.5656257676339935,
-      "p_value": 0.620087132668681,
-      "significance": "False",
-      "normalized_weight": 0.32929316051278124
-    },
-    "gap_frequency": {
-      "win_mean": 0.463980463980464,
-      "loss_mean": 0.4979035639412998,
-      "win_std": 0.22561115934886633,
-      "loss_std": 0.23208266802468122,
-      "difference": -0.03392309996083581,
-      "weight": 0.07411744968099586,
-      "t_stat": -1.0307772046904526,
-      "p_value": 0.3776267343039792,
-      "significance": "False",
-      "normalized_weight": 0.5939366986613146
-    },
-    "volatility_10d": {
-      "win_mean": 6.605630709542535,
-      "loss_mean": 6.896247010055783,
-      "win_std": 2.9008423320464805,
-      "loss_std": 3.899501961411944,
-      "difference": -0.29061630051324805,
-      "weight": 0.04273552742990534,
-      "t_stat": -0.5823822512612802,
-      "p_value": 0.6099945695270677,
-      "significance": "False",
-      "normalized_weight": 0.34245914000702826
-    },
     "trend_strength_20d": {
       "win_mean": 1.0005804598924921,
       "loss_mean": 1.032481867182433,
@@ -51,54 +15,6 @@
       "p_value": 0.8884817076941616,
       "significance": "False",
       "normalized_weight": 0.09125517612989444
-    },
-    "volume_ratio_20d": {
-      "win_mean": 2.6192323690996058,
-      "loss_mean": 2.6902960030425125,
-      "win_std": 3.4813458335612295,
-      "loss_std": 3.6350958606474553,
-      "difference": -0.07106363394290671,
-      "weight": 0.00998583799272598,
-      "t_stat": -0.1387793846958757,
-      "p_value": 0.9021819459476637,
-      "significance": "False",
-      "normalized_weight": 0.08002104330752666
-    },
-    "trend_strength_5d": {
-      "win_mean": 2.8345824450760766,
-      "loss_mean": 2.638051601285632,
-      "win_std": 2.868272250621545,
-      "loss_std": 2.4792267227152642,
-      "difference": 0.19653084379044472,
-      "weight": 0.03675191793450526,
-      "t_stat": 0.5132096401202638,
-      "p_value": 0.6522393883149846,
-      "significance": "False",
-      "normalized_weight": 0.29450976661287526
-    },
-    "volume_ratio_5d": {
-      "win_mean": 1.2837570035501609,
-      "loss_mean": 1.242674529308705,
-      "win_std": 1.1559444086949164,
-      "loss_std": 1.1963452093406453,
-      "difference": 0.041082474241455946,
-      "weight": 0.017464887721230418,
-      "t_stat": 0.2428227755009376,
-      "p_value": 0.8299660430852276,
-      "significance": "False",
-      "normalized_weight": 0.1399540567070784
-    },
-    "volume_ratio_10d": {
-      "win_mean": 1.808498615886689,
-      "loss_mean": 1.7677569035365441,
-      "win_std": 2.0709727354702983,
-      "loss_std": 2.136894908342489,
-      "difference": 0.04074171235014479,
-      "weight": 0.009682270380635273,
-      "t_stat": 0.1346360331596475,
-      "p_value": 0.9050845281132847,
-      "significance": "False",
-      "normalized_weight": 0.07758841851914455
     },
     "gap_magnitude": {
       "win_mean": 0.7941074849307272,
@@ -124,29 +40,17 @@
       "significance": "False",
       "normalized_weight": 0.01908695619314961
     },
-    "consecutive_down_days": {
-      "win_mean": 0.7692307692307693,
-      "loss_mean": 0.5377358490566038,
-      "win_std": 0.9953399449867475,
-      "loss_std": 0.8597337049527756,
-      "difference": 0.2314949201741655,
-      "weight": 0.12479014994030611,
-      "t_stat": 1.7425915088143178,
-      "p_value": 0.15678422305236195,
+    "trend_strength_5d": {
+      "win_mean": 2.8345824450760766,
+      "loss_mean": 2.638051601285632,
+      "win_std": 2.868272250621545,
+      "loss_std": 2.4792267227152642,
+      "difference": 0.19653084379044472,
+      "weight": 0.03675191793450526,
+      "t_stat": 0.5132096401202638,
+      "p_value": 0.6522393883149846,
       "significance": "False",
-      "normalized_weight": 1.0
-    },
-    "consecutive_up_days": {
-      "win_mean": 1.2527472527472527,
-      "loss_mean": 1.5,
-      "win_std": 1.7135106729252418,
-      "loss_std": 1.7059828130700982,
-      "difference": -0.24725274725274726,
-      "weight": 0.07230683361214506,
-      "t_stat": -1.0069451314003541,
-      "p_value": 0.388059459947921,
-      "significance": "False",
-      "normalized_weight": 0.5794274119129862
+      "normalized_weight": 0.29450976661287526
     },
     "trend_strength_10d": {
       "win_mean": 2.452019316971292,
@@ -160,17 +64,53 @@
       "significance": "False",
       "normalized_weight": 0.024613889350080194
     },
-    "support_resistance_ratio": {
-      "win_mean": 0.7082898822683197,
-      "loss_mean": 0.7316404107752181,
-      "win_std": 0.19803473729593385,
-      "loss_std": 0.1838681222474041,
-      "difference": -0.02335052850689845,
-      "weight": 0.061142584591783636,
-      "t_stat": -0.8531558079448447,
-      "p_value": 0.46062606060566447,
+    "consecutive_up_days": {
+      "win_mean": 1.2527472527472527,
+      "loss_mean": 1.5,
+      "win_std": 1.7135106729252418,
+      "loss_std": 1.7059828130700982,
+      "difference": -0.24725274725274726,
+      "weight": 0.07230683361214506,
+      "t_stat": -1.0069451314003541,
+      "p_value": 0.388059459947921,
       "significance": "False",
-      "normalized_weight": 0.4899632272341322
+      "normalized_weight": 0.5794274119129862
+    },
+    "volatility_10d": {
+      "win_mean": 6.605630709542535,
+      "loss_mean": 6.896247010055783,
+      "win_std": 2.9008423320464805,
+      "loss_std": 3.899501961411944,
+      "difference": -0.29061630051324805,
+      "weight": 0.04273552742990534,
+      "t_stat": -0.5823822512612802,
+      "p_value": 0.6099945695270677,
+      "significance": "False",
+      "normalized_weight": 0.34245914000702826
+    },
+    "volume_ratio_10d": {
+      "win_mean": 1.808498615886689,
+      "loss_mean": 1.7677569035365441,
+      "win_std": 2.0709727354702983,
+      "loss_std": 2.136894908342489,
+      "difference": 0.04074171235014479,
+      "weight": 0.009682270380635273,
+      "t_stat": 0.1346360331596475,
+      "p_value": 0.9050845281132847,
+      "significance": "False",
+      "normalized_weight": 0.07758841851914455
+    },
+    "volume_ratio_5d": {
+      "win_mean": 1.2837570035501609,
+      "loss_mean": 1.242674529308705,
+      "win_std": 1.1559444086949164,
+      "loss_std": 1.1963452093406453,
+      "difference": 0.041082474241455946,
+      "weight": 0.017464887721230418,
+      "t_stat": 0.2428227755009376,
+      "p_value": 0.8299660430852276,
+      "significance": "False",
+      "normalized_weight": 0.1399540567070784
     },
     "price_momentum_20d": {
       "win_mean": 26.69916280444772,
@@ -184,6 +124,54 @@
       "significance": "False",
       "normalized_weight": 0.22208568294030162
     },
+    "volume_ratio_20d": {
+      "win_mean": 2.6192323690996058,
+      "loss_mean": 2.6902960030425125,
+      "win_std": 3.4813458335612295,
+      "loss_std": 3.6350958606474553,
+      "difference": -0.07106363394290671,
+      "weight": 0.00998583799272598,
+      "t_stat": -0.1387793846958757,
+      "p_value": 0.9021819459476637,
+      "significance": "False",
+      "normalized_weight": 0.08002104330752666
+    },
+    "consecutive_down_days": {
+      "win_mean": 0.7692307692307693,
+      "loss_mean": 0.5377358490566038,
+      "win_std": 0.9953399449867475,
+      "loss_std": 0.8597337049527756,
+      "difference": 0.2314949201741655,
+      "weight": 0.12479014994030611,
+      "t_stat": 1.7425915088143178,
+      "p_value": 0.15678422305236195,
+      "significance": "False",
+      "normalized_weight": 1.0
+    },
+    "volatility_20d": {
+      "win_mean": 5.87403741509836,
+      "loss_mean": 6.0903658209115985,
+      "win_std": 2.3841001569542484,
+      "loss_std": 2.8803198635323652,
+      "difference": -0.21632840581323887,
+      "weight": 0.04109254287470726,
+      "t_stat": -0.5656257676339935,
+      "p_value": 0.620087132668681,
+      "significance": "False",
+      "normalized_weight": 0.32929316051278124
+    },
+    "support_resistance_ratio": {
+      "win_mean": 0.7082898822683197,
+      "loss_mean": 0.7316404107752181,
+      "win_std": 0.19803473729593385,
+      "loss_std": 0.1838681222474041,
+      "difference": -0.02335052850689845,
+      "weight": 0.061142584591783636,
+      "t_stat": -0.8531558079448447,
+      "p_value": 0.46062606060566447,
+      "significance": "False",
+      "normalized_weight": 0.4899632272341322
+    },
     "volatility_5d": {
       "win_mean": 7.20598573258834,
       "loss_mean": 6.970091288654354,
@@ -195,6 +183,18 @@
       "p_value": 0.7410663938335311,
       "significance": "False",
       "normalized_weight": 0.21875134346692973
+    },
+    "gap_frequency": {
+      "win_mean": 0.463980463980464,
+      "loss_mean": 0.4979035639412998,
+      "win_std": 0.22561115934886633,
+      "loss_std": 0.23208266802468122,
+      "difference": -0.03392309996083581,
+      "weight": 0.07411744968099586,
+      "t_stat": -1.0307772046904526,
+      "p_value": 0.3776267343039792,
+      "significance": "False",
+      "normalized_weight": 0.5939366986613146
     },
     "price_momentum_5d": {
       "win_mean": 13.116150310290545,
