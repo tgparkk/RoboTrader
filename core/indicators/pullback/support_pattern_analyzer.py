@@ -328,10 +328,17 @@ class SupportPatternAnalyzer:
         avg_volume = volumes.mean() if len(volumes) > 0 else 0
         avg_volume_ratio = avg_volume / uptrend.max_volume if uptrend.max_volume > 0 else 0
         
-        # 🆕 하락 시 거래량 조건 강화: 기준거래량의 4/10(40%) 이하가 아니면 매수 안함
-        high_volume_count = np.sum(volumes / uptrend.max_volume > 0.4) if uptrend.max_volume > 0 else 0
-        if high_volume_count > 0:  # 40% 초과 거래량이 1개라도 있으면 제외
-            return None
+        # 🆕 하락 시 거래량 조건: 1/2(50%) 초과는 1개까지만, 3/5(60%) 초과는 0개
+        if uptrend.max_volume > 0:
+            # 3/5(60%) 초과 거래량이 1개라도 있으면 제외
+            very_high_volume_count = np.sum(volumes / uptrend.max_volume > 0.6)
+            if very_high_volume_count > 0:
+                return None
+            
+            # 1/2(50%) 초과 거래량이 2개 이상이면 제외 (1개는 허용)
+            high_volume_count = np.sum(volumes / uptrend.max_volume > 0.5)
+            if high_volume_count > 1:
+                return None
         
         return DeclinePhase(
             start_idx=start_idx,
