@@ -304,7 +304,7 @@ def list_all_buy_signals(df_3min: pd.DataFrame, *, logger: Optional[logging.Logg
         return []
 
 
-def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = None, *, logger: Optional[logging.Logger] = None, stock_code: str = "UNKNOWN", target_date: str = "20250901") -> List[Dict[str, object]]:
+def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = None, *, logger: Optional[logging.Logger] = None, stock_code: str = "UNKNOWN", target_date: str = "20250901", selection_date: Optional[str] = None) -> List[Dict[str, object]]:
     """매수신호 발생 시점에서 1분봉 기준으로 실제 거래를 시뮬레이션"""
     
     if df_3min is None or df_3min.empty:
@@ -354,6 +354,26 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
             signal_datetime = signal['datetime']  # 라벨 시간 (09:42)
             signal_completion_time = signal['signal_time']  # 실제 신호 발생 시간 (09:45:00)
             signal_index = signal['index']
+            
+            # ==================== selection_date 필터링 ====================
+            if selection_date:
+                try:
+                    # selection_date 파싱
+                    if len(selection_date) >= 19:  # YYYY-MM-DD HH:MM:SS 형식
+                        selection_dt = datetime.strptime(selection_date[:19], '%Y-%m-%d %H:%M:%S')
+                    elif len(selection_date) >= 16:  # YYYY-MM-DD HH:MM 형식
+                        selection_dt = datetime.strptime(selection_date[:16], '%Y-%m-%d %H:%M')
+                    else:  # 날짜만
+                        selection_dt = datetime.strptime(selection_date[:10], '%Y-%m-%d')
+                    
+                    # 신호 발생 시간이 selection_date 이후인지 확인
+                    if signal_completion_time < selection_dt:
+                        if logger:
+                            logger.debug(f"⚠️ [{signal_completion_time.strftime('%H:%M')}] selection_date({selection_dt.strftime('%H:%M')}) 이전 신호로 건너뜀")
+                        continue  # selection_date 이전 신호는 무시
+                except Exception as e:
+                    if logger:
+                        logger.warning(f"selection_date 파싱 실패: {e}")
             
             # ==================== 동일 캔들 중복 신호 차단 (실시간과 동일) ====================
             # 3분 단위로 정규화하여 정확한 캔들 시점 비교
@@ -541,8 +561,8 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
             # 매수 성공 시 신호 캔들 시점 저장 (중복 신호 방지)
             last_signal_candle_time = normalized_signal_time
             
-            # 체결 성공 - 매수 시간은 신호 발생 시점으로 기록
-            buy_time = signal_completion_time  # 09:45:00 (신호 발생 시점)
+            # 체결 성공 - 매수 시간은 실제 체결 시점으로 기록
+            buy_time = actual_execution_time  # 실제 체결 시점 (selection_date 이후)
             buy_price = buy_executed_price
             if logger:
                 logger.debug(f"💰 [{stock_code}] 매수 체결: {buy_price:,.0f}원 @ {buy_time.strftime('%H:%M:%S')} (실제 체결: {actual_execution_time.strftime('%H:%M:%S')})")
@@ -970,7 +990,8 @@ def main():
                 return stock_code, [], pd.DataFrame(), []
 
             # 거래 시뮬레이션 실행
-            simulation_result = simulate_trades(df_3min, df_1min, logger=logger, stock_code=stock_code, target_date=date_str)
+            selection_date = stock_selection_map.get(stock_code)
+            simulation_result = simulate_trades(df_3min, df_1min, logger=logger, stock_code=stock_code, target_date=date_str, selection_date=selection_date)
             
             # 반환값 처리 (기존 호환성 유지)
             if isinstance(simulation_result, dict):

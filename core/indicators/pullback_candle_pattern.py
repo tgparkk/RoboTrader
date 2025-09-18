@@ -74,8 +74,21 @@ class PullbackCandlePattern:
     
     @staticmethod 
     def analyze_support_pattern(data: pd.DataFrame, debug: bool = False) -> dict:
-        """새로운 지지 패턴 분석 (상승 기준거래량 → 저거래량 하락 → 지지 → 돌파양봉)"""
-        analyzer = SupportPatternAnalyzer()
+        """새로운 지지 패턴 분석 (상승 기준거래량 → 저거래량 하락 → 지지 → 돌파양봉)
+        
+        Args:
+            data: 분석할 데이터
+            debug: 디버그 정보 포함 여부
+        """
+        # 유연한 파라미터로 분석기 생성 (사용자 패턴에 맞게 조정)
+        analyzer = SupportPatternAnalyzer(
+            uptrend_min_gain=0.03,  # 3% 상승률 (기본 5% → 3%)
+            decline_min_pct=0.005,  # 1.5% 하락률 (기본 1% → 1.5%)
+            support_volume_threshold=0.25,  # 25% 거래량
+            support_volatility_threshold=0.015,  # 2.5% 가격변동성 (기본 0.5% → 2.5%)
+            breakout_body_increase=0.1,  # 1% 몸통 증가율 (기본 50% → 1%)
+            lookback_period=200
+        )
         result = analyzer.analyze(data)
         
         pattern_info = {
@@ -88,7 +101,7 @@ class PullbackCandlePattern:
         if debug:
             pattern_info.update(analyzer.get_debug_info(data))
         
-        # 중복 신호 방지를 위해 항상 디버그 정보 포함
+        # 중복 신호 방지를 위해 항상 디버그 정보 포함 (동일한 분석기 사용)
         pattern_info['debug_info'] = analyzer.get_debug_info(data)
             
         return pattern_info
@@ -327,6 +340,7 @@ class PullbackCandlePattern:
                 return (result, []) if return_risk_signals else result
 
             # 3. 4단계 지지 패턴 분석 (핵심)
+            # 통합된 로직 사용 (현재 시간 기준 분석 + 전체 데이터 분석)
             support_pattern_info = PullbackCandlePattern.analyze_support_pattern(data, debug)
 
             if support_pattern_info['has_support_pattern'] and support_pattern_info['confidence'] >= 70:

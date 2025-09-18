@@ -65,11 +65,11 @@ class SupportPatternAnalyzer:
     """지지 패턴 분석기"""
     
     def __init__(self, 
-                 uptrend_min_gain: float = 0.05,  # 상승 구간 최소 상승률 5%
-                 decline_min_pct: float = 0.01,  # 하락 구간 최소 하락률 1.0%
-                 support_volume_threshold: float = 0.25,  # 지지구간 거래량 임계값 (기준거래량의 1/4)
-                 support_volatility_threshold: float = 0.005,  # 지지구간 가격변동 임계값 0.5%
-                 breakout_body_increase: float = 0.5,  # 돌파양봉 몸통 증가율 50%
+                 uptrend_min_gain: float = 0.03,  # 상승 구간 최소 상승률 3% (기본 5% → 3%)
+                 decline_min_pct: float = 0.005,  # 하락 구간 최소 하락률 1.5% (기본 1% → 1.5%)
+                 support_volume_threshold: float = 0.25,  # 지지구간 거래량 임계값 10% (기본 25% → 10%)
+                 support_volatility_threshold: float = 0.015,  # 지지구간 가격변동 임계값 2.5% (기본 0.5% → 2.5%)
+                 breakout_body_increase: float = 0.1,  # 돌파양봉 몸통 증가율 1% (기본 50% → 1%)
                  lookback_period: int = 200):  # 분석 기간 (당일 전체 3분봉 커버)
         self.uptrend_min_gain = uptrend_min_gain
         self.decline_min_pct = decline_min_pct
@@ -78,8 +78,13 @@ class SupportPatternAnalyzer:
         self.breakout_body_increase = breakout_body_increase
         self.lookback_period = lookback_period
     
-    def analyze(self, data: pd.DataFrame) -> SupportPatternResult:
-        """지지 패턴 분석"""
+    def analyze(self, data: pd.DataFrame, target_time: Optional[str] = None) -> SupportPatternResult:
+        """지지 패턴 분석
+        
+        Args:
+            data: 분석할 데이터
+            target_time: 특정 시점 분석 (예: "133300"). None이면 전체 데이터에서 최적 패턴 검색
+        """
         # 전처리 최적화: 한 번만 데이터 타입 변환 수행하고 NumPy 배열 생성
         data, numpy_arrays = self._preprocess_data(data)
         
@@ -89,8 +94,9 @@ class SupportPatternAnalyzer:
                 breakout_candle=None, entry_price=None, confidence=0.0, reasons=["데이터 부족 (4단계 패턴은 최소 5개 캔들 필요)"]
             )
         
-        # 모든 가능한 시나리오에서 최적 패턴 검사 (NumPy 배열 전달)
+        # 모든 경우에 통합된 로직 사용 (현재 시간 기준 분석 + 전체 데이터 분석)
         return self._analyze_all_scenarios(data, numpy_arrays)
+    
     
     
     def _preprocess_data(self, data: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, np.ndarray]]:
@@ -115,8 +121,44 @@ class SupportPatternAnalyzer:
         
         return data, numpy_arrays
     
+    def _analyze_current_time_pattern(self, data: pd.DataFrame, numpy_arrays: Dict[str, np.ndarray]) -> SupportPatternResult:
+        """현재 시간 기준 4단계 패턴 분석 (3분봉 데이터용 간소화)"""
+        # 3분봉 데이터이므로 마지막 캔들을 돌파 캔들로 사용
+        breakout_idx = len(data) - 1
+        
+        # 최소 데이터 길이 확인
+        if len(data) < 5:
+            return SupportPatternResult(
+                has_pattern=False, uptrend_phase=None, decline_phase=None, support_phase=None,
+                breakout_candle=None, entry_price=None, confidence=0.0, 
+                reasons=["데이터 부족 (최소 5개 캔들 필요)"]
+            )
+        
+        # 최대 20개 캔들로 제한 (성능 최적화)
+        start_idx = max(0, breakout_idx - 19)  # 20개 캔들 (상승10+하락5+지지4+돌파1)
+        end_idx = breakout_idx + 1
+        
+        if end_idx - start_idx < 5:
+            return SupportPatternResult(
+                has_pattern=False, uptrend_phase=None, decline_phase=None, support_phase=None,
+                breakout_candle=None, entry_price=None, confidence=0.0, 
+                reasons=["데이터 부족 (최소 5개 캔들 필요)"]
+            )
+        
+        # 슬라이스된 데이터로 패턴 분석
+        sliced_data = data.iloc[start_idx:end_idx].copy()
+        
+        # 슬라이스된 numpy_arrays 생성
+        sliced_arrays = {}
+        for col in ['open', 'high', 'low', 'close', 'volume']:
+            if col in numpy_arrays:
+                sliced_arrays[col] = numpy_arrays[col][start_idx:end_idx]
+        
+        # 4단계 패턴 검사 (상승→하락→지지→돌파)
+        return self._check_4_stage_pattern(sliced_data, sliced_arrays, breakout_idx - start_idx)
+    
     def _analyze_all_scenarios(self, data: pd.DataFrame, numpy_arrays: Dict[str, np.ndarray]) -> SupportPatternResult:
-        """모든 가능한 시간 조합에서 4단계 패턴 검사 (고성능 최적화)"""
+        """모든 가능한 시간 조합에서 4단계 패턴 검사 (고성능 최적화 + 현재 시간 기준 분석)"""
         best_pattern = None
         best_confidence = 0.0
         
@@ -137,6 +179,12 @@ class SupportPatternAnalyzer:
                 reasons=["데이터 부족 (4단계 패턴은 최소 5개 캔들 필요)"]
             )
         
+        # 1. 현재 시간 기준 분석 (우선순위 1)
+        # current_time_result = self._analyze_current_time_pattern(data, numpy_arrays)
+        # if current_time_result.has_pattern:
+        #     return current_time_result
+        
+        # 2. 전체 데이터에서 최적 패턴 검색 (기존 로직)
         # 돌파 캔들은 마지막 캔들로 고정 (현재시간)
         breakout_idx = len(data) - 1
         
@@ -266,25 +314,39 @@ class SupportPatternAnalyzer:
         )
     
     def _validate_uptrend(self, data: pd.DataFrame, numpy_arrays: Dict[str, np.ndarray], start_idx: int, end_idx: int) -> Optional[UptrrendPhase]:
-        """상승구간 검증 - 메모리 복사 최소화"""
+        """상승구간 검증 - 중간 음봉/하락 허용하면서 전체적 상승 확인"""
         if end_idx - start_idx + 1 < 2:  # 최소 2개 캔들
             return None
-        
-        # NumPy 배열로 빠른 인덱스 접근 (로직 변경 없이)
+
+        # 전체적인 상승 확인 (시작가 vs 끝가)
         start_price = numpy_arrays['close'][start_idx]
         end_price = numpy_arrays['close'][end_idx]
-        
+
         if start_price <= 0:  # 0으로 나누기 방지
             return None
-            
-        price_gain = (end_price / start_price - 1)
-        
-        if price_gain < self.uptrend_min_gain:  # 최소 상승률 미달
+
+        overall_gain = (end_price / start_price - 1)
+
+        if overall_gain < self.uptrend_min_gain:  # 최소 상승률 미달
+            return None
+
+        # 추가 검증: 구간 내에서 최고가가 끝가 근처에 있는지 확인 (상승 추세 확인)
+        highs = numpy_arrays['high'][start_idx:end_idx+1]
+        max_high = highs.max()
+
+        # 끝가가 최고가의 80% 이상이어야 함 (일시적 하락 허용하면서도 상승 추세 유지)
+        if end_price < max_high * 0.8:
             return None
         
         # NumPy 배열로 거래량 계산 (슬라이싱)
         volumes = numpy_arrays['volume'][start_idx:end_idx+1]
-        max_volume = volumes.max() if len(volumes) > 0 else 0
+        opens = numpy_arrays['open'][start_idx:end_idx+1]
+        closes = numpy_arrays['close'][start_idx:end_idx+1]
+        
+        # 🆕 양봉만 필터링하여 기준거래량 계산
+        positive_mask = closes > opens
+        positive_volumes = volumes[positive_mask]
+        max_volume = positive_volumes.max() if len(positive_volumes) > 0 else 0
         avg_volume = volumes.mean() if len(volumes) > 0 else 0
         
         # NumPy 배열로 고점 가격 계산 (슬라이싱)
@@ -296,7 +358,7 @@ class SupportPatternAnalyzer:
             end_idx=end_idx,
             max_volume=max_volume,
             volume_avg=avg_volume,
-            price_gain=price_gain,
+            price_gain=overall_gain,
             high_price=high_price
         )
     
@@ -331,12 +393,12 @@ class SupportPatternAnalyzer:
         # 🆕 하락 시 거래량 조건: 1/2(50%) 초과는 1개까지만, 3/5(60%) 초과는 0개
         if uptrend.max_volume > 0:
             # 3/5(60%) 초과 거래량이 1개라도 있으면 제외
-            very_high_volume_count = np.sum(volumes / uptrend.max_volume > 0.6)
+            very_high_volume_count = np.sum(volumes / uptrend.max_volume > 0.8)
             if very_high_volume_count > 0:
                 return None
             
             # 1/2(50%) 초과 거래량이 2개 이상이면 제외 (1개는 허용)
-            high_volume_count = np.sum(volumes / uptrend.max_volume > 0.5)
+            high_volume_count = np.sum(volumes / uptrend.max_volume > 0.6)
             if high_volume_count > 1:
                 return None
         
@@ -359,10 +421,12 @@ class SupportPatternAnalyzer:
         avg_volume = volumes.mean() if len(volumes) > 0 else 0
         avg_volume_ratio = avg_volume / uptrend.max_volume if uptrend.max_volume > 0 else 0
         
-        # 🆕 지지구간 거래량 조건 대폭 완화: 1/2 초과가 2개 이하만 허용
-        support_high_volume_count = np.sum(volumes / uptrend.max_volume > 0.5) if uptrend.max_volume > 0 else 0
-        if support_high_volume_count > 2:  # 50% 초과 거래량이 3개 이상이면 제외
-            return None
+        # 🆕 지지구간 거래량 조건 강화: 기준거래량의 1/2 초과 시 신호 방지
+        if uptrend.max_volume > 0:
+            # 기준거래량의 1/2(50%) 초과 거래량이 1개라도 있으면 제외 (매물부담 확인)
+            support_high_volume_count = np.sum(volumes / uptrend.max_volume > 0.5)
+            if support_high_volume_count > 0:  # 50% 초과 거래량이 1개라도 있으면 제외
+                return None
         
         # NumPy 배열로 지지가격 계산 (로직 변경 없이)
         closes = numpy_arrays['close'][start_idx:end_idx+1]
@@ -372,7 +436,7 @@ class SupportPatternAnalyzer:
         uptrend_high_price = uptrend.high_price
         if uptrend_high_price > 0:
             price_diff_ratio = (uptrend_high_price - support_price) / uptrend_high_price
-            if price_diff_ratio < 0.02:  # 상승구간 고점 대비 2% 미만 하락
+            if price_diff_ratio < 0.01:  # 상승구간 고점 대비 2% 미만 하락
                 return None
         
         # NumPy로 가격 변동성 계산
@@ -453,10 +517,17 @@ class SupportPatternAnalyzer:
         if body_increase < self.breakout_body_increase:  # 몸통 증가 부족
             return None
         
+        # 🆕 돌파양봉 거래량 조건 추가: 기준거래량의 1/2 초과 시 신호 방지
+        if max_volume > 0:
+            breakout_volume_ratio = breakout_volume / max_volume
+            # 돌파양봉의 거래량이 기준거래량의 1/2(50%) 초과 시 매물부담으로 판단하여 제외
+            if breakout_volume_ratio > 0.5:
+                return None
+
         # NumPy 배열로 거래량 비율 계산 (로직 변경 없이)
         prev_volume = numpy_arrays['volume'][breakout_idx-1] if breakout_idx > 0 else max_volume
         volume_ratio_vs_prev = (breakout_volume / prev_volume - 1) if prev_volume > 0 else 0
-        
+
         return BreakoutCandle(
             idx=breakout_idx,
             body_size=breakout_body,
@@ -568,3 +639,89 @@ class SupportPatternAnalyzer:
             debug_info['entry_price'] = f"{result.entry_price:,.0f}"
         
         return debug_info
+    
+    def _check_4_stage_pattern(self, data: pd.DataFrame, numpy_arrays: Dict[str, np.ndarray], breakout_idx: int) -> SupportPatternResult:
+        """4단계 패턴 검사 (상승→하락→지지→돌파)"""
+        if len(data) < 5:
+            return SupportPatternResult(
+                has_pattern=False, uptrend_phase=None, decline_phase=None, support_phase=None,
+                breakout_candle=None, entry_price=None, confidence=0.0, 
+                reasons=["데이터 부족 (4단계 패턴은 최소 5개 캔들 필요)"]
+            )
+        
+        # 1단계: 상승 구간 찾기 (처음부터 breakout_idx-1까지)
+        uptrend = None
+        for uptrend_end in range(1, breakout_idx):
+            uptrend_candidate = self._validate_uptrend(data, numpy_arrays, 0, uptrend_end)
+            if uptrend_candidate:
+                uptrend = uptrend_candidate
+                break
+        
+        if not uptrend:
+            return SupportPatternResult(
+                has_pattern=False, uptrend_phase=None, decline_phase=None, support_phase=None,
+                breakout_candle=None, entry_price=None, confidence=0.0, 
+                reasons=["상승 구간을 찾을 수 없습니다"]
+            )
+        
+        # 2단계: 하락 구간 찾기 (상승 구간 끝부터 breakout_idx-1까지)
+        decline = None
+        for decline_end in range(uptrend.end_idx + 1, breakout_idx):
+            decline_candidate = self._validate_decline(data, numpy_arrays, uptrend, uptrend.end_idx + 1, decline_end)
+            if decline_candidate:
+                decline = decline_candidate
+                break
+        
+        if not decline:
+            return SupportPatternResult(
+                has_pattern=False, uptrend_phase=uptrend, decline_phase=None, support_phase=None,
+                breakout_candle=None, entry_price=None, confidence=0.0, 
+                reasons=["하락 구간을 찾을 수 없습니다"]
+            )
+        
+        # 3단계: 지지 구간 찾기 (하락 구간 끝부터 breakout_idx-1까지)
+        support = None
+        for support_end in range(decline.end_idx + 1, breakout_idx):
+            support_candidate = self._validate_support(data, numpy_arrays, uptrend, decline, decline.end_idx + 1, support_end)
+            if support_candidate:
+                support = support_candidate
+                break
+        
+        if not support:
+            return SupportPatternResult(
+                has_pattern=False, uptrend_phase=uptrend, decline_phase=decline, support_phase=None,
+                breakout_candle=None, entry_price=None, confidence=0.0, 
+                reasons=["지지 구간을 찾을 수 없습니다"]
+            )
+        
+        # 4단계: 돌파 양봉 검증
+        breakout = self._validate_breakout(data, numpy_arrays, support, uptrend.max_volume, breakout_idx)
+        
+        if not breakout:
+            return SupportPatternResult(
+                has_pattern=False, uptrend_phase=uptrend, decline_phase=decline, support_phase=support,
+                breakout_candle=None, entry_price=None, confidence=0.0, 
+                reasons=["돌파 양봉을 찾을 수 없습니다"]
+            )
+        
+        # 진입 가격 계산
+        entry_price = self._calculate_entry_price(data, numpy_arrays, breakout)
+        
+        # 신뢰도 계산
+        confidence = self._calculate_confidence(uptrend, decline, support, breakout)
+        
+        # 판단 근거 생성
+        reasons = [
+            f"상승구간: 인덱스{uptrend.start_idx}~{uptrend.end_idx} +{uptrend.price_gain:.1%}",
+            f"하락구간: 인덱스{decline.start_idx}~{decline.end_idx} -{decline.decline_pct:.1%}",
+            f"지지구간: 인덱스{support.start_idx}~{support.end_idx} {support.candle_count}개봉",
+            f"돌파양봉: 인덱스{breakout.idx} 신뢰도{confidence:.1f}%",
+            "중심시점분석"
+        ]
+        
+        return SupportPatternResult(
+            has_pattern=True, uptrend_phase=uptrend, decline_phase=decline, 
+            support_phase=support, breakout_candle=breakout, entry_price=entry_price, 
+            confidence=confidence, reasons=reasons
+        )
+    
