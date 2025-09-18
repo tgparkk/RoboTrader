@@ -368,7 +368,7 @@ class SupportPatternAnalyzer:
             return None
         
         # NumPy 배열로 빠른 인덱스 접근 (로직 변경 없이)
-        uptrend_high_price = numpy_arrays['close'][start_idx]  # 하락 시작가
+        uptrend_high_price = numpy_arrays['close'][uptrend.end_idx]  # 상승구간 마지막 봉 종가
         closes = numpy_arrays['close'][start_idx:end_idx+1]
         min_price = closes.min() if len(closes) > 0 else uptrend_high_price
         
