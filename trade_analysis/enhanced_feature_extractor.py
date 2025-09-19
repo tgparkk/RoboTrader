@@ -14,7 +14,7 @@ try:
     TALIB_AVAILABLE = True
 except ImportError:
     TALIB_AVAILABLE = False
-    print("⚠️ talib 모듈이 없습니다. 기본 기술적 지표만 사용합니다.")
+    print("Warning: talib module not available. Using basic technical indicators only.")
 
 class EnhancedFeatureExtractor:
     """향상된 특성 추출기"""
@@ -96,11 +96,15 @@ class EnhancedFeatureExtractor:
         
         try:
             if TALIB_AVAILABLE:
-                # talib 사용
+                # talib 사용 - 데이터 타입을 float64로 변환
+                close_prices = data['close'].astype(np.float64).values
+                high_prices = data['high'].astype(np.float64).values if 'high' in data.columns else close_prices
+                low_prices = data['low'].astype(np.float64).values if 'low' in data.columns else close_prices
+
                 # RSI (14일, 21일)
                 if len(data) >= 21:
-                    rsi_14 = talib.RSI(data['close'].values, timeperiod=14)
-                    rsi_21 = talib.RSI(data['close'].values, timeperiod=21)
+                    rsi_14 = talib.RSI(close_prices, timeperiod=14)
+                    rsi_21 = talib.RSI(close_prices, timeperiod=21)
                     features['rsi_14'] = rsi_14[-1] if not np.isnan(rsi_14[-1]) else 50
                     features['rsi_21'] = rsi_21[-1] if not np.isnan(rsi_21[-1]) else 50
                     features['rsi_14_oversold'] = 1 if features['rsi_14'] < 30 else 0
@@ -108,7 +112,7 @@ class EnhancedFeatureExtractor:
                 
                 # MACD
                 if len(data) >= 26:
-                    macd, macd_signal, macd_hist = talib.MACD(data['close'].values)
+                    macd, macd_signal, macd_hist = talib.MACD(close_prices)
                     features['macd'] = macd[-1] if not np.isnan(macd[-1]) else 0
                     features['macd_signal'] = macd_signal[-1] if not np.isnan(macd_signal[-1]) else 0
                     features['macd_histogram'] = macd_hist[-1] if not np.isnan(macd_hist[-1]) else 0
@@ -116,13 +120,13 @@ class EnhancedFeatureExtractor:
                 
                 # 볼린저 밴드
                 if len(data) >= 20:
-                    bb_upper, bb_middle, bb_lower = talib.BBANDS(data['close'].values, timeperiod=20)
+                    bb_upper, bb_middle, bb_lower = talib.BBANDS(close_prices, timeperiod=20)
                     features['bb_position'] = (data['close'].iloc[-1] - bb_lower[-1]) / (bb_upper[-1] - bb_lower[-1]) if not np.isnan(bb_upper[-1]) else 0.5
                     features['bb_squeeze'] = 1 if (bb_upper[-1] - bb_lower[-1]) / bb_middle[-1] < 0.1 else 0
                 
                 # 스토캐스틱
                 if len(data) >= 14:
-                    stoch_k, stoch_d = talib.STOCH(data['high'].values, data['low'].values, data['close'].values)
+                    stoch_k, stoch_d = talib.STOCH(high_prices, low_prices, close_prices)
                     features['stoch_k'] = stoch_k[-1] if not np.isnan(stoch_k[-1]) else 50
                     features['stoch_d'] = stoch_d[-1] if not np.isnan(stoch_d[-1]) else 50
                     features['stoch_oversold'] = 1 if features['stoch_k'] < 20 else 0
@@ -130,9 +134,9 @@ class EnhancedFeatureExtractor:
                 
                 # 이동평균선
                 if len(data) >= 20:
-                    ma_5 = talib.SMA(data['close'].values, timeperiod=5)
-                    ma_10 = talib.SMA(data['close'].values, timeperiod=10)
-                    ma_20 = talib.SMA(data['close'].values, timeperiod=20)
+                    ma_5 = talib.SMA(close_prices, timeperiod=5)
+                    ma_10 = talib.SMA(close_prices, timeperiod=10)
+                    ma_20 = talib.SMA(close_prices, timeperiod=20)
                     features['ma_5'] = ma_5[-1] if not np.isnan(ma_5[-1]) else data['close'].iloc[-1]
                     features['ma_10'] = ma_10[-1] if not np.isnan(ma_10[-1]) else data['close'].iloc[-1]
                     features['ma_20'] = ma_20[-1] if not np.isnan(ma_20[-1]) else data['close'].iloc[-1]
@@ -141,7 +145,7 @@ class EnhancedFeatureExtractor:
                 
                 # CCI (Commodity Channel Index)
                 if len(data) >= 20:
-                    cci = talib.CCI(data['high'].values, data['low'].values, data['close'].values, timeperiod=20)
+                    cci = talib.CCI(high_prices, low_prices, close_prices, timeperiod=20)
                     features['cci'] = cci[-1] if not np.isnan(cci[-1]) else 0
                     features['cci_oversold'] = 1 if features['cci'] < -100 else 0
                     features['cci_overbought'] = 1 if features['cci'] > 100 else 0
