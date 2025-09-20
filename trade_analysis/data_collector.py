@@ -32,13 +32,13 @@ class AnalysisDataCollector:
     def __init__(self, db_path: str = None):
         """
         Args:
-            db_path: 데이터베이스 경로 (기본값: C:\GIT\RoboTrader\data\robotraer.db)
+            db_path: 데이터베이스 경로 (기본값: C:\GIT\RoboTrader\data\robotrader.db)
         """
         self.logger = setup_logger(__name__)
         
         # 데이터베이스 경로 설정
         if db_path is None:
-            db_path = project_root / "data" / "robotraer.db"
+            db_path = project_root / "data" / "robotrader.db"
         self.db_path = str(db_path)
         
         # 캐시 디렉토리 설정
