@@ -274,7 +274,7 @@ class SupportPatternAnalyzer:
                             continue
 
                         # 3. 돌파양봉 검증 (마지막 캔들 고정) - NumPy 배열 사용 (로직 변경 없이)
-                        breakout = self._validate_breakout(data, numpy_arrays, support, uptrend.max_volume, breakout_idx)
+                        breakout = self._validate_breakout(data, numpy_arrays, support, uptrend, uptrend.max_volume, breakout_idx)
                         if not breakout:
                             continue
 
@@ -458,7 +458,7 @@ class SupportPatternAnalyzer:
             candle_count=end_idx - start_idx + 1
         )
     
-    def _validate_breakout(self, data: pd.DataFrame, numpy_arrays: Dict[str, np.ndarray], support: SupportPhase, max_volume: float, breakout_idx: int) -> Optional[BreakoutCandle]:
+    def _validate_breakout(self, data: pd.DataFrame, numpy_arrays: Dict[str, np.ndarray], support: SupportPhase, uptrend: UptrrendPhase, max_volume: float, breakout_idx: int) -> Optional[BreakoutCandle]:
         """돌파양봉 검증"""
         if breakout_idx >= len(data):
             return None
@@ -471,6 +471,23 @@ class SupportPatternAnalyzer:
         # 양봉 확인
         if breakout_close <= breakout_open:
             return None
+
+        # 🆕 돌파봉 위치 조건: 상승구간 평균 가격보다 낮게 위치 (조건 비활성화)
+        # 너무 엄격한 조건으로 인해 신호가 발생하지 않아 일시적으로 비활성화
+        # uptrend_closes = numpy_arrays['close'][uptrend.start_idx:uptrend.end_idx+1]
+        # uptrend_opens = numpy_arrays['open'][uptrend.start_idx:uptrend.end_idx+1]
+
+        # # 상승구간의 평균 가격 계산 (시가+종가)/2의 평균
+        # uptrend_avg_prices = (uptrend_closes + uptrend_opens) / 2
+        # uptrend_avg_price = uptrend_avg_prices.mean()
+
+        # # 돌파봉의 평균 가격 (시가+종가)/2
+        # breakout_avg_price = (breakout_close + breakout_open) / 2
+
+        # # 돌파봉이 상승구간 평균 가격보다 너무 높지 않아야 함 (10% 허용)
+        # # 완전히 낮을 필요는 없고, 상승구간 평균의 110% 이하면 허용
+        # if breakout_avg_price > uptrend_avg_price * 1.1:
+        #     return None
         
         # NumPy 배열로 지지구간 몸통 계산 (로직 변경 없이)
         support_closes = numpy_arrays['close'][support.start_idx:support.end_idx+1]
@@ -697,7 +714,7 @@ class SupportPatternAnalyzer:
             )
         
         # 4단계: 돌파 양봉 검증
-        breakout = self._validate_breakout(data, numpy_arrays, support, uptrend.max_volume, breakout_idx)
+        breakout = self._validate_breakout(data, numpy_arrays, support, uptrend, uptrend.max_volume, breakout_idx)
         
         if not breakout:
             return SupportPatternResult(
