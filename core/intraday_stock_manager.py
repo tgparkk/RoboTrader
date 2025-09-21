@@ -1227,25 +1227,25 @@ class IntradayStockManager:
     
     async def _collect_daily_data_for_ml(self, stock_code: str) -> pd.DataFrame:
         """
-        ML 예측용 일봉 데이터 수집 (60일치)
+        ML 예측용 일봉 데이터 수집 (100일치)
         
         Args:
             stock_code: 종목코드
             
         Returns:
-            pd.DataFrame: 일봉 데이터 (60일치) 
+            pd.DataFrame: 일봉 데이터 (100일치) 
         """
         try:
-            self.logger.info(f"📈 {stock_code} ML용 일봉 데이터 수집 시작 (60일)")
+            self.logger.info(f"📈 {stock_code} ML용 일봉 데이터 수집 시작 (100일)")
             
             # 기존 API를 사용하여 일봉 데이터 수집
             from api.kis_market_api import get_inquire_daily_itemchartprice
             from datetime import timedelta
             from utils.korean_time import now_kst
             
-            # 60일치 일봉 데이터 수집
+            # 100일치 일봉 데이터 수집
             end_date = now_kst().strftime("%Y%m%d")
-            start_date = (now_kst() - timedelta(days=60)).strftime("%Y%m%d")
+            start_date = (now_kst() - timedelta(days=100)).strftime("%Y%m%d")
             
             daily_data = get_inquire_daily_itemchartprice(
                 div_code="J",
@@ -1253,7 +1253,7 @@ class IntradayStockManager:
                 inqr_strt_dt=start_date,
                 inqr_end_dt=end_date,
                 period_code="D",  # 일봉
-                adj_prc="1"  # 수정주가
+                adj_prc="0"  # 수정주가
             )
             
             if daily_data is not None and not daily_data.empty:

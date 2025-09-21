@@ -738,9 +738,10 @@ async def get_full_trading_day_data_async(stock_code: str, target_date: str = ""
             selected_time = current_time
 
         time_segments = [
-            ("090000", "110000"),
-            ("110000", "130000"),
-            ("130000", "153000")
+            ("090000", "110000"),  # 09:00~11:00 (120분)
+            ("110000", "130000"),  # 11:00~13:00 (120분)
+            ("130000", "143000"),  # 13:00~14:30 (90분)
+            ("143000", "153000")   # 14:30~15:30 (60분)
         ]
 
         for back in range(0, FALLBACK_MAX_DAYS + 1):
