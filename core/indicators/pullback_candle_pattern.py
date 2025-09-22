@@ -21,7 +21,7 @@ from typing import List, Tuple
 from core.indicators.pullback.volume_analyzer import VolumeAnalyzer
 from core.indicators.pullback.support_pattern_analyzer import SupportPatternAnalyzer
 
-def analyze_daily_pattern_strength(stock_code, current_date):
+def analyze_daily_pattern_strength(stock_code, current_date, daily_data=None):
     """일봉 패턴 강도 분석 (전역 함수)"""
     try:
         import pandas as pd
@@ -29,31 +29,37 @@ def analyze_daily_pattern_strength(stock_code, current_date):
         from pathlib import Path
         import pickle
 
-        # 일봉 데이터 경로
-        daily_dir = Path("cache/daily")
-        date_str = current_date.strftime('%Y%m%d') if hasattr(current_date, 'strftime') else str(current_date)
-
-        # 가능한 파일명들 시도
-        possible_files = [
-            f"{stock_code}_{date_str}_daily.pkl",
-            f"{stock_code}_{current_date}_daily.pkl"
-        ]
-
+        # 먼저 전달받은 daily_data 사용 시도
         daily_df = None
-        for filename in possible_files:
-            file_path = daily_dir / filename
-            if file_path.exists():
-                try:
-                    with open(file_path, 'rb') as f:
-                        daily_df = pickle.load(f)
-                    print(f"[DEBUG] 일봉 데이터 로드 성공: {filename}, 행수: {len(daily_df)}")
-                    break
-                except:
-                    continue
+        if daily_data is not None and not daily_data.empty:
+            daily_df = daily_data.copy()
+            print(f"[DEBUG] 전달받은 일봉 데이터 사용: {len(daily_df)}행")
+        else:
+            # 기존 파일 방식으로 폴백
+            daily_dir = Path("cache/daily")
+            date_str = current_date.strftime('%Y%m%d') if hasattr(current_date, 'strftime') else str(current_date)
+
+            # 가능한 파일명들 시도
+            possible_files = [
+                f"{stock_code}_{date_str}_daily.pkl",
+                f"{stock_code}_{current_date}_daily.pkl"
+            ]
+
+            for filename in possible_files:
+                file_path = daily_dir / filename
+                if file_path.exists():
+                    try:
+                        with open(file_path, 'rb') as f:
+                            daily_df = pickle.load(f)
+                        print(f"[DEBUG] 파일에서 일봉 데이터 로드 성공: {filename}, 행수: {len(daily_df)}")
+                        break
+                    except:
+                        continue
 
         if daily_df is None or len(daily_df) < 10:
             # 디버그: 일봉 데이터 로드 실패 시 로그 출력
-            print(f"[DEBUG] 일봉 데이터 없음: {stock_code}, {date_str}, 시도한 파일: {possible_files}")
+            date_str = current_date.strftime('%Y%m%d') if hasattr(current_date, 'strftime') else str(current_date)
+            print(f"[DEBUG] 일봉 데이터 없음: {stock_code}, {date_str}")
             return {'strength': 50, 'ideal_pattern': False}  # 중간값 반환
 
         # 컬럼명 정규화
@@ -385,7 +391,8 @@ class PullbackCandlePattern:
         entry_low: Optional[float] = None,
         logger: Optional[logging.Logger] = None,
         return_risk_signals: bool = False,
-        prev_close: Optional[float] = None
+        prev_close: Optional[float] = None,
+        daily_data: Optional[pd.DataFrame] = None
     ) -> Union[Optional[SignalStrength], Tuple[SignalStrength, List[RiskSignal]]]:
         """핵심 눌림목 신호 생성 - 4단계 패턴만 허용"""
 
@@ -451,6 +458,7 @@ class PullbackCandlePattern:
                 result = SignalStrength(SignalType.AVOID, 0, 0, ["이등분선아래"], volume_analysis.volume_ratio, BisectorStatus.BROKEN)
                 return (result, []) if return_risk_signals else result
 
+
             # 3. 4단계 지지 패턴 분석 (핵심)
             # 통합된 로직 사용 (현재 시간 기준 분석 + 전체 데이터 분석)
             support_pattern_info = PullbackCandlePattern.analyze_support_pattern(data, debug)
@@ -474,8 +482,8 @@ class PullbackCandlePattern:
             if current_time is None:
                 current_time = datetime.now()
 
-            # 일봉 패턴 분석
-            daily_pattern = analyze_daily_pattern_strength(stock_code, current_time.strftime('%Y%m%d'))
+            # 일봉 패턴 분석 (전달받은 daily_data 사용)
+            daily_pattern = analyze_daily_pattern_strength(stock_code, current_time.strftime('%Y%m%d'), daily_data)
             daily_strength = daily_pattern['strength']
             is_ideal_daily = daily_pattern['ideal_pattern']
 
@@ -757,7 +765,7 @@ class PullbackCandlePattern:
             for i in range(5, len(data)):  # 최소 5개 데이터 필요
                 current_data = data.iloc[:i+1]
                 
-                # 개선된 신호 생성 (새 인터페이스 사용)
+                # 개선된 신호 생성 (새 인터페이스 사용) - daily_data는 외부에서 전달받아야 함
                 signal_strength = PullbackCandlePattern.generate_improved_signals(
                     current_data, stock_code, debug
                 )

@@ -968,12 +968,25 @@ class TradingDecisionEngine:
             if not self._is_candle_confirmed(data_3min):
                 return False, "3분봉 미확정", None
             
-            # 🆕 개선된 신호 생성 로직 사용 (3/5가 계산 포함)
+            # 일봉 데이터 가져오기 (intraday_manager에서)
+            daily_data = None
+            if self.intraday_manager:
+                try:
+                    stock_data = self.intraday_manager.get_stock_data(trading_stock.stock_code)
+                    if stock_data and hasattr(stock_data, 'daily_data'):
+                        daily_data = stock_data.daily_data
+                        if daily_data is not None and not daily_data.empty:
+                            self.logger.debug(f"📊 {trading_stock.stock_code} 일봉 데이터 전달: {len(daily_data)}개")
+                except Exception as e:
+                    self.logger.debug(f"⚠️ {trading_stock.stock_code} 일봉 데이터 조회 실패: {e}")
+
+            # 🆕 개선된 신호 생성 로직 사용 (3/5가 계산 포함 + 일봉 데이터)
             signal_strength = PullbackCandlePattern.generate_improved_signals(
                 data_3min,
                 #stock_code=getattr(self, '_current_stock_code', 'UNKNOWN'),
                 stock_code=trading_stock.stock_code,
-                debug=True
+                debug=True,
+                daily_data=daily_data
             )
             
             if signal_strength is None:
