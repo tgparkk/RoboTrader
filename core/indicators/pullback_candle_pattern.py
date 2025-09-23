@@ -22,7 +22,10 @@ from core.indicators.pullback.volume_analyzer import VolumeAnalyzer
 from core.indicators.pullback.support_pattern_analyzer import SupportPatternAnalyzer
 
 def analyze_daily_pattern_strength(stock_code, current_date, daily_data=None):
-    """일봉 패턴 강도 분석 (전역 함수)"""
+    """일봉 패턴 강도 분석 (전역 함수) - 임시로 디폴트 값 반환"""
+    # 임시로 디폴트 값 반환 (승률 개선을 위해)
+    return {'strength': 50, 'ideal_pattern': False}
+
     try:
         import pandas as pd
         import numpy as np

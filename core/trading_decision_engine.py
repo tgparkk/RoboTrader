@@ -315,6 +315,7 @@ class TradingDecisionEngine:
             current_price = self._safe_float_convert(combined_data['close'].iloc[-1])
             prev_close = getattr(trading_stock, 'prev_close', 0.0)
 
+            
             # prev_close가 없으면 intraday_manager에서 가져오기 시도
             if prev_close <= 0 and self.intraday_manager:
                 try:
@@ -326,8 +327,9 @@ class TradingDecisionEngine:
 
             if prev_close > 0:
                 price_change_pct = ((current_price - prev_close) / prev_close) * 100
-                #if price_change_pct >= 22.0:
-                #    return False, f"전일대비 {price_change_pct:.1f}% 상승으로 매수 제한 (22% 초과)", buy_info
+                if price_change_pct >= 22.0:
+                    return False, f"전일대비 {price_change_pct:.1f}% 상승으로 매수 제한 (22% 초과)", buy_info
+            
 
             # 🆕 현재 처리 중인 종목 코드 저장 (디버깅용)
             self._current_stock_code = stock_code
@@ -363,8 +365,8 @@ class TradingDecisionEngine:
                             self.logger.debug(f"✅ {stock_code} 일봉 필터 통과: {filter_result.reason} (점수: {filter_result.score:.2f})")
                     
                     # ML 필터 적용 (매수 정보 생성 전에)
-                    ml_pass, ml_reason, ml_result = await self._apply_hardcoded_ml_filter(trading_stock, "pullback_pattern")
                     
+                    ml_pass, ml_reason, ml_result = await self._apply_hardcoded_ml_filter(trading_stock, "pullback_pattern")
                     if not ml_pass:
                         return False, f"눌림목캔들패턴: {reason} + ML차단: {ml_reason}", {'buy_price': 0, 'quantity': 0, 'max_buy_amount': 0}
                     
@@ -375,7 +377,7 @@ class TradingDecisionEngine:
                         'max_buy_amount': max_buy_amount,
                         'entry_low': price_info.get('entry_low', 0),  # 손절 기준
                         'target_profit': price_info.get('target_profit', 0.03),  # 목표 수익률
-                        'ml_prediction': ml_result  # ML 예측 결과 추가
+                        #'ml_prediction': ml_result  # ML 예측 결과 추가
                     }
                     
                     # 🆕 목표 수익률 저장
