@@ -133,9 +133,14 @@ class IntradayStockManager:
                 #self.logger.debug(f"✅ {stock_code}({stock_name}) 장중 선정 완료 - "
                 #               f"시간: {current_time.strftime('%H:%M:%S')}")
             
-            # 🆕 과거 데이터 수집 완료까지 대기
-            self.logger.info(f"📈 {stock_code} 과거 데이터 수집 시작...")
-            success = await self._collect_historical_data(stock_code)
+            # 🆕 09:05 이후에만 과거 데이터 수집 실행
+            current_time = now_kst()
+            if current_time.hour > 9 or (current_time.hour == 9 and current_time.minute >= 5):
+                self.logger.info(f"📈 {stock_code} 과거 데이터 수집 시작...")
+                success = await self._collect_historical_data(stock_code)
+            else:
+                self.logger.info(f"⏰ {stock_code} 09:05 이전이므로 데이터 수집 보류 (현재: {current_time.strftime('%H:%M')})")
+                success = True  # 일단 성공으로 처리하고 나중에 수집
             
             if success:
                 #self.logger.info(f"✅ {stock_code} 과거 데이터 수집 완료 및 종목 추가 성공")
@@ -267,9 +272,8 @@ class IntradayStockManager:
                 # 시간 컬럼이 없으면 전체 데이터 사용
                 filtered_data = historical_data.copy()
             
-            # 📊 ML용 일봉 데이터 수집 (실시간에서는 비활성화)
+            # 📊 ML용 일봉 데이터 수집 
             daily_data = await self._collect_daily_data_for_ml(stock_code)
-            # daily_data = pd.DataFrame()  # 실시간에서는 일봉데이터 수집하지 않음
             
             # 메모리에 저장
             with self._lock:
@@ -1220,11 +1224,55 @@ class IntradayStockManager:
                 except Exception:
                     issues.append('시간 파싱 오류')
             
+            # 5. 당일 날짜 검증
+            date_issues = self._validate_today_data(all_data)
+            if date_issues:
+                issues.extend(date_issues)
+
             return {'has_issues': bool(issues), 'issues': issues}
-            
+
         except Exception as e:
             return {'has_issues': True, 'issues': [f'품질검사 오류: {str(e)[:30]}']}
-    
+
+    def _validate_today_data(self, data: pd.DataFrame) -> List[str]:
+        """당일 데이터인지 검증"""
+        issues = []
+
+        try:
+            from utils.korean_time import now_kst
+            today_str = now_kst().strftime('%Y%m%d')
+
+            # 1. date 컬럼이 있는 경우 (YYYYMMDD 형태)
+            if 'date' in data.columns:
+                unique_dates = data['date'].unique()
+                wrong_dates = [d for d in unique_dates if str(d) != today_str]
+                if wrong_dates:
+                    issues.append(f'다른 날짜 데이터 포함: {wrong_dates[:3]}')
+
+            # 2. datetime 컬럼이 있는 경우
+            elif 'datetime' in data.columns:
+                # datetime 컬럼에서 날짜 추출
+                try:
+                    data_dates = pd.to_datetime(data['datetime']).dt.strftime('%Y%m%d').unique()
+                    wrong_dates = [d for d in data_dates if d != today_str]
+                    if wrong_dates:
+                        issues.append(f'다른 날짜 데이터 포함: {wrong_dates[:3]}')
+                except Exception:
+                    # datetime 파싱 실패시 무시
+                    pass
+
+            # 3. stck_bsop_date 컬럼이 있는 경우 (KIS API 응답)
+            elif 'stck_bsop_date' in data.columns:
+                unique_dates = data['stck_bsop_date'].unique()
+                wrong_dates = [d for d in unique_dates if str(d) != today_str]
+                if wrong_dates:
+                    issues.append(f'다른 날짜 데이터 포함: {wrong_dates[:3]}')
+
+        except Exception as e:
+            issues.append(f'날짜 검증 오류: {str(e)[:30]}')
+
+        return issues
+
     async def _collect_daily_data_for_ml(self, stock_code: str) -> pd.DataFrame:
         """
         ML 예측용 일봉 데이터 수집 (100일치)
