@@ -362,6 +362,14 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                     logger.debug(f"⚠️ [{signal_completion_time.strftime('%H:%M')}] 동일 캔들 중복신호 차단 ({normalized_signal_time.strftime('%H:%M')})")
                 continue  # 동일한 캔들에서 발생한 신호는 무시
             
+            # ==================== 🆕 25분 매수 쿨다운 체크 ====================
+            if stock_code in stock_cooldown_end:
+                if signal_completion_time < stock_cooldown_end[stock_code]:
+                    remaining_minutes = (stock_cooldown_end[stock_code] - signal_completion_time).total_seconds() / 60
+                    if logger:
+                        logger.info(f"⚠️ [{signal_completion_time.strftime('%H:%M')}] 매수 쿨다운 활성화 (남은 시간: {remaining_minutes:.0f}분)")
+                    continue
+
             # ==================== 실시간과 동일: 포지션 보유 중이면 매수 금지 ====================
             if current_position is not None:
                 # 현재 신호 시간이 포지션 매도 시간 이전인지 확인 (매도 전이면 매수 불가)
@@ -769,6 +777,11 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                 # 매도 완료 시 신호 시점 초기화 (새로운 매수 신호 허용)
                 # 단, 쿨다운 로직이 있으므로 즉시 재매수되지는 않음
                 last_signal_candle_time = None
+
+                # 🆕 매수 완료 시 25분 쿨다운 설정
+                stock_cooldown_end[stock_code] = buy_time + timedelta(minutes=buy_cooldown_minutes)
+                if logger:
+                    logger.info(f"🕰️ [{stock_code}] 매수 쿨다운 설정: {buy_time.strftime('%H:%M')} + {buy_cooldown_minutes}분 = {stock_cooldown_end[stock_code].strftime('%H:%M')}")
                 
                 trades.append({
                     'buy_time': buy_time.strftime('%H:%M'),
@@ -795,6 +808,11 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                     'sell_time': eod_time,  # 장 마감 시간으로 설정하여 이후 매수 허용
                     'status': 'eod_open'
                 }
+
+                # 🆕 미결제 포지션에서도 매수 완료 시 25분 쿨다운 설정
+                stock_cooldown_end[stock_code] = buy_time + timedelta(minutes=buy_cooldown_minutes)
+                if logger:
+                    logger.info(f"🕰️ [{stock_code}] 매수 쿨다운 설정 (미결제): {buy_time.strftime('%H:%M')} + {buy_cooldown_minutes}분 = {stock_cooldown_end[stock_code].strftime('%H:%M')}")
                 
                 trades.append({
                     'buy_time': buy_time.strftime('%H:%M'),

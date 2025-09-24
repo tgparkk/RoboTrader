@@ -179,6 +179,12 @@ class TradingStockManager:
                 if trading_stock.is_buying:
                     self.logger.warning(f"⚠️ {stock_code}: 이미 매수 진행 중 (중복 매수 방지)")
                     return False
+
+                # 🆕 25분 매수 쿨다운 확인
+                if trading_stock.is_buy_cooldown_active():
+                    remaining_minutes = trading_stock.get_remaining_cooldown_minutes()
+                    self.logger.warning(f"⚠️ {stock_code}: 매수 쿨다운 활성화 (남은 시간: {remaining_minutes}분)")
+                    return False
                 
                 # 상태 검증 (SELECTED 또는 COMPLETED에서 직접 매수 가능)
                 if trading_stock.state not in [StockState.SELECTED, StockState.COMPLETED]:
@@ -395,9 +401,13 @@ class TradingStockManager:
                         with self._lock:
                             trading_stock.set_position(order.quantity, order.price)
                             trading_stock.clear_current_order()
+                            # 🆕 매수 시간 기록
+                            from utils.korean_time import now_kst
+                            trading_stock.set_buy_time(now_kst())
+
                             self._change_stock_state(
-                                trading_stock.stock_code, 
-                                StockState.POSITIONED, 
+                                trading_stock.stock_code,
+                                StockState.POSITIONED,
                                 f"매수 완료: {order.quantity}주 @{order.price:,.0f}원"
                             )
                         # 실거래 매수 기록 저장
@@ -666,9 +676,13 @@ class TradingStockManager:
                         
                         trading_stock.set_position(order.quantity, order.price)
                         trading_stock.clear_current_order()
+                        # 🆕 매수 시간 기록 (콜백)
+                        from utils.korean_time import now_kst
+                        trading_stock.set_buy_time(now_kst())
+
                         self._change_stock_state(
-                            trading_stock.stock_code, 
-                            StockState.POSITIONED, 
+                            trading_stock.stock_code,
+                            StockState.POSITIONED,
                             f"매수 체결 (콜백): {order.quantity}주 @{order.price:,.0f}원"
                         )
                         

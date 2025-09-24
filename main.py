@@ -349,6 +349,12 @@ class DayTradingBot:
             if any(pos_stock.stock_code == stock_code for pos_stock in positioned_stocks):
                 self.logger.info(f"⚠️ 보유 중인 종목 매수 신호 무시: {stock_code}({stock_name})")
                 return
+
+            # 🆕 25분 매수 쿨다운 확인
+            if trading_stock.is_buy_cooldown_active():
+                remaining_minutes = trading_stock.get_remaining_cooldown_minutes()
+                self.logger.debug(f"⚠️ {stock_code}: 매수 쿨다운 활성화 (남은 시간: {remaining_minutes}분)")
+                return
             
             # 분봉 데이터 가져오기
             combined_data = self.intraday_manager.get_combined_chart_data(stock_code)

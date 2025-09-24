@@ -166,6 +166,10 @@ class TradingStock:
     
     # 신호 중복 방지
     last_signal_candle_time: Optional[datetime] = None  # 마지막 매수 신호 발생 캔들 시점
+
+    # 🆕 매수 시간 추적
+    last_buy_time: Optional[datetime] = None  # 마지막 매수 체결 시간
+    buy_cooldown_minutes: int = 25  # 매수 쿨다운 시간 (분)
     
     def change_state(self, new_state: StockState, reason: str = ""):
         """상태 변경 및 이력 기록"""
@@ -223,6 +227,31 @@ class TradingStock:
             self._virtual_buy_price is not None,
             self._virtual_quantity is not None
         ])
+
+    def set_buy_time(self, buy_time: datetime):
+        """매수 시간 설정"""
+        self.last_buy_time = buy_time
+
+    def is_buy_cooldown_active(self) -> bool:
+        """매수 쿨다운 활성화 여부 확인"""
+        if self.last_buy_time is None:
+            return False
+
+        from utils.korean_time import now_kst
+        current_time = now_kst()
+        time_diff = (current_time - self.last_buy_time).total_seconds() / 60  # 분 단위
+        return time_diff < self.buy_cooldown_minutes
+
+    def get_remaining_cooldown_minutes(self) -> int:
+        """남은 쿨다운 시간 (분)"""
+        if self.last_buy_time is None:
+            return 0
+
+        from utils.korean_time import now_kst
+        current_time = now_kst()
+        time_diff = (current_time - self.last_buy_time).total_seconds() / 60  # 분 단위
+        remaining = self.buy_cooldown_minutes - time_diff
+        return max(0, int(remaining))
 
 
 @dataclass
