@@ -645,7 +645,13 @@ class TradingStockManager:
                     return
                 
                 trading_stock = self.trading_stocks[order.stock_code]
-                
+
+                # 🆕 추가: 이미 POSITIONED 상태라면 중복 처리 방지
+                if (order.order_type == OrderType.BUY and
+                    trading_stock.state == StockState.POSITIONED):
+                    self.logger.debug(f"⚠️ {order.stock_code} 이미 POSITIONED 상태 (중복 콜백 방지)")
+                    return
+
                 # 🆕 레이스 컨디션 방지: 이미 처리된 주문인지 확인
                 if trading_stock.order_processed:
                     self.logger.debug(f"⚠️ 이미 처리된 주문 (중복 방지): {order.order_id}")
