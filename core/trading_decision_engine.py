@@ -1014,10 +1014,33 @@ class TradingDecisionEngine:
             
             # 매수 신호 확인
             if signal_strength.signal_type in [SignalType.STRONG_BUY, SignalType.CAUTIOUS_BUY]:
+                # 🆕 패턴 품질 검증 추가 (413630 타입 필터링)
+                from core.indicators.pullback_pattern_validator import PullbackPatternValidator
+
+                validator = PullbackPatternValidator(logger=self.logger)
+
+                # support_pattern_result를 직접 계산 (PullbackCandlePattern에서)
+                try:
+                    support_pattern_result = PullbackCandlePattern.analyze_support_pattern(data_3min, debug=True)
+
+                    pattern_quality = validator.validate_pattern(data_3min, support_pattern_result)
+
+                    if not pattern_quality.is_clear:
+                        exclude_msg = validator.get_validation_summary(pattern_quality)
+                        self.logger.info(f"🚫 {trading_stock.stock_code}: {exclude_msg}")
+                        return False, f"패턴품질검증실패: {pattern_quality.exclude_reason}", None
+
+                    # 패턴 검증 통과 시 기존 로직 계속
+                    self.logger.info(f"✅ {trading_stock.stock_code}: 패턴 품질 검증 통과 ({pattern_quality.confidence_score:.0f}점)")
+
+                except Exception as e:
+                    self.logger.error(f"❌ 패턴 품질 검증 오류: {e}")
+                    # 검증 오류 시에도 기존 로직 실행 (안전장치)
+
                 # 신호 이유 생성
                 reasons = ' | '.join(signal_strength.reasons)
                 signal_desc = f"{signal_strength.signal_type.value} (신뢰도: {signal_strength.confidence:.0f}%)"
-                
+
                 # 가격 정보 생성 (안전한 타입 변환)
                 price_info = {
                     'buy_price': self._safe_float_convert(signal_strength.buy_price),
