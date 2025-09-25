@@ -66,6 +66,17 @@ class TradingDecisionEngine:
             self.logger.warning(f"⚠️ 일봉 패턴 필터 초기화 실패: {e}")
             self.daily_pattern_filter = None
             self.use_daily_filter = False
+
+        # 🆕 간단한 패턴 필터 초기화 (시뮬과 동일)
+        try:
+            from core.indicators.simple_pattern_filter import SimplePatternFilter
+            self.simple_pattern_filter = SimplePatternFilter(logger=self.logger)
+            self.use_simple_filter = True
+            self.logger.info("🛡️ 간단한 패턴 필터 초기화 완료")
+        except Exception as e:
+            self.logger.warning(f"⚠️ 간단한 패턴 필터 초기화 실패: {e}")
+            self.simple_pattern_filter = None
+            self.use_simple_filter = False
         
         # ML 설정 로드 (실시간에서는 비활성화)
         try:
@@ -353,17 +364,29 @@ class TradingDecisionEngine:
                         current_time = now_kst()
                         signal_date = current_time.strftime("%Y%m%d")
                         signal_time = current_time.strftime("%H:%M")
-                        
+
                         filter_result = self.daily_pattern_filter.apply_filter(
                             stock_code, signal_date, signal_time
                         )
-                        
+
                         if not filter_result.passed:
                             self.logger.debug(f"🚫 {stock_code} 일봉 필터 차단: {filter_result.reason}")
                             return False, f"눌림목캔들패턴: {reason} + 일봉필터차단: {filter_result.reason}", {'buy_price': 0, 'quantity': 0, 'max_buy_amount': 0}
                         else:
                             self.logger.debug(f"✅ {stock_code} 일봉 필터 통과: {filter_result.reason} (점수: {filter_result.score:.2f})")
-                    
+
+                    # 🆕 간단한 패턴 필터 적용 (시뮬과 동일)
+                    if self.use_simple_filter and self.simple_pattern_filter:
+                        should_filter, filter_reason = self.simple_pattern_filter.should_filter_out(
+                            stock_code, signal_strength, combined_data
+                        )
+
+                        if should_filter:
+                            self.logger.debug(f"🚫 {stock_code} 간단한 패턴 필터 차단: {filter_reason}")
+                            return False, f"눌림목캔들패턴: {reason} + 패턴필터차단: {filter_reason}", {'buy_price': 0, 'quantity': 0, 'max_buy_amount': 0}
+                        else:
+                            self.logger.debug(f"✅ {stock_code} 간단한 패턴 필터 통과: {filter_reason}")
+
                     # ML 필터 적용 (매수 정보 생성 전에)
                     
                     ml_pass, ml_reason, ml_result = await self._apply_hardcoded_ml_filter(trading_stock, "pullback_pattern")
