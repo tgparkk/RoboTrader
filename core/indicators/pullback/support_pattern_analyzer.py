@@ -472,6 +472,27 @@ class SupportPatternAnalyzer:
         if breakout_close <= breakout_open:
             return None
 
+        # 🆕 돌파봉 이등분선 조건 (임시 비활성화 - 너무 엄격함)
+        # try:
+        #     # 이등분선 계산 (전체 데이터 기준)
+        #     from core.indicators.bisector_line import BisectorLine
+        #     highs = numpy_arrays['high']
+        #     lows = numpy_arrays['low']
+        #     bisector_line_series = BisectorLine.calculate_bisector_line(pd.Series(highs), pd.Series(lows))
+
+        #     if bisector_line_series is not None and len(bisector_line_series) > breakout_idx:
+        #         bisector_line = bisector_line_series.iloc[breakout_idx]
+
+        #         # 돌파봉 몸통의 1/2 지점 계산 (조건 완화: 3/5 → 1/2)
+        #         body_half_point = breakout_open + (breakout_close - breakout_open) * 0.5  # 시가에서 1/2 지점
+
+        #         # 몸통의 1/2가 이등분선을 넘어야 함
+        #         if body_half_point <= bisector_line:
+        #             return None
+        # except Exception:
+        #     # 이등분선 계산 실패 시 조건 무시하고 진행
+        #     pass
+
         # 🆕 돌파봉 위치 조건: 상승구간 평균 가격보다 낮게 위치 (조건 비활성화)
         # 너무 엄격한 조건으로 인해 신호가 발생하지 않아 일시적으로 비활성화
         # uptrend_closes = numpy_arrays['close'][uptrend.start_idx:uptrend.end_idx+1]
@@ -709,10 +730,22 @@ class SupportPatternAnalyzer:
         if not support:
             return SupportPatternResult(
                 has_pattern=False, uptrend_phase=uptrend, decline_phase=decline, support_phase=None,
-                breakout_candle=None, entry_price=None, confidence=0.0, 
+                breakout_candle=None, entry_price=None, confidence=0.0,
                 reasons=["지지 구간을 찾을 수 없습니다"]
             )
-        
+
+        # 🆕 하락+지지 최소 봉 개수 검증 (총 3개 이상)
+        decline_candles = decline.end_idx - decline.start_idx + 1
+        support_candles = support.end_idx - support.start_idx + 1
+
+        # 조건 완화: 하락과 지지가 총 2개 이상이어야 함 (너무 엄격한 조건 완화)
+        if decline_candles + support_candles < 2:
+            return SupportPatternResult(
+                has_pattern=False, uptrend_phase=uptrend, decline_phase=decline, support_phase=support,
+                breakout_candle=None, entry_price=None, confidence=0.0,
+                reasons=[f"하락+지지 봉 부족: 하락{decline_candles}개+지지{support_candles}개={decline_candles + support_candles}개 < 2개"]
+            )
+
         # 4단계: 돌파 양봉 검증
         breakout = self._validate_breakout(data, numpy_arrays, support, uptrend, uptrend.max_volume, breakout_idx)
         
