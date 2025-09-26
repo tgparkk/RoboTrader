@@ -1498,36 +1498,17 @@ def main():
                                                 signal_completion_time = candle_time + pd.Timedelta(minutes=3)
                                                 is_after_15h = signal_completion_time.hour >= 15
 
-                                                # 🎯 413630 종목에만 선택적으로 패턴 검증기 적용 (상세 분석)
+                                                # 패턴 검증 제거 (모든 종목 동일하게 처리)
                                                 is_buy_signal = signal_strength.signal_type in [SignalType.STRONG_BUY, SignalType.CAUTIOUS_BUY]
-                                                pattern_validation_failed = False
-
-                                                if stock_code == "413630" and is_buy_signal and not is_after_15h:
-                                                    try:
-                                                        from core.indicators.pullback_pattern_validator import PullbackPatternValidator
-                                                        validator = PullbackPatternValidator()
-                                                        support_pattern_result = PullbackCandlePattern.analyze_support_pattern(current_data, debug=True)
-                                                        pattern_quality = validator.validate_pattern(current_data, support_pattern_result)
-
-                                                        if not pattern_quality.is_clear:
-                                                            pattern_validation_failed = True
-                                                            print(f"🚫 {stock_code} {time_str}: 패턴 품질 검증 실패 - {pattern_quality.exclude_reason}")
-
-                                                    except Exception as e:
-                                                        print(f"⚠️ {stock_code} {time_str}: 패턴 검증 오류 - {e}")
 
                                                 if signal_strength.signal_type == SignalType.STRONG_BUY:
                                                     if is_after_15h:
                                                         status_parts.append("🟢강매수(15시이후매수금지)")
-                                                    elif pattern_validation_failed:
-                                                        status_parts.append("🔴회피(413630패턴품질불량)")
                                                     else:
                                                         status_parts.append("🟢강매수")
                                                 elif signal_strength.signal_type == SignalType.CAUTIOUS_BUY:
                                                     if is_after_15h:
                                                         status_parts.append("🟡조건부매수(15시이후매수금지)")
-                                                    elif pattern_validation_failed:
-                                                        status_parts.append("🔴회피(413630패턴품질불량)")
                                                     else:
                                                         status_parts.append("🟡조건부매수")
                                                 elif signal_strength.signal_type == SignalType.AVOID:

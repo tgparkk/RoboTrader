@@ -378,7 +378,7 @@ class TradingDecisionEngine:
                     # 🆕 간단한 패턴 필터 적용 (시뮬과 동일)
                     if self.use_simple_filter and self.simple_pattern_filter:
                         should_filter, filter_reason = self.simple_pattern_filter.should_filter_out(
-                            stock_code, signal_strength, combined_data
+                            stock_code, signal_strength, data_3min
                         )
 
                         if should_filter:
@@ -1037,28 +1037,26 @@ class TradingDecisionEngine:
             
             # 매수 신호 확인
             if signal_strength.signal_type in [SignalType.STRONG_BUY, SignalType.CAUTIOUS_BUY]:
-                # 🆕 패턴 품질 검증 추가 (413630 타입 필터링)
-                from core.indicators.pullback_pattern_validator import PullbackPatternValidator
-
-                validator = PullbackPatternValidator(logger=self.logger)
-
-                # support_pattern_result를 직접 계산 (PullbackCandlePattern에서)
+                # 🎯 간단한 패턴 필터 적용 (시뮬레이션과 동일 - 명백히 약한 패턴만 차단)
                 try:
-                    support_pattern_result = PullbackCandlePattern.analyze_support_pattern(data_3min, debug=True)
+                    from core.indicators.simple_pattern_filter import SimplePatternFilter
 
-                    pattern_quality = validator.validate_pattern(data_3min, support_pattern_result)
+                    pattern_filter = SimplePatternFilter(logger=self.logger)
 
-                    if not pattern_quality.is_clear:
-                        exclude_msg = validator.get_validation_summary(pattern_quality)
-                        self.logger.info(f"🚫 {trading_stock.stock_code}: {exclude_msg}")
-                        return False, f"패턴품질검증실패: {pattern_quality.exclude_reason}", None
+                    # 약한 패턴 필터링 (시뮬레이션과 동일한 로직)
+                    should_filter, filter_reason = pattern_filter.should_filter_out(
+                        trading_stock.stock_code, signal_strength, data_3min
+                    )
 
-                    # 패턴 검증 통과 시 기존 로직 계속
-                    self.logger.info(f"✅ {trading_stock.stock_code}: 패턴 품질 검증 통과 ({pattern_quality.confidence_score:.0f}점)")
+                    if should_filter:
+                        self.logger.info(f"🚫 {trading_stock.stock_code} 약한 패턴으로 매수 차단: {filter_reason}")
+                        return False, f"간단한패턴필터차단: {filter_reason}", None
+                    else:
+                        self.logger.debug(f"✅ {trading_stock.stock_code} 패턴 필터 통과: {filter_reason}")
 
                 except Exception as e:
-                    self.logger.error(f"❌ 패턴 품질 검증 오류: {e}")
-                    # 검증 오류 시에도 기존 로직 실행 (안전장치)
+                    self.logger.warning(f"⚠️ {trading_stock.stock_code} 패턴 필터 오류: {e}")
+                    # 필터 오류 시에도 매수 신호 진행 (안전장치)
 
                 # 신호 이유 생성
                 reasons = ' | '.join(signal_strength.reasons)
