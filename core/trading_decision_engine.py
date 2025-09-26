@@ -387,13 +387,12 @@ class TradingDecisionEngine:
                         else:
                             self.logger.debug(f"✅ {stock_code} 간단한 패턴 필터 통과: {filter_reason}")
 
-                    # ML 필터 적용 (매수 정보 생성 전에)
-                    
-                    ml_pass, ml_reason, ml_result = await self._apply_hardcoded_ml_filter(trading_stock, "pullback_pattern")
-                    if not ml_pass:
-                        return False, f"눌림목캔들패턴: {reason} + ML차단: {ml_reason}", {'buy_price': 0, 'quantity': 0, 'max_buy_amount': 0}
-                    
-                    # 매수 정보 생성 (ML 승인 후)
+                    # ML 필터 적용 (시뮬레이션과 동일하게 비활성화)
+                    # ml_pass, ml_reason, ml_result = await self._apply_hardcoded_ml_filter(trading_stock, "pullback_pattern")
+                    # if not ml_pass:
+                    #     return False, f"눌림목캔들패턴: {reason} + ML차단: {ml_reason}", {'buy_price': 0, 'quantity': 0, 'max_buy_amount': 0}
+
+                    # 매수 정보 생성
                     buy_info = {
                         'buy_price': buy_price,
                         'quantity': quantity,
@@ -407,9 +406,9 @@ class TradingDecisionEngine:
                     if hasattr(trading_stock, 'target_profit_rate'):
                         trading_stock.target_profit_rate = price_info.get('target_profit', 0.03)
                     
-                    # ML 승인 정보를 매수 사유에 추가
-                    final_reason = f"눌림목캔들패턴: {reason} + {ml_reason}"
-                    
+                    # 매수 신호 승인 (시뮬레이션과 동일)
+                    final_reason = f"눌림목캔들패턴: {reason}"
+
                     return True, final_reason, buy_info
                 else:
                     return False, "수량 계산 실패", buy_info
