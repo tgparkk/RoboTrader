@@ -299,9 +299,9 @@ class DayTradingBot:
             # 매수 판단: 선정된 종목들 + 재거래 가능한 완료 종목들
             buy_decision_candidates = selected_stocks + completed_stocks
             
-            # 15시 이후 매수 금지 체크
+            # 12시 이후 매수 금지 체크
             current_time = now_kst()
-            is_after_Npm = current_time.hour >= 15
+            is_after_Npm = current_time.hour >= 12
             
             if buy_decision_candidates and not is_after_Npm:
                 self.logger.debug(f"🔍 매수 판단 대상: SELECTED={len(selected_stocks)}개, COMPLETED={len(completed_stocks)}개 (총 {len(buy_decision_candidates)}개)")
@@ -309,7 +309,7 @@ class DayTradingBot:
                     await self._analyze_buy_decision(trading_stock, available_funds)
             else:
                 if is_after_Npm:
-                    self.logger.debug("📊 15시 이후이므로 매수 금지")
+                    self.logger.debug("📊 12시 이후이므로 매수 금지")
                 else:
                     self.logger.debug("📊 매수 판단 대상 종목 없음 (SELECTED + COMPLETED 상태 종목 없음)")
 
