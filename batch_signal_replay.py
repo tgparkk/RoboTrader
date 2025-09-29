@@ -208,6 +208,19 @@ def calculate_statistics(all_trades, start_date, end_date):
             'avg_profit': stats['total_profit'] / total if total > 0 else 0
         }
 
+    # 🆕 12시 이전 매수 종목 통계 계산
+    morning_trades = [t for t in all_trades if t['buy_hour'] < 12]
+    morning_wins = [t for t in morning_trades if t['is_win']]
+    morning_losses = [t for t in morning_trades if not t['is_win']]
+
+    morning_total = len(morning_trades)
+    morning_win_count = len(morning_wins)
+    morning_loss_count = len(morning_losses)
+    morning_win_rate = (morning_win_count / morning_total * 100) if morning_total > 0 else 0
+
+    morning_total_profit = sum(t['profit'] for t in morning_trades) if morning_trades else 0
+    morning_avg_profit = morning_total_profit / morning_total if morning_total > 0 else 0
+
     return {
         'period': f"{start_date} ~ {end_date}",
         'total_trades': total_trades,
@@ -219,7 +232,13 @@ def calculate_statistics(all_trades, start_date, end_date):
         'avg_win': avg_win,
         'avg_loss': avg_loss,
         'profit_loss_ratio': profit_loss_ratio,
-        'hourly_stats': hourly_summary
+        'hourly_stats': hourly_summary,
+        # 🆕 12시 이전 통계 추가
+        'morning_trades': morning_total,
+        'morning_wins': morning_win_count,
+        'morning_losses': morning_loss_count,
+        'morning_win_rate': morning_win_rate,
+        'morning_avg_profit': morning_avg_profit
     }
 
 
@@ -246,6 +265,16 @@ def save_statistics_log(stats, log_dir, start_date, end_date):
             f.write(f"평균 승리: {stats['avg_win']:+.2f}%\n")
             f.write(f"평균 손실: {stats['avg_loss']:+.2f}%\n")
             f.write(f"손익비: {stats['profit_loss_ratio']:.2f}:1\n")
+            f.write("\n")
+
+            # 🆕 12시 이전 매수 종목 통계
+            f.write("🌅 12시 이전 매수 종목 통계\n")
+            f.write("-" * 40 + "\n")
+            f.write(f"오전 거래 수: {stats.get('morning_trades', 0)}개\n")
+            f.write(f"오전 승리 수: {stats.get('morning_wins', 0)}개\n")
+            f.write(f"오전 패배 수: {stats.get('morning_losses', 0)}개\n")
+            f.write(f"오전 승률: {stats.get('morning_win_rate', 0):.1f}%\n")
+            f.write(f"오전 평균 수익률: {stats.get('morning_avg_profit', 0):+.2f}%\n")
             f.write("\n")
 
             # 시간대별 통계
@@ -392,6 +421,13 @@ def main():
         print(f"   승률: {stats.get('win_rate', 0):.1f}%")
         print(f"   손익비: {stats.get('profit_loss_ratio', 0):.2f}:1")
         print(f"   평균 수익: {stats.get('avg_profit', 0):+.2f}%")
+
+        # 🆕 12시 이전 매수 종목 콘솔 요약
+        if stats.get('morning_trades', 0) > 0:
+            print(f"\n🌅 12시 이전 매수 종목:")
+            print(f"   오전 거래: {stats.get('morning_trades', 0)}개")
+            print(f"   오전 승률: {stats.get('morning_win_rate', 0):.1f}%")
+            print(f"   오전 평균 수익: {stats.get('morning_avg_profit', 0):+.2f}%")
 
     else:
         print("거래 데이터를 찾을 수 없습니다.")

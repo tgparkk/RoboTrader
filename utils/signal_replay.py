@@ -857,17 +857,46 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
         if logger:
             completed_trades = [t for t in trades if t['status'] == 'completed']
             successful_trades = [t for t in completed_trades if t['profit_rate'] > 0]
-            
+
+            # 🆕 12시 이전 매수 종목들 필터링
+            morning_trades = []
+            for trade in completed_trades:
+                try:
+                    buy_hour = int(trade['buy_time'].split(':')[0])
+                    if buy_hour < 12:
+                        morning_trades.append(trade)
+                except (ValueError, IndexError):
+                    continue
+
+            morning_successful = [t for t in morning_trades if t['profit_rate'] > 0]
+
             logger.info(f"📈 [{stock_code}] 거래 시뮬레이션 완료:")
             logger.info(f"   전체 거래: {len(trades)}건")
             logger.info(f"   완료 거래: {len(completed_trades)}건")
             logger.info(f"   성공 거래: {len(successful_trades)}건")
             logger.info(f"   매수 못한 기회: {len(missed_opportunities)}건")
-            
+
+            # 🆕 12시 이전 매수 종목 승패 표시
+            if morning_trades:
+                morning_win_rate = len(morning_successful) / len(morning_trades) * 100
+                morning_avg_profit = sum(t['profit_rate'] for t in morning_trades) / len(morning_trades)
+
+                logger.info(f"🌅 12시 이전 매수 거래:")
+                logger.info(f"   오전 거래 수: {len(morning_trades)}건")
+                logger.info(f"   오전 성공: {len(morning_successful)}건")
+                logger.info(f"   오전 실패: {len(morning_trades) - len(morning_successful)}건")
+                logger.info(f"   오전 승률: {morning_win_rate:.1f}%")
+                logger.info(f"   오전 평균 수익률: {morning_avg_profit:+.2f}%")
+
+                # 개별 거래 상세 표시
+                for trade in morning_trades:
+                    status_icon = "🟢" if trade['profit_rate'] > 0 else "🔴"
+                    logger.info(f"   {status_icon} {trade['buy_time']} 매수 → {trade['profit_rate']:+.2f}%")
+
             if completed_trades:
                 avg_profit = sum(t['profit_rate'] for t in completed_trades) / len(completed_trades)
                 logger.info(f"   평균 수익률: {avg_profit:.2f}%")
-            
+
             if missed_opportunities:
                 virtual_profits = [m['virtual_profit_rate'] for m in missed_opportunities if m['virtual_profit_rate'] is not None]
                 if virtual_profits:
@@ -1259,8 +1288,49 @@ def main():
                                     else:
                                         selection_date_losses += 1
                     
+                    # 🆕 12시 이전 매수 종목 승패 계산
+                    morning_wins = 0
+                    morning_losses = 0
+                    morning_trades_details = []
+
+                    for stock_code, trades in all_trades.items():
+                        for trade in trades:
+                            if trade.get('sell_time'):  # 완료된 거래만
+                                buy_time_str = trade.get('buy_time', '')
+                                if buy_time_str:
+                                    try:
+                                        buy_hour = int(buy_time_str.split(':')[0])
+                                        if buy_hour < 12:  # 12시 이전 매수
+                                            profit_rate = trade.get('profit_rate', 0)
+                                            if profit_rate > 0:
+                                                morning_wins += 1
+                                                status_icon = "🟢"
+                                            else:
+                                                morning_losses += 1
+                                                status_icon = "🔴"
+
+                                            morning_trades_details.append({
+                                                'stock_code': stock_code,
+                                                'buy_time': buy_time_str,
+                                                'profit_rate': profit_rate,
+                                                'status_icon': status_icon
+                                            })
+                                    except (ValueError, IndexError):
+                                        continue
+
                     lines.append(f"=== 총 승패: {total_wins}승 {total_losses}패 ===")
                     lines.append(f"=== selection_date 이후 승패: {selection_date_wins}승 {selection_date_losses}패 ===")
+
+                    # 🆕 12시 이전 매수 종목 승패 표시 추가
+                    if morning_wins + morning_losses > 0:
+                        morning_total = morning_wins + morning_losses
+                        morning_win_rate = (morning_wins / morning_total * 100) if morning_total > 0 else 0
+                        lines.append(f"=== 🌅 12시 이전 매수 종목: {morning_wins}승 {morning_losses}패 (승률 {morning_win_rate:.1f}%) ===")
+
+                        # 개별 거래 상세 표시
+                        for detail in sorted(morning_trades_details, key=lambda x: x['buy_time']):
+                            lines.append(f"   {detail['status_icon']} {detail['stock_code']} {detail['buy_time']} 매수 → {detail['profit_rate']:+.2f}%")
+
                     lines.append("")
                     
                     for stock_code in codes_union:
