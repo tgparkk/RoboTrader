@@ -375,17 +375,8 @@ class TradingDecisionEngine:
                         else:
                             self.logger.debug(f"✅ {stock_code} 일봉 필터 통과: {filter_result.reason} (점수: {filter_result.score:.2f})")
 
-                    # 🆕 간단한 패턴 필터 적용 (시뮬과 동일)
-                    if self.use_simple_filter and self.simple_pattern_filter:
-                        should_filter, filter_reason = self.simple_pattern_filter.should_filter_out(
-                            stock_code, signal_strength, data_3min
-                        )
-
-                        if should_filter:
-                            self.logger.debug(f"🚫 {stock_code} 간단한 패턴 필터 차단: {filter_reason}")
-                            return False, f"눌림목캔들패턴: {reason} + 패턴필터차단: {filter_reason}", {'buy_price': 0, 'quantity': 0, 'max_buy_amount': 0}
-                        else:
-                            self.logger.debug(f"✅ {stock_code} 간단한 패턴 필터 통과: {filter_reason}")
+                    # 🆕 간단한 패턴 필터는 _check_pullback_candle_buy_signal 내부에서 이미 처리됨
+                    # 중복 제거: signal_strength는 해당 메소드 내부에서만 사용 가능
 
                     # ML 필터 적용 (시뮬레이션과 동일하게 비활성화)
                     # ml_pass, ml_reason, ml_result = await self._apply_hardcoded_ml_filter(trading_stock, "pullback_pattern")
