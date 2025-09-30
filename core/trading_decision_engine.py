@@ -1013,13 +1013,13 @@ class TradingDecisionEngine:
                 except Exception as e:
                     self.logger.debug(f"⚠️ {trading_stock.stock_code} 일봉 데이터 조회 실패: {e}")
 
-            # 🆕 개선된 신호 생성 로직 사용 (3/5가 계산 포함 + 일봉 데이터)
+            # 🆕 개선된 신호 생성 로직 사용 (3/5가 계산 포함 + 일봉 데이터 제외 - 시뮬과 동일)
             signal_strength = PullbackCandlePattern.generate_improved_signals(
                 data_3min,
                 #stock_code=getattr(self, '_current_stock_code', 'UNKNOWN'),
                 stock_code=trading_stock.stock_code,
-                debug=True,
-                daily_data=daily_data
+                debug=True
+                # daily_data=daily_data  # 시뮬과 동일하게 일봉 데이터 전달 안 함
             )
             
             if signal_strength is None:
@@ -1031,7 +1031,7 @@ class TradingDecisionEngine:
                 try:
                     from core.indicators.simple_pattern_filter import SimplePatternFilter
 
-                    pattern_filter = SimplePatternFilter(logger=self.logger)
+                    pattern_filter = SimplePatternFilter()  # 시뮬과 동일하게 logger 없이 생성
 
                     # 약한 패턴 필터링 (시뮬레이션과 동일한 로직)
                     should_filter, filter_reason = pattern_filter.should_filter_out(
