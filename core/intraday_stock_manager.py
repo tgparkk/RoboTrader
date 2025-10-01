@@ -553,48 +553,71 @@ class IntradayStockManager:
     def _check_sufficient_base_data(self, combined_data: Optional[pd.DataFrame], stock_code: str) -> bool:
         """
         08-09시부터 분봉 데이터가 충분한지 간단 체크
-        
+
         Args:
             combined_data: 결합된 차트 데이터
             stock_code: 종목코드 (로깅용)
-            
+
         Returns:
             bool: 기본 데이터 충분 여부
         """
         try:
+            from utils.korean_time import now_kst
+
             if combined_data is None or combined_data.empty:
                 self.logger.debug(f"❌ {stock_code} 데이터 없음")
                 return False
-            
+
+            # 1. 당일 데이터인지 먼저 확인
+            today_str = now_kst().strftime('%Y%m%d')
+
+            # date 컬럼으로 당일 데이터만 필터링
+            if 'date' in combined_data.columns:
+                today_data = combined_data[combined_data['date'].astype(str) == today_str].copy()
+                if today_data.empty:
+                    self.logger.debug(f"❌ {stock_code} 당일 데이터 없음 (전일 데이터만 존재)")
+                    return False
+                combined_data = today_data
+            elif 'datetime' in combined_data.columns:
+                try:
+                    combined_data['date_str'] = pd.to_datetime(combined_data['datetime']).dt.strftime('%Y%m%d')
+                    today_data = combined_data[combined_data['date_str'] == today_str].copy()
+                    if today_data.empty:
+                        self.logger.debug(f"❌ {stock_code} 당일 데이터 없음 (전일 데이터만 존재)")
+                        return False
+                    combined_data = today_data.drop('date_str', axis=1)
+                except Exception:
+                    pass
+
             data_count = len(combined_data)
-            
+
             # 최소 데이터 개수 체크 (3분봉 최소 5개 = 15분봉 필요)
             if data_count < 5:
                 self.logger.debug(f"❌ {stock_code} 데이터 부족: {data_count}/15")
                 return False
-            
-            # 시작 시간 체크 (09:00대 시작 확인) - 장 초반에는 완화
+
+            # 시작 시간 체크 (09:00대 시작 확인)
             if 'time' in combined_data.columns:
                 start_time_str = str(combined_data.iloc[0]['time']).zfill(6)
                 start_hour = int(start_time_str[:2])
-                
-                # 09:00-09:15 구간에서는 09:00 시작이 아니어도 허용 (데이터 부족 문제 해결)
-                if start_hour < 9 or start_hour > 9:
+
+                # 09시 시작 확인
+                if start_hour != 9:
                     self.logger.debug(f"❌ {stock_code} 시작 시간 문제: {start_time_str} (09시 아님)")
                     return False
-                    
+
             elif 'datetime' in combined_data.columns:
                 start_dt = combined_data.iloc[0]['datetime']
                 if hasattr(start_dt, 'hour'):
                     start_hour = start_dt.hour
-                    # 09:00-09:15 구간에서는 09:00 시작이 아니어도 허용
-                    if start_hour < 9 or start_hour > 9:
+                    # 09시 시작 확인
+                    if start_hour != 9:
                         self.logger.debug(f"❌ {stock_code} 시작 시간 문제: {start_hour}시 (09시 아님)")
                         return False
-            
+
             #self.logger.debug(f"✅ {stock_code} 기본 데이터 충분: {data_count}개")
             return True
-            
+
         except Exception as e:
             self.logger.warning(f"⚠️ {stock_code} 기본 데이터 체크 오류: {e}")
             return False
