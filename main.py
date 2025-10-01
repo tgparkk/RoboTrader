@@ -62,6 +62,10 @@ class DayTradingBot:
             api_manager=self.api_manager,
             intraday_manager=self.intraday_manager
         )  # 🆕 매매 판단 엔진
+
+        # 🆕 TradingStockManager에 decision_engine 연결 (쿨다운 설정용)
+        self.trading_manager.set_decision_engine(self.decision_engine)
+
         self.fund_manager = FundManager()  # 🆕 자금 관리자
         self.chart_generator = None  # 🆕 장 마감 후 차트 생성기 (지연 초기화)
         

@@ -63,6 +63,9 @@ class TradingStockManager:
         self.enable_re_trading = True  # 매도 완료 후 재거래 허용 (COMPLETED 상태에서 직접 매수 판단)
         
         
+        # 🆕 decision_engine은 나중에 설정됨 (순환 참조 방지)
+        self.decision_engine = None
+
         self.logger.info("🎯 종목 거래 상태 통합 관리자 초기화 완료")
         # 주문 관리자에 역참조 등록 (정정 시 주문ID 동기화용)
         try:
@@ -70,6 +73,11 @@ class TradingStockManager:
                 self.order_manager.set_trading_manager(self)
         except Exception:
             pass
+
+    def set_decision_engine(self, decision_engine):
+        """매매 판단 엔진 설정 (순환 참조 방지를 위해 별도 메서드)"""
+        self.decision_engine = decision_engine
+        self.logger.debug("✅ TradingStockManager에 decision_engine 연결 완료")
     
     async def add_selected_stock(self, stock_code: str, stock_name: str, 
                                 selection_reason: str = "", prev_close: float = 0.0) -> bool:
