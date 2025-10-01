@@ -147,6 +147,28 @@ def calculate_statistics(all_trades: List[Dict], period_desc: str = "") -> Dict:
             'avg_profit': stats['total_profit'] / total if total > 0 else 0
         }
 
+    # 12시 이전 매수 종목만 필터링한 통계
+    morning_trades = [t for t in all_trades if t['buy_hour'] < 12]
+    morning_stats = None
+    if morning_trades:
+        morning_wins = [t for t in morning_trades if t['is_win']]
+        morning_losses = [t for t in morning_trades if not t['is_win']]
+        morning_win_count = len(morning_wins)
+        morning_loss_count = len(morning_losses)
+        morning_total = len(morning_trades)
+
+        morning_stats = {
+            'total_trades': morning_total,
+            'wins': morning_win_count,
+            'losses': morning_loss_count,
+            'win_rate': (morning_win_count / morning_total * 100) if morning_total > 0 else 0,
+            'total_profit': sum(t['profit'] for t in morning_trades),
+            'avg_profit': sum(t['profit'] for t in morning_trades) / morning_total if morning_total > 0 else 0,
+            'avg_win': sum(t['profit'] for t in morning_wins) / morning_win_count if morning_win_count > 0 else 0,
+            'avg_loss': sum(t['profit'] for t in morning_losses) / morning_loss_count if morning_loss_count > 0 else 0,
+        }
+        morning_stats['profit_loss_ratio'] = abs(morning_stats['avg_win'] / morning_stats['avg_loss']) if morning_stats['avg_loss'] != 0 else 0
+
     return {
         'period': period_desc,
         'total_trades': total_trades,
@@ -158,7 +180,8 @@ def calculate_statistics(all_trades: List[Dict], period_desc: str = "") -> Dict:
         'avg_win': avg_win,
         'avg_loss': avg_loss,
         'profit_loss_ratio': profit_loss_ratio,
-        'hourly_stats': hourly_summary
+        'hourly_stats': hourly_summary,
+        'morning_only': morning_stats
     }
 
 
@@ -186,6 +209,22 @@ def save_analysis_result(stats: Dict, output_filename: str):
             f.write(f"평균 손실: {stats['avg_loss']:+.2f}%\n")
             f.write(f"손익비: {stats['profit_loss_ratio']:.2f}:1\n")
             f.write("\n")
+
+            # 12시 이전 매수 종목 통계
+            if stats.get('morning_only'):
+                morning = stats['morning_only']
+                f.write("12시 이전 매수 종목 통계\n")
+                f.write("-" * 40 + "\n")
+                f.write(f"총 거래 수: {morning['total_trades']}개\n")
+                f.write(f"승리 수: {morning['wins']}개\n")
+                f.write(f"패배 수: {morning['losses']}개\n")
+                f.write(f"승률: {morning['win_rate']:.1f}%\n")
+                f.write(f"총 수익률: {morning['total_profit']:+.2f}%\n")
+                f.write(f"평균 수익률: {morning['avg_profit']:+.2f}%\n")
+                f.write(f"평균 승리: {morning['avg_win']:+.2f}%\n")
+                f.write(f"평균 손실: {morning['avg_loss']:+.2f}%\n")
+                f.write(f"손익비: {morning['profit_loss_ratio']:.2f}:1\n")
+                f.write("\n")
 
             # 시간대별 통계
             f.write("시간대별 통계\n")
@@ -392,13 +431,22 @@ def main():
     print(f"  손익비: {stats.get('profit_loss_ratio', 0):.2f}:1")
     print(f"  평균 수익: {stats.get('avg_profit', 0):+.2f}%")
 
+    # 12시 이전 매수 종목 요약
+    if stats.get('morning_only'):
+        morning = stats['morning_only']
+        print("\n12시 이전 매수 종목:")
+        print(f"  총 거래: {morning['total_trades']}개")
+        print(f"  승률: {morning['win_rate']:.1f}%")
+        print(f"  손익비: {morning['profit_loss_ratio']:.2f}:1")
+        print(f"  평균 수익: {morning['avg_profit']:+.2f}%")
+
     # 최고/최악 시간대 표시
     hourly_stats = stats.get('hourly_stats', {})
     if hourly_stats:
         best_hour = max(hourly_stats.keys(), key=lambda h: hourly_stats[h]['win_rate'])
         worst_hour = min(hourly_stats.keys(), key=lambda h: hourly_stats[h]['win_rate'])
 
-        print(f"  최고 시간대: {best_hour:02d}시 ({hourly_stats[best_hour]['win_rate']:.1f}% 승률)")
+        print(f"\n  최고 시간대: {best_hour:02d}시 ({hourly_stats[best_hour]['win_rate']:.1f}% 승률)")
         print(f"  최악 시간대: {worst_hour:02d}시 ({hourly_stats[worst_hour]['win_rate']:.1f}% 승률)")
 
 
