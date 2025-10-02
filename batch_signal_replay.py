@@ -424,7 +424,7 @@ def main():
 
         # 🆕 12시 이전 매수 종목 콘솔 요약
         if stats.get('morning_trades', 0) > 0:
-            print(f"\n🌅 12시 이전 매수 종목:")
+            print(f"\n🌅 10시 이전 매수 종목:")
             print(f"   오전 거래: {stats.get('morning_trades', 0)}개")
             print(f"   오전 승률: {stats.get('morning_win_rate', 0):.1f}%")
             print(f"   오전 평균 수익: {stats.get('morning_avg_profit', 0):+.2f}%")

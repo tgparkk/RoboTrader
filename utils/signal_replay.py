@@ -863,7 +863,7 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
             for trade in completed_trades:
                 try:
                     buy_hour = int(trade['buy_time'].split(':')[0])
-                    if buy_hour < 12:
+                    if buy_hour < 10:
                         morning_trades.append(trade)
                 except (ValueError, IndexError):
                     continue
@@ -881,7 +881,7 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                 morning_win_rate = len(morning_successful) / len(morning_trades) * 100
                 morning_avg_profit = sum(t['profit_rate'] for t in morning_trades) / len(morning_trades)
 
-                logger.info(f"🌅 12시 이전 매수 거래:")
+                logger.info(f"🌅 10시 이전 매수 거래:")
                 logger.info(f"   오전 거래 수: {len(morning_trades)}건")
                 logger.info(f"   오전 성공: {len(morning_successful)}건")
                 logger.info(f"   오전 실패: {len(morning_trades) - len(morning_successful)}건")
@@ -1300,7 +1300,7 @@ def main():
                                 if buy_time_str:
                                     try:
                                         buy_hour = int(buy_time_str.split(':')[0])
-                                        if buy_hour < 12:  # 12시 이전 매수
+                                        if buy_hour < 10:  # 12시 이전 매수
                                             profit_rate = trade.get('profit_rate', 0)
                                             if profit_rate > 0:
                                                 morning_wins += 1
@@ -1325,7 +1325,7 @@ def main():
                     if morning_wins + morning_losses > 0:
                         morning_total = morning_wins + morning_losses
                         morning_win_rate = (morning_wins / morning_total * 100) if morning_total > 0 else 0
-                        lines.append(f"=== 🌅 12시 이전 매수 종목: {morning_wins}승 {morning_losses}패 (승률 {morning_win_rate:.1f}%) ===")
+                        lines.append(f"=== 🌅 10시 이전 매수 종목: {morning_wins}승 {morning_losses}패 (승률 {morning_win_rate:.1f}%) ===")
 
                         # 개별 거래 상세 표시
                         for detail in sorted(morning_trades_details, key=lambda x: x['buy_time']):

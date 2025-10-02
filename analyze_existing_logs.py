@@ -148,7 +148,7 @@ def calculate_statistics(all_trades: List[Dict], period_desc: str = "") -> Dict:
         }
 
     # 12시 이전 매수 종목만 필터링한 통계
-    morning_trades = [t for t in all_trades if t['buy_hour'] < 11]
+    morning_trades = [t for t in all_trades if t['buy_hour'] < 10]
     morning_stats = None
     if morning_trades:
         morning_wins = [t for t in morning_trades if t['is_win']]
@@ -213,7 +213,7 @@ def save_analysis_result(stats: Dict, output_filename: str):
             # 12시 이전 매수 종목 통계
             if stats.get('morning_only'):
                 morning = stats['morning_only']
-                f.write("11시 이전 매수 종목 통계\n")
+                f.write("10시 이전 매수 종목 통계\n")
                 f.write("-" * 40 + "\n")
                 f.write(f"총 거래 수: {morning['total_trades']}개\n")
                 f.write(f"승리 수: {morning['wins']}개\n")
@@ -434,7 +434,7 @@ def main():
     # 12시 이전 매수 종목 요약
     if stats.get('morning_only'):
         morning = stats['morning_only']
-        print("\n12시 이전 매수 종목:")
+        print("\n10시 이전 매수 종목:")
         print(f"  총 거래: {morning['total_trades']}개")
         print(f"  승률: {morning['win_rate']:.1f}%")
         print(f"  손익비: {morning['profit_loss_ratio']:.2f}:1")

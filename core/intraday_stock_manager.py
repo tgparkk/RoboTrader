@@ -133,14 +133,19 @@ class IntradayStockManager:
                 #self.logger.debug(f"✅ {stock_code}({stock_name}) 장중 선정 완료 - "
                 #               f"시간: {current_time.strftime('%H:%M:%S')}")
             
-            # 🆕 09:05 이후에만 과거 데이터 수집 실행
+            # 🔥 과거 데이터 수집 (09:05 이전에도 시도)
             current_time = now_kst()
-            if current_time.hour > 9 or (current_time.hour == 9 and current_time.minute >= 5):
-                self.logger.info(f"📈 {stock_code} 과거 데이터 수집 시작...")
-                success = await self._collect_historical_data(stock_code)
-            else:
-                self.logger.info(f"⏰ {stock_code} 09:05 이전이므로 데이터 수집 보류 (현재: {current_time.strftime('%H:%M')})")
-                success = True  # 일단 성공으로 처리하고 나중에 수집
+            self.logger.info(f"📈 {stock_code} 과거 데이터 수집 시작... (선정시간: {current_time.strftime('%H:%M:%S')})")
+            success = await self._collect_historical_data(stock_code)
+
+            # 09:05 이전 선정이고 데이터 부족한 경우 플래그 설정
+            if not success and (current_time.hour == 9 and current_time.minute < 5):
+                self.logger.warning(f"⚠️ {stock_code} 09:05 이전 데이터 부족, batch_update에서 재시도 필요")
+                # data_complete = False로 설정하여 나중에 재시도
+                with self._lock:
+                    if stock_code in self.selected_stocks:
+                        self.selected_stocks[stock_code].data_complete = False
+                success = True  # 종목은 추가하되 데이터는 나중에 재수집
             
             if success:
                 #self.logger.info(f"✅ {stock_code} 과거 데이터 수집 완료 및 종목 추가 성공")
@@ -189,28 +194,17 @@ class IntradayStockManager:
             # 당일 09:00부터 선정시점까지의 전체 거래시간 데이터 수집
             target_date = selected_time.strftime("%Y%m%d")
             target_hour = selected_time.strftime("%H%M%S")
-            
-            # 장 초반(09:10 이전)에는 더 넓은 시간 범위로 수집하여 데이터 부족 문제 해결
-            current_hour = selected_time.strftime("%H%M")
-            if current_hour <= "0910":  # 09:10 이전
-                # 장 초반에는 09:00부터 09:15까지 수집하여 충분한 데이터 확보
-                extended_hour = "091500"  # 09:15까지 확장
-                self.logger.info(f"📈 {stock_code} 장초반 전체 데이터 수집: 09:00 ~ {extended_hour}")
-                
-                historical_data = await get_full_trading_day_data_async(
-                    stock_code=stock_code,
-                    target_date=target_date,
-                    selected_time=extended_hour,
-                    start_time="090000"  # 09:00부터 시작 (KRX 정규장만)
-                )
-            else:
-                # 장 초반이 아닌 경우 기존 로직 사용
-                historical_data = await get_full_trading_day_data_async(
-                    stock_code=stock_code,
-                    target_date=target_date,
-                    selected_time=target_hour,
-                    start_time="090000"  # 09:00부터 시작 (KRX 정규장만)
-                )
+
+            # 🔥 중요: 미래 데이터 수집 방지 - 선정 시점까지만 수집
+            # (이전 로직: 09:10 이전 선정 시 09:15까지 수집 → 미래 데이터 포함!)
+            self.logger.info(f"📈 {stock_code} 과거 데이터 수집: 09:00 ~ {selected_time.strftime('%H:%M:%S')}")
+
+            historical_data = await get_full_trading_day_data_async(
+                stock_code=stock_code,
+                target_date=target_date,
+                selected_time=target_hour,  # 선정 시점까지만!
+                start_time="090000"  # 09:00부터 시작 (KRX 정규장만)
+            )
             
             if historical_data is None or historical_data.empty:
                 # 실패 시 1분씩 앞으로 이동하여 재시도
@@ -652,12 +646,13 @@ class IntradayStockManager:
                     if current_realtime.empty:
                         updated_realtime = latest_minute_data
                     else:
-                        # 중복 제거하면서 병합
+                        # 중복 제거하면서 병합 (최신 데이터 우선)
                         updated_realtime = pd.concat([current_realtime, latest_minute_data], ignore_index=True)
                         if 'datetime' in updated_realtime.columns:
-                            updated_realtime = updated_realtime.drop_duplicates(subset=['datetime']).sort_values('datetime').reset_index(drop=True)
+                            # keep='last': 동일 시간이면 최신 데이터 유지
+                            updated_realtime = updated_realtime.drop_duplicates(subset=['datetime'], keep='last').sort_values('datetime').reset_index(drop=True)
                         elif 'time' in updated_realtime.columns:
-                            updated_realtime = updated_realtime.drop_duplicates(subset=['time']).sort_values('time').reset_index(drop=True)
+                            updated_realtime = updated_realtime.drop_duplicates(subset=['time'], keep='last').sort_values('time').reset_index(drop=True)
                     
                     self.selected_stocks[stock_code].realtime_data = updated_realtime
                     self.selected_stocks[stock_code].last_update = current_time
@@ -671,7 +666,7 @@ class IntradayStockManager:
     
     def _check_sufficient_base_data(self, combined_data: Optional[pd.DataFrame], stock_code: str) -> bool:
         """
-        08-09시부터 분봉 데이터가 충분한지 간단 체크
+        09시부터 분봉 데이터가 충분한지 간단 체크
 
         Args:
             combined_data: 결합된 차트 데이터
@@ -958,17 +953,36 @@ class IntradayStockManager:
             else:
                 combined_data = pd.concat([historical_data, realtime_data], ignore_index=True)
                 #self.logger.debug(f"📊 {stock_code} 과거+실시간 데이터 결합: {len(historical_data)}+{len(realtime_data)}={len(combined_data)}건")
-            
+
             if combined_data.empty:
                 return None
-            
+
+            # 🆕 당일 데이터만 필터링 (API 오류로 전날 데이터 섞일 수 있음)
+            today_str = now_kst().strftime('%Y%m%d')
+            before_filter_count = len(combined_data)
+
+            if 'date' in combined_data.columns:
+                combined_data = combined_data[combined_data['date'].astype(str) == today_str].copy()
+            elif 'datetime' in combined_data.columns:
+                combined_data['date_str'] = pd.to_datetime(combined_data['datetime']).dt.strftime('%Y%m%d')
+                combined_data = combined_data[combined_data['date_str'] == today_str].copy()
+                combined_data = combined_data.drop('date_str', axis=1)
+
+            if before_filter_count != len(combined_data):
+                removed = before_filter_count - len(combined_data)
+                self.logger.warning(f"⚠️ {stock_code} 당일 외 데이터 {removed}건 제거: {before_filter_count} → {len(combined_data)}건")
+
+            if combined_data.empty:
+                self.logger.error(f"❌ {stock_code} 당일 데이터 없음 (전일 데이터만 존재)")
+                return None
+
             # 중복 제거 (같은 시간대 데이터가 있을 수 있음)
             before_count = len(combined_data)
             if 'datetime' in combined_data.columns:
-                combined_data = combined_data.drop_duplicates(subset=['datetime']).sort_values('datetime').reset_index(drop=True)
+                combined_data = combined_data.drop_duplicates(subset=['datetime'], keep='last').sort_values('datetime').reset_index(drop=True)
             elif 'time' in combined_data.columns:
-                combined_data = combined_data.drop_duplicates(subset=['time']).sort_values('time').reset_index(drop=True)
-            
+                combined_data = combined_data.drop_duplicates(subset=['time'], keep='last').sort_values('time').reset_index(drop=True)
+
             if before_count != len(combined_data):
                 #self.logger.debug(f"📊 {stock_code} 중복 제거: {before_count} → {len(combined_data)}건")
                 pass
@@ -1168,12 +1182,21 @@ class IntradayStockManager:
         모든 관리 종목의 실시간 데이터 일괄 업데이트 (분봉 + 현재가)
         """
         try:
+            from utils.korean_time import now_kst
+
+            # 🆕 15:30 장 마감 시 메모리 데이터 자동 저장
+            current_time = now_kst()
+            if current_time.hour == 15 and current_time.minute == 30:
+                if not hasattr(self, '_data_saved_today'):
+                    self._save_minute_data_to_file()
+                    self._data_saved_today = True  # 하루에 한 번만 저장
+
             with self._lock:
                 stock_codes = list(self.selected_stocks.keys())
-            
+
             if not stock_codes:
                 return
-            
+
             # 데이터 품질 모니터링 초기화
             total_stocks = len(stock_codes)
             successful_minute_updates = 0
@@ -1456,5 +1479,68 @@ class IntradayStockManager:
         except Exception as e:
             self.logger.error(f"❌ {stock_code} 일봉 데이터 수집 오류: {e}")
             return pd.DataFrame()
-    
-    
+
+    def _save_minute_data_to_file(self):
+        """
+        메모리에 있는 모든 종목의 분봉 데이터를 텍스트 파일로 저장 (15:30 장 마감 시)
+        """
+        try:
+            from utils.korean_time import now_kst
+
+            current_time = now_kst()
+            filename = f"memory_minute_data_{current_time.strftime('%Y%m%d_%H%M%S')}.txt"
+
+            with self._lock:
+                stock_codes = list(self.selected_stocks.keys())
+
+            if not stock_codes:
+                self.logger.info("💾 저장할 종목 없음")
+                return
+
+            with open(filename, 'w', encoding='utf-8') as f:
+                f.write(f"=" * 100 + "\n")
+                f.write(f"메모리 분봉 데이터 덤프 - {current_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"=" * 100 + "\n\n")
+                f.write(f"총 종목 수: {len(stock_codes)}개\n\n")
+
+                for stock_code in stock_codes:
+                    with self._lock:
+                        if stock_code not in self.selected_stocks:
+                            continue
+
+                        stock_data = self.selected_stocks[stock_code]
+                        stock_name = stock_data.stock_name
+                        selected_time = stock_data.selected_time.strftime('%H:%M:%S')
+                        historical_data = stock_data.historical_data.copy() if not stock_data.historical_data.empty else pd.DataFrame()
+                        realtime_data = stock_data.realtime_data.copy() if not stock_data.realtime_data.empty else pd.DataFrame()
+
+                    f.write(f"\n{'=' * 100}\n")
+                    f.write(f"종목코드: {stock_code} | 종목명: {stock_name} | 선정시간: {selected_time}\n")
+                    f.write(f"{'=' * 100}\n\n")
+
+                    # Historical Data
+                    f.write(f"[Historical Data: {len(historical_data)}건]\n")
+                    if not historical_data.empty:
+                        f.write(historical_data.to_string(index=False) + "\n")
+                    else:
+                        f.write("데이터 없음\n")
+
+                    f.write(f"\n[Realtime Data: {len(realtime_data)}건]\n")
+                    if not realtime_data.empty:
+                        f.write(realtime_data.to_string(index=False) + "\n")
+                    else:
+                        f.write("데이터 없음\n")
+
+                    # Combined Data
+                    combined_data = self.get_combined_chart_data(stock_code)
+                    f.write(f"\n[Combined Data (당일만): {len(combined_data) if combined_data is not None else 0}건]\n")
+                    if combined_data is not None and not combined_data.empty:
+                        f.write(combined_data.to_string(index=False) + "\n")
+                    else:
+                        f.write("데이터 없음\n")
+
+            self.logger.info(f"💾 메모리 분봉 데이터 저장 완료: {filename} ({len(stock_codes)}개 종목)")
+
+        except Exception as e:
+            self.logger.error(f"❌ 메모리 분봉 데이터 저장 실패: {e}")
+
