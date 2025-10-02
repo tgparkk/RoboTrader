@@ -305,7 +305,7 @@ class DayTradingBot:
             
             # 12시 이후 매수 금지 체크
             current_time = now_kst()
-            is_after_Npm = current_time.hour >= 12
+            is_after_Npm = current_time.hour >= 11
             
             if buy_decision_candidates and not is_after_Npm:
                 self.logger.debug(f"🔍 매수 판단 대상: SELECTED={len(selected_stocks)}개, COMPLETED={len(completed_stocks)}개 (총 {len(buy_decision_candidates)}개)")
@@ -395,12 +395,36 @@ class DayTradingBot:
             # 🆕 3분봉 변환 시 완성된 봉만 자동 필터링됨 (TimeFrameConverter에서 처리)
             from core.timeframe_converter import TimeFrameConverter
             from utils.korean_time import now_kst
-            
+
             data_3min = TimeFrameConverter.convert_to_3min_data(combined_data)
-            
+
             if data_3min is None or len(data_3min) < 5:
                 self.logger.debug(f"❌ {stock_code} 3분봉 데이터 부족: {len(data_3min) if data_3min is not None else 0}개 (최소 5개 필요)")
                 return
+
+            # 🆕 3분봉 연속성 검증: 09:00, 09:03, 09:06... 순서대로 있어야 함
+            if not data_3min.empty and len(data_3min) >= 2:
+                data_3min_copy = data_3min.copy()
+                data_3min_copy['datetime'] = pd.to_datetime(data_3min_copy['datetime'])
+
+                # 각 봉 사이의 시간 간격 계산 (분 단위)
+                time_diffs = data_3min_copy['datetime'].diff().dt.total_seconds().fillna(0) / 60
+
+                # 3분봉이므로 간격이 정확히 3분이어야 함 (첫 봉은 0이므로 제외)
+                invalid_gaps = time_diffs[1:][(time_diffs[1:] != 3.0) & (time_diffs[1:] != 0.0)]
+
+                if len(invalid_gaps) > 0:
+                    # 불연속 구간 발견
+                    gap_indices = invalid_gaps.index.tolist()
+                    gap_times = [data_3min_copy.loc[idx, 'datetime'].strftime('%H:%M') for idx in gap_indices]
+                    self.logger.debug(f"❌ {stock_code} 3분봉 불연속 구간 발견: {', '.join(gap_times)} (간격: {invalid_gaps.values} 분)")
+                    return
+
+                # 09:00부터 시작하는지 확인
+                first_time = data_3min_copy['datetime'].iloc[0]
+                if first_time.hour == 9 and first_time.minute not in [0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30]:
+                    self.logger.debug(f"❌ {stock_code} 첫 3분봉이 정규 시간이 아님: {first_time.strftime('%H:%M')} (09:00, 09:03, 09:06... 중 하나여야 함)")
+                    return
                 
             current_time = now_kst()
             last_3min_time = data_3min['datetime'].iloc[-1] if not data_3min.empty else None
