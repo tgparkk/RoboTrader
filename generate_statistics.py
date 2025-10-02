@@ -156,6 +156,29 @@ def calculate_statistics(all_trades, start_date, end_date):
             'avg_profit': stats['total_profit'] / total if total > 0 else 0
         }
 
+    # 12시 이전 매수 통계
+    morning_trades = [t for t in all_trades if t['buy_hour'] < 12]
+    morning_wins = [t for t in morning_trades if t['is_win']]
+    morning_losses = [t for t in morning_trades if not t['is_win']]
+
+    morning_stats = None
+    if morning_trades:
+        morning_total = len(morning_trades)
+        morning_win_count = len(morning_wins)
+        morning_loss_count = len(morning_losses)
+        morning_win_rate = (morning_win_count / morning_total * 100) if morning_total > 0 else 0
+        morning_total_profit = sum(t['profit'] for t in morning_trades)
+        morning_avg_profit = morning_total_profit / morning_total if morning_total > 0 else 0
+
+        morning_stats = {
+            'total': morning_total,
+            'wins': morning_win_count,
+            'losses': morning_loss_count,
+            'win_rate': morning_win_rate,
+            'total_profit': morning_total_profit,
+            'avg_profit': morning_avg_profit
+        }
+
     return {
         'period': f"{start_date} ~ {end_date}",
         'total_trades': total_trades,
@@ -167,7 +190,8 @@ def calculate_statistics(all_trades, start_date, end_date):
         'avg_win': avg_win,
         'avg_loss': avg_loss,
         'profit_loss_ratio': profit_loss_ratio,
-        'hourly_stats': hourly_summary
+        'hourly_stats': hourly_summary,
+        'morning_stats': morning_stats
     }
 
 
@@ -196,6 +220,19 @@ def save_statistics_log(stats, output_dir, start_date, end_date):
             f.write(f"평균 손실: {stats['avg_loss']:+.2f}%\n")
             f.write(f"손익비: {stats['profit_loss_ratio']:.2f}:1\n")
             f.write("\n")
+
+            # 12시 이전 매수 통계
+            if stats.get('morning_stats'):
+                m_stats = stats['morning_stats']
+                f.write("🌅 12시 이전 매수 통계\n")
+                f.write("-" * 40 + "\n")
+                f.write(f"총 거래 수: {m_stats['total']}개\n")
+                f.write(f"승리 수: {m_stats['wins']}개\n")
+                f.write(f"패배 수: {m_stats['losses']}개\n")
+                f.write(f"승률: {m_stats['win_rate']:.1f}%\n")
+                f.write(f"총 수익률: {m_stats['total_profit']:+.2f}%\n")
+                f.write(f"평균 수익률: {m_stats['avg_profit']:+.2f}%\n")
+                f.write("\n")
 
             # 시간대별 통계
             f.write("⏰ 시간대별 통계\n")

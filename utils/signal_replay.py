@@ -109,7 +109,6 @@ from utils.korean_time import KST
 from core.indicators.pullback_candle_pattern import PullbackCandlePattern, SignalType
 from api.kis_api_manager import KISAPIManager
 from visualization.data_processor import DataProcessor
-from core.trading_decision_engine import TradingDecisionEngine
 from utils.signal_replay_utils import (
     parse_times_mapping,
     get_stocks_with_selection_date,
@@ -311,19 +310,6 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                 logger.info(f"매수 신호 없음 - 거래 시뮬레이션 불가 [{stock_code}]")
             return []
         
-        # 🆕 ML 필터 초기화 (시뮬레이션용) - 임시 비활성화
-        ml_filter_enabled = False  # ML 문제로 임시 비활성화
-        decision_engine = None
-        
-        try:
-            # TradingDecisionEngine 초기화 (시뮬레이션용)
-            decision_engine = TradingDecisionEngine()
-            if logger:
-                logger.info(f"🧠 [{stock_code}] ML 필터 초기화 완료")
-        except Exception as e:
-            ml_filter_enabled = False
-            if logger:
-                logger.warning(f"⚠️ [{stock_code}] ML 필터 초기화 실패: {e}")
         
         # 🆕 일봉 기반 패턴 필터 초기화 (시뮬레이션용)
         daily_filter_enabled = False
@@ -464,88 +450,6 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                         logger.warning(f"⚠️ [{stock_code}] 일봉 필터 적용 실패: {e}")
                     # 필터 오류 시에도 거래 진행 (안전장치)
             
-            # ==================== 🆕 ML 필터 적용 (시뮬레이션) ====================
-            if ml_filter_enabled and decision_engine:
-                try:
-                    # 🆕 실제 분봉 데이터를 ML에 전달하도록 수정
-                    from core.models import TradingStock, StockState
-                    
-                    # Mock TradingStock 객체 생성 (ML 필터용)
-                    mock_trading_stock = TradingStock(stock_code, f"{stock_code}_NAME", StockState.SELECTED, None)
-                    
-                    # 🆕 시뮬레이션용 intraday_manager Mock 생성 (실제 분봉 + 일봉 데이터 전달용)
-                    class MockIntradayManager:
-                        def __init__(self, minute_data, daily_data=None):
-                            self.minute_data = minute_data
-                            self.daily_data = daily_data
-                            # TradingDecisionEngine에서 사용하는 selected_stocks 구조 모방
-                            self.selected_stocks = {}
-                            if daily_data is not None:
-                                from trade_analysis.intraday_stock_manager import StockMinuteData
-                                mock_stock_data = StockMinuteData(
-                                    stock_code=stock_code,
-                                    stock_name=f"{stock_code}_NAME",
-                                    selected_time=pd.Timestamp.now(),
-                                    daily_data=daily_data
-                                )
-                                self.selected_stocks[stock_code] = mock_stock_data
-                        
-                        def get_cached_minute_data(self, stock_code):
-                            return self.minute_data
-                        
-                        def get_cached_current_price(self, stock_code):
-                            if self.minute_data is not None and len(self.minute_data) > 0:
-                                return {'current_price': self.minute_data['close'].iloc[-1]}
-                            return None
-                        
-                        def get_cached_daily_data(self, stock_code):
-                            return self.daily_data
-                    
-                    # 일봉 데이터 수집 (시뮬레이션용)
-                    daily_data = None
-                    try:
-                        from trade_analysis.ml_data_collector import MLDataCollector
-                        collector = MLDataCollector()
-                        daily_data = collector.collect_daily_data(stock_code, 60)
-                        if daily_data is not None:
-                            if logger:
-                                logger.info(f"📊 [{stock_code}] 일봉 데이터 수집 성공: {len(daily_data)}개")
-                        else:
-                            if logger:
-                                logger.warning(f"⚠️ [{stock_code}] 일봉 데이터 수집 실패")
-                    except Exception as e:
-                        if logger:
-                            logger.warning(f"⚠️ [{stock_code}] 일봉 데이터 수집 오류: {e}")
-                    
-                    # decision_engine에 Mock intraday_manager 설정 (일봉데이터 포함)
-                    original_intraday_manager = decision_engine.intraday_manager
-                    decision_engine.intraday_manager = MockIntradayManager(df_1min, daily_data)
-                    
-                    # ML 필터 적용 (비동기 함수를 동기적으로 실행)
-                    import asyncio
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    try:
-                        ml_pass, ml_reason, ml_result = loop.run_until_complete(
-                            decision_engine._apply_hardcoded_ml_filter(mock_trading_stock, "pullback_pattern")
-                        )
-                    finally:
-                        loop.close()
-                        # 원래 intraday_manager 복원
-                        decision_engine.intraday_manager = original_intraday_manager
-                    
-                    if not ml_pass:
-                        if logger:
-                            logger.info(f"🚫 [{stock_code}] ML 필터 차단: {ml_reason}")
-                        continue  # ML 필터에서 차단된 신호는 건너뜀
-                    else:
-                        if logger:
-                            logger.info(f"✅ [{stock_code}] ML 필터 승인: {ml_reason}")
-                            
-                except Exception as e:
-                    if logger:
-                        logger.warning(f"⚠️ [{stock_code}] ML 필터 적용 실패: {e}")
-                    # ML 필터 실패 시 신호 통과 (안전 장치)
             
             # ==================== 🆕 돌파봉 4/5 가격 조건 체크 ====================
             
@@ -863,7 +767,7 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
             for trade in completed_trades:
                 try:
                     buy_hour = int(trade['buy_time'].split(':')[0])
-                    if buy_hour < 10:
+                    if buy_hour < 12:
                         morning_trades.append(trade)
                 except (ValueError, IndexError):
                     continue
@@ -881,7 +785,7 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                 morning_win_rate = len(morning_successful) / len(morning_trades) * 100
                 morning_avg_profit = sum(t['profit_rate'] for t in morning_trades) / len(morning_trades)
 
-                logger.info(f"🌅 10시 이전 매수 거래:")
+                logger.info(f"🌅 12시 이전 매수 거래:")
                 logger.info(f"   오전 거래 수: {len(morning_trades)}건")
                 logger.info(f"   오전 성공: {len(morning_successful)}건")
                 logger.info(f"   오전 실패: {len(morning_trades) - len(morning_successful)}건")
@@ -1300,7 +1204,7 @@ def main():
                                 if buy_time_str:
                                     try:
                                         buy_hour = int(buy_time_str.split(':')[0])
-                                        if buy_hour < 10:  # 12시 이전 매수
+                                        if buy_hour < 12:  # 12시 이전 매수
                                             profit_rate = trade.get('profit_rate', 0)
                                             if profit_rate > 0:
                                                 morning_wins += 1
@@ -1325,7 +1229,7 @@ def main():
                     if morning_wins + morning_losses > 0:
                         morning_total = morning_wins + morning_losses
                         morning_win_rate = (morning_wins / morning_total * 100) if morning_total > 0 else 0
-                        lines.append(f"=== 🌅 10시 이전 매수 종목: {morning_wins}승 {morning_losses}패 (승률 {morning_win_rate:.1f}%) ===")
+                        lines.append(f"=== 🌅 12시 이전 매수 종목: {morning_wins}승 {morning_losses}패 (승률 {morning_win_rate:.1f}%) ===")
 
                         # 개별 거래 상세 표시
                         for detail in sorted(morning_trades_details, key=lambda x: x['buy_time']):

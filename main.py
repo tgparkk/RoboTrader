@@ -305,7 +305,7 @@ class DayTradingBot:
             
             # 12시 이후 매수 금지 체크
             current_time = now_kst()
-            is_after_Npm = current_time.hour >= 11
+            is_after_Npm = current_time.hour >= 12
             
             if buy_decision_candidates and not is_after_Npm:
                 self.logger.debug(f"🔍 매수 판단 대상: SELECTED={len(selected_stocks)}개, COMPLETED={len(completed_stocks)}개 (총 {len(buy_decision_candidates)}개)")

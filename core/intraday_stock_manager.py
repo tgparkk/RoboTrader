@@ -1197,6 +1197,26 @@ class IntradayStockManager:
             if not stock_codes:
                 return
 
+            # 🆕 data_complete = False인 종목 재수집 (09:05 이전 선정 종목)
+            incomplete_stocks = []
+            with self._lock:
+                for code in stock_codes:
+                    stock_data = self.selected_stocks.get(code)
+                    if stock_data and not stock_data.data_complete:
+                        incomplete_stocks.append(code)
+
+            if incomplete_stocks:
+                self.logger.info(f"🔄 미완성 데이터 재수집 시작: {len(incomplete_stocks)}개 종목")
+                for stock_code in incomplete_stocks:
+                    try:
+                        success = await self._collect_historical_data(stock_code)
+                        if success:
+                            self.logger.info(f"✅ {stock_code} 미완성 데이터 재수집 성공")
+                        else:
+                            self.logger.warning(f"⚠️ {stock_code} 미완성 데이터 재수집 실패")
+                    except Exception as e:
+                        self.logger.error(f"❌ {stock_code} 재수집 오류: {e}")
+
             # 데이터 품질 모니터링 초기화
             total_stocks = len(stock_codes)
             successful_minute_updates = 0
@@ -1239,6 +1259,17 @@ class IntradayStockManager:
                         quality_check = self._check_data_quality(stock_code)
                         if quality_check['has_issues']:
                             quality_issues.extend([f"{stock_code}: {issue}" for issue in quality_check['issues']])
+
+                            # 🆕 분봉 누락 감지 시 즉시 전체 재수집
+                            for issue in quality_check['issues']:
+                                if '분봉 누락' in issue:
+                                    self.logger.warning(f"⚠️ {stock_code} 분봉 누락 감지, 전체 재수집 시도: {issue}")
+                                    try:
+                                        # 비동기 재수집 스케줄링 (현재 루프 블로킹 방지)
+                                        asyncio.create_task(self._collect_historical_data(stock_code))
+                                    except Exception as retry_err:
+                                        self.logger.error(f"❌ {stock_code} 재수집 스케줄링 실패: {retry_err}")
+                                    break
                     
                     # 현재가 데이터 결과 처리
                     if isinstance(price_result, Exception):
@@ -1356,11 +1387,38 @@ class IntradayStockManager:
             if len(data) < 5:
                 issues.append(f'데이터 부족 ({len(data)}개)')
             
-            # 2. 시간 순서 검사 (최근 5개 데이터)
-            if len(data) >= 5:
-                recent_times = [row['time'] for row in data[-5:]]
-                if recent_times != sorted(recent_times):
+            # 2. 시간 순서 및 연속성 검사 (전체 데이터)
+            if len(data) >= 2:
+                times = [row['time'] for row in data]
+                # 순서 확인
+                if times != sorted(times):
                     issues.append('시간 순서 오류')
+
+                # 🆕 1분 간격 연속성 확인 (중간 누락 감지)
+                for i in range(1, len(times)):
+                    try:
+                        prev_time_str = str(times[i-1]).zfill(6)
+                        curr_time_str = str(times[i]).zfill(6)
+
+                        prev_hour = int(prev_time_str[:2])
+                        prev_min = int(prev_time_str[2:4])
+                        curr_hour = int(curr_time_str[:2])
+                        curr_min = int(curr_time_str[2:4])
+
+                        # 예상 다음 시간 계산
+                        if prev_min == 59:
+                            expected_hour = prev_hour + 1
+                            expected_min = 0
+                        else:
+                            expected_hour = prev_hour
+                            expected_min = prev_min + 1
+
+                        # 1분 간격이 아니면 누락
+                        if curr_hour != expected_hour or curr_min != expected_min:
+                            issues.append(f'분봉 누락: {prev_time_str}→{curr_time_str}')
+                            break  # 첫 번째 누락만 보고
+                    except Exception:
+                        pass
             
             # 3. 가격 이상치 검사 (최근 데이터 기준)
             if len(data) >= 2:
