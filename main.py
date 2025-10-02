@@ -836,10 +836,10 @@ class DayTradingBot:
                                     # 오늘 데이터가 있으면 전날(iloc[-2]), 없으면 마지막 거래일(iloc[-1]) 사용
                                     if last_date == now_kst().date() and len(daily_data) >= 2:
                                         prev_close = float(daily_data.iloc[-2]['stck_clpr'])
-                                        self.logger.debug(f"📊 {stock_code}: 전날 종가 {prev_close} (오늘 데이터 제외)")
+                                        #self.logger.debug(f"📊 {stock_code}: 전날 종가 {prev_close} (오늘 데이터 제외)")
                                     else:
                                         prev_close = float(daily_data.iloc[-1]['stck_clpr'])
-                                        self.logger.debug(f"📊 {stock_code}: 전날 종가 {prev_close} (마지막 거래일)")
+                                        #self.logger.debug(f"📊 {stock_code}: 전날 종가 {prev_close} (마지막 거래일)")
                                 elif len(daily_data) >= 2:  # List
                                     prev_close = daily_data[-2].close_price
                         except Exception as e:
