@@ -588,47 +588,90 @@ class SupportPatternAnalyzer:
         return entry_price
     
     def _calculate_confidence(self, uptrend: UptrrendPhase, decline: DeclinePhase, support: SupportPhase, breakout: BreakoutCandle) -> float:
-        """신뢰도 점수 계산 (0-100)"""
-        # 4단계 패턴이 모두 완성되면 기본 75점에서 시작
-        confidence = 75.0
-        
-        # 1. 상승 구간 품질 (추가 10점)
-        if uptrend.price_gain >= 0.05:  # 5% 이상 상승
-            confidence += 8
-        elif uptrend.price_gain >= 0.03:  # 3% 이상 상승
-            confidence += 4
-        
-        if uptrend.max_volume > uptrend.volume_avg * 1.5:  # 최대거래량이 평균의 1.5배 이상
-            confidence += 2
-        
-        # 2. 하락 구간 품질 (추가 8점)
-        if decline.decline_pct >= 0.03:  # 3% 이상 하락
+        """신뢰도 점수 계산 (0-100) - 개선 버전
+
+        기존 문제: 극단적 조건에 과도한 가점 → 신뢰도 100% = 승률 34%
+        개선 방향: 적절한 범위에 최고 점수, 극단적 조건은 낮은 점수
+        """
+        # 기본 점수 상향 (75 → 80): 100점 도달을 더 어렵게
+        confidence = 80.0
+
+        # 1. 상승 구간 적절도 (최대 +5점)
+        # 적절한 상승(3~5%)이 최고 점수, 과도한 상승(7%+)은 과열로 간주
+        if 0.03 <= uptrend.price_gain <= 0.05:  # 3~5% 상승 (최적)
             confidence += 5
-        elif decline.decline_pct >= 0.015:  # 1.5% 이상 하락
-            confidence += 2
-        
-        if decline.avg_volume_ratio <= 0.3:  # 하락시 거래량이 기준거래량 30% 이하 (매물부담 적음)
+        elif 0.05 < uptrend.price_gain <= 0.07:  # 5~7% 상승 (양호하지만 과열 조짐)
             confidence += 3
-        
-        # 3. 지지 구간 품질 (추가 7점)
-        if support.candle_count >= 3:  # 3개 이상 봉
+        elif 0.02 <= uptrend.price_gain < 0.03:  # 2~3% 상승 (부족)
             confidence += 2
-        
-        if support.avg_volume_ratio <= 0.25:  # 거래량 비율 25% 이하
+        elif uptrend.price_gain < 0.02:  # 2% 미만 (매우 부족)
+            confidence += 0
+        else:  # 7% 이상 (과열)
+            confidence += 0
+
+        # 2. 하락 구간 적절도 (최대 +5점)
+        # 적절한 조정(1.5~3%)이 최고 점수, 과도한 하락(5%+)은 약세로 간주
+        if 0.015 <= decline.decline_pct <= 0.03:  # 1.5~3% 하락 (최적)
+            confidence += 5
+        elif 0.03 < decline.decline_pct <= 0.04:  # 3~4% 하락 (양호하지만 조정 큼)
             confidence += 3
-        
-        if support.price_volatility <= 0.003:  # 가격변동성 0.3% 이하
+        elif 0.01 <= decline.decline_pct < 0.015:  # 1~1.5% 하락 (부족)
             confidence += 2
-        
-        # 4. 돌파 양봉 품질 (추가 10점)
-        if breakout.body_increase_vs_support >= 0.8:  # 80% 이상 증가
-            confidence += 7
-        elif breakout.body_increase_vs_support >= 0.5:  # 50% 이상 증가
-            confidence += 4
-        
-        if breakout.volume_ratio_vs_prev >= 0.2:  # 20% 이상 거래량 증가
-            confidence += 3
-        
+        elif decline.decline_pct < 0.01:  # 1% 미만 (매우 부족)
+            confidence += 0
+        else:  # 4% 이상 (과도한 조정)
+            confidence += 0
+
+        # 하락 시 거래량 조건 (최대 +2점)
+        if decline.avg_volume_ratio <= 0.25:  # 매우 낮은 거래량 (최적)
+            confidence += 2
+        elif decline.avg_volume_ratio <= 0.35:  # 낮은 거래량 (양호)
+            confidence += 1
+
+        # 3. 지지 구간 적절도 (최대 +5점)
+        score = 0
+
+        # 거래량 적절성 (최대 +3점)
+        if 0.15 <= support.avg_volume_ratio <= 0.25:  # 15~25% (최적)
+            score += 3
+        elif 0.25 < support.avg_volume_ratio <= 0.35:  # 25~35% (양호)
+            score += 2
+        elif support.avg_volume_ratio < 0.15:  # 15% 미만 (너무 적음)
+            score += 1
+
+        # 가격 변동성 적절성 (최대 +2점)
+        if 0.005 <= support.price_volatility <= 0.015:  # 0.5~1.5% (적절한 움직임)
+            score += 2
+        elif 0.003 <= support.price_volatility < 0.005:  # 0.3~0.5% (안정적)
+            score += 1
+        elif support.price_volatility < 0.003:  # 0.3% 미만 (거래 없는 횡보)
+            score += 0
+
+        confidence += score
+
+        # 4. 돌파 양봉 적절도 (최대 +5점)
+        score = 0
+
+        # 몸통 증가율 (최대 +3점)
+        if 0.30 <= breakout.body_increase_vs_support <= 0.60:  # 30~60% (적절한 돌파)
+            score += 3
+        elif 0.60 < breakout.body_increase_vs_support <= 0.80:  # 60~80% (강한 돌파)
+            score += 2
+        elif 0.20 <= breakout.body_increase_vs_support < 0.30:  # 20~30% (약한 돌파)
+            score += 1
+        elif breakout.body_increase_vs_support > 0.80:  # 80% 이상 (급등, 과열)
+            score += 0
+
+        # 거래량 증가율 (최대 +2점)
+        if 0.10 <= breakout.volume_ratio_vs_prev <= 0.30:  # 10~30% (적절한 증가)
+            score += 2
+        elif 0.30 < breakout.volume_ratio_vs_prev <= 0.50:  # 30~50% (강한 증가)
+            score += 1
+        elif breakout.volume_ratio_vs_prev < 0.10:  # 10% 미만 (증가 부족)
+            score += 0
+
+        confidence += score
+
         return min(confidence, 100.0)
 
     def get_debug_info(self, data: pd.DataFrame) -> Dict:
