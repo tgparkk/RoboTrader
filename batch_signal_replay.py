@@ -268,7 +268,7 @@ def save_statistics_log(stats, log_dir, start_date, end_date):
             f.write("\n")
 
             # 🆕 12시 이전 매수 종목 통계
-            f.write("🌅 12시 이전 매수 종목 통계\n")
+            f.write("🌅 10시 이전 매수 종목 통계\n")
             f.write("-" * 40 + "\n")
             f.write(f"오전 거래 수: {stats.get('morning_trades', 0)}개\n")
             f.write(f"오전 승리 수: {stats.get('morning_wins', 0)}개\n")
