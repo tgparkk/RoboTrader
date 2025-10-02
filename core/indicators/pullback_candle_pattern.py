@@ -504,6 +504,9 @@ class PullbackCandlePattern:
             daily_strength = daily_pattern['strength']
             is_ideal_daily = daily_pattern['ideal_pattern']
 
+            # 개선사항: 신뢰도 상한선 94% (95% 이상 차단)
+            # 시간대 필터는 사용자가 직접 적용
+
             # 기본 시간대별 조건
             if 12 <= current_time.hour < 14:  # 오후시간 (승률 29.6%)
                 min_confidence = 85
@@ -512,7 +515,7 @@ class PullbackCandlePattern:
                     min_confidence = 95  # 거의 불가능한 조건
                 elif is_ideal_daily:  # 이상적 일봉 패턴
                     min_confidence = 80  # 약간 완화
-            elif 9 <= current_time.hour < 10:  # 개장시간 (승률 66.7%)
+            elif 9 <= current_time.hour < 10:  # 개장시간 (승률 55.4%)
                 min_confidence = 70
                 # 개장시간 일봉 조건 (관대하게)
                 if daily_strength >= 70:  # 강한 일봉 패턴
@@ -536,16 +539,21 @@ class PullbackCandlePattern:
                     print(f"[{stock_code}] 일봉분석: 강도{daily_strength:.0f}, 이상적패턴{is_ideal_daily}, 요구신뢰도{min_confidence}")
                     print(f"[{stock_code}] 일봉상세: 가격변화{daily_pattern.get('price_change_pct', 0):.1f}%, 거래량변화{daily_pattern.get('volume_change_pct', 0):.1f}%")
 
+            # 신뢰도 상한선 94% 체크 (개선사항 1)
+            if support_pattern_info['confidence'] >= 95:
+                result = SignalStrength(SignalType.AVOID, 0, 0, ["신뢰도95%이상차단"], volume_analysis.volume_ratio, BisectorStatus.BROKEN)
+                return (result, []) if return_risk_signals else result
+
             if support_pattern_info['has_support_pattern'] and support_pattern_info['confidence'] >= min_confidence:
                 # 중복 신호 방지 로직 추가
                 current_time = datetime.now()
-                
+
                 # 패턴 구간 정보 추출 (디버그 정보에서)
                 debug_info = support_pattern_info.get('debug_info', {})
                 uptrend_info = debug_info.get('uptrend', {})
                 decline_info = debug_info.get('decline', {})
                 support_info = debug_info.get('support', {})
-                
+
                 # 구간 인덱스 추출
                 uptrend_start = uptrend_info.get('start_idx', 0) if uptrend_info else 0
                 uptrend_end = uptrend_info.get('end_idx', 0) if uptrend_info else 0
@@ -553,7 +561,7 @@ class PullbackCandlePattern:
                 decline_end = decline_info.get('end_idx', 0) if decline_info else 0
                 support_start = support_info.get('start_idx', 0) if support_info else 0
                 support_end = support_info.get('end_idx', 0) if support_info else 0
-                
+
                 # 매수 신호 발생
                 signal_strength = SignalStrength(
                     signal_type=SignalType.STRONG_BUY if support_pattern_info['confidence'] >= 80 else SignalType.CAUTIOUS_BUY,
