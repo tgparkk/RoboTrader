@@ -135,6 +135,16 @@ def calculate_statistics(all_trades, start_date, end_date):
     # 손익비 계산
     profit_loss_ratio = abs(avg_win / avg_loss) if avg_loss != 0 else 0
 
+    # 실제 수익금 계산 (손익비 3:2, 거래당 100만원 기준)
+    trade_amount = 1000000  # 100만원
+    target_profit_ratio = 3.0  # 목표 수익 3%
+    stop_loss_ratio = 2.0      # 손절 2%
+
+    # 실제 수익금 계산 (승리시 +3%, 손실시 -2%)
+    actual_profit = (win_count * trade_amount * target_profit_ratio / 100) - \
+                   (loss_count * trade_amount * stop_loss_ratio / 100)
+    avg_actual_profit = actual_profit / total_trades if total_trades > 0 else 0
+
     # 시간대별 통계
     hourly_stats = defaultdict(lambda: {'wins': 0, 'losses': 0, 'total_profit': 0.0})
 
@@ -170,13 +180,20 @@ def calculate_statistics(all_trades, start_date, end_date):
         morning_total_profit = sum(t['profit'] for t in morning_trades)
         morning_avg_profit = morning_total_profit / morning_total if morning_total > 0 else 0
 
+        # 12시 이전 실제 수익금 계산
+        morning_actual_profit = (morning_win_count * trade_amount * target_profit_ratio / 100) - \
+                               (morning_loss_count * trade_amount * stop_loss_ratio / 100)
+        morning_avg_actual_profit = morning_actual_profit / morning_total if morning_total > 0 else 0
+
         morning_stats = {
             'total': morning_total,
             'wins': morning_win_count,
             'losses': morning_loss_count,
             'win_rate': morning_win_rate,
             'total_profit': morning_total_profit,
-            'avg_profit': morning_avg_profit
+            'avg_profit': morning_avg_profit,
+            'actual_profit': morning_actual_profit,
+            'avg_actual_profit': morning_avg_actual_profit
         }
 
     return {
@@ -190,6 +207,11 @@ def calculate_statistics(all_trades, start_date, end_date):
         'avg_win': avg_win,
         'avg_loss': avg_loss,
         'profit_loss_ratio': profit_loss_ratio,
+        'trade_amount': trade_amount,
+        'target_profit_ratio': target_profit_ratio,
+        'stop_loss_ratio': stop_loss_ratio,
+        'actual_profit': actual_profit,
+        'avg_actual_profit': avg_actual_profit,
         'hourly_stats': hourly_summary,
         'morning_stats': morning_stats
     }
@@ -221,6 +243,16 @@ def save_statistics_log(stats, output_dir, start_date, end_date):
             f.write(f"손익비: {stats['profit_loss_ratio']:.2f}:1\n")
             f.write("\n")
 
+            # 실제 수익금 통계
+            f.write("💰 실제 수익금 (손익비 3:2, 거래당 100만원 기준)\n")
+            f.write("-" * 40 + "\n")
+            f.write(f"거래당 금액: {stats['trade_amount']:,}원\n")
+            f.write(f"목표 수익: {stats['target_profit_ratio']}% (승리시 +{stats['trade_amount'] * stats['target_profit_ratio'] / 100:,.0f}원)\n")
+            f.write(f"손절 기준: {stats['stop_loss_ratio']}% (손실시 -{stats['trade_amount'] * stats['stop_loss_ratio'] / 100:,.0f}원)\n")
+            f.write(f"총 실제 수익금: {stats['actual_profit']:+,.0f}원\n")
+            f.write(f"거래당 평균 수익금: {stats['avg_actual_profit']:+,.0f}원\n")
+            f.write("\n")
+
             # 12시 이전 매수 통계
             if stats.get('morning_stats'):
                 m_stats = stats['morning_stats']
@@ -232,6 +264,8 @@ def save_statistics_log(stats, output_dir, start_date, end_date):
                 f.write(f"승률: {m_stats['win_rate']:.1f}%\n")
                 f.write(f"총 수익률: {m_stats['total_profit']:+.2f}%\n")
                 f.write(f"평균 수익률: {m_stats['avg_profit']:+.2f}%\n")
+                f.write(f"총 실제 수익금: {m_stats['actual_profit']:+,.0f}원\n")
+                f.write(f"거래당 평균 수익금: {m_stats['avg_actual_profit']:+,.0f}원\n")
                 f.write("\n")
 
             # 시간대별 통계
@@ -403,6 +437,9 @@ def main():
         print(f"   승률: {stats.get('win_rate', 0):.1f}%")
         print(f"   손익비: {stats.get('profit_loss_ratio', 0):.2f}:1")
         print(f"   평균 수익: {stats.get('avg_profit', 0):+.2f}%")
+        print(f"\n💰 실제 수익금 (손익비 3:2, 거래당 100만원):")
+        print(f"   총 수익금: {stats.get('actual_profit', 0):+,.0f}원")
+        print(f"   거래당 평균: {stats.get('avg_actual_profit', 0):+,.0f}원")
         return 0
     else:
         print("❌ 통계 파일 저장에 실패했습니다.")

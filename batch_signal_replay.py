@@ -209,7 +209,7 @@ def calculate_statistics(all_trades, start_date, end_date):
         }
 
     # 🆕 12시 이전 매수 종목 통계 계산
-    morning_trades = [t for t in all_trades if t['buy_hour'] < 10]
+    morning_trades = [t for t in all_trades if t['buy_hour'] < 12]
     morning_wins = [t for t in morning_trades if t['is_win']]
     morning_losses = [t for t in morning_trades if not t['is_win']]
 
