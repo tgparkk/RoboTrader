@@ -265,7 +265,7 @@ class SupportPatternAnalyzer:
 
                     # 지지구간 탐색 (하락구간 바로 다음부터 연속적으로)
                     support_start = decline_end + 1  # 하락구간 끝 바로 다음부터 시작
-                    max_support_end = min(support_start + 10, data_len_minus_1)  # 지지구간 최대 길이 10개
+                    max_support_end = min(support_start + 15, data_len_minus_1)  # 지지구간 최대 길이 15개
                     for support_end in range(support_start, max_support_end):  # 최소 1개 캔들
 
                         # 지지구간 검증 - NumPy 배열 사용 (로직 변경 없이)

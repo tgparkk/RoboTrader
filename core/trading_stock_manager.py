@@ -216,11 +216,9 @@ class TradingStockManager:
                 with self._lock:
                     trading_stock = self.trading_stocks[stock_code]
                     trading_stock.add_order(order_id)
-                
-                # 🆕 쿨다운 설정 (매수 주문 성공 시)
-                if hasattr(self, 'decision_engine') and self.decision_engine:
-                    self.decision_engine.set_buy_cooldown(stock_code)
-                
+
+                # 쿨다운은 매수 체결 시 set_buy_time()으로 자동 관리됨 (TradingStock 모델)
+
                 self.logger.info(f"📈 {stock_code} 매수 주문 성공: {order_id}")
                 return True
             else:

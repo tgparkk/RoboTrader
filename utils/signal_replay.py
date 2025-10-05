@@ -979,36 +979,78 @@ def main():
         """단일 종목 처리 함수"""
         try:
             logger.info(f"🔄 [{stock_code}] 처리 시작...")
-            
+
             # 데이터 조회 (파일 캐시 우선, 없으면 API 호출)
             from visualization.data_processor import DataProcessor
             from core.timeframe_converter import TimeFrameConverter
             from utils.korean_time import now_kst
             from datetime import datetime
+            import os
+            from pathlib import Path
+
             # 오늘 날짜인지 확인
             today_str = now_kst().strftime("%Y%m%d")
-            
-            if date_str == today_str:
-                # 오늘 날짜면 실시간 데이터 사용
-                from api.kis_chart_api import get_full_trading_day_data
-                df_1min = get_full_trading_day_data(stock_code, date_str)
-            else:
-                # 과거 날짜는 DataProcessor 사용
-                dp = DataProcessor()
-                # 동기 호출로 변경
-                import asyncio
-                try:
-                    # 새로운 이벤트 루프 생성하여 충돌 방지
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
+
+            df_1min = None
+
+            # 과거 날짜인 경우 캐시 먼저 확인
+            if date_str != today_str:
+                cache_file = Path(f"cache/minute_data/{stock_code}_{date_str}.pkl")
+
+                if cache_file.exists():
                     try:
-                        df_1min = loop.run_until_complete(dp.get_historical_chart_data(stock_code, date_str))
-                    finally:
-                        loop.close()
-                except Exception as e:
-                    df_1min = None
-                    logger.warning(f"⚠️  [{stock_code}] 비동기 데이터 조회 실패: {e}")
-                    return stock_code, []
+                        import pickle
+                        with open(cache_file, 'rb') as f:
+                            cached_data = pickle.load(f)
+
+                        # 데이터 품질 검증: 09:00 ~ 15:00 시간대 포함 확인
+                        if not cached_data.empty and 'datetime' in cached_data.columns:
+                            cached_data['datetime'] = pd.to_datetime(cached_data['datetime'])
+
+                            # 시간대 추출
+                            times = cached_data['datetime'].dt.time
+
+                            # 09:00 이후 데이터 확인
+                            has_morning = any(t >= pd.Timestamp('09:00').time() for t in times)
+                            # 15:00 이전 데이터 확인
+                            has_afternoon = any(t >= pd.Timestamp('15:00').time() for t in times)
+
+                            if has_morning and has_afternoon:
+                                df_1min = cached_data
+                                logger.info(f"✅ [{stock_code}] 캐시에서 로드 (09:00~15:00 데이터 포함, {len(df_1min)}개 봉)")
+                            else:
+                                logger.warning(f"⚠️  [{stock_code}] 캐시 데이터 불완전 (09:00~15:00 미포함), API 재조회")
+                        else:
+                            logger.warning(f"⚠️  [{stock_code}] 캐시 데이터 형식 오류, API 재조회")
+                    except Exception as e:
+                        logger.warning(f"⚠️  [{stock_code}] 캐시 로드 실패: {e}, API 재조회")
+                        df_1min = None
+
+            # 캐시가 없거나 오늘 날짜면 API 호출
+            if df_1min is None:
+                if date_str == today_str:
+                    # 오늘 날짜면 실시간 데이터 사용
+                    from api.kis_chart_api import get_full_trading_day_data
+                    df_1min = get_full_trading_day_data(stock_code, date_str)
+                    logger.info(f"📡 [{stock_code}] 실시간 API 호출")
+                else:
+                    # 과거 날짜는 DataProcessor 사용
+                    dp = DataProcessor()
+                    # 동기 호출로 변경
+                    import asyncio
+                    try:
+                        # 새로운 이벤트 루프 생성하여 충돌 방지
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        try:
+                            df_1min = loop.run_until_complete(dp.get_historical_chart_data(stock_code, date_str))
+                            logger.info(f"📡 [{stock_code}] API 호출 완료")
+                        finally:
+                            loop.close()
+                    except Exception as e:
+                        df_1min = None
+                        logger.warning(f"⚠️  [{stock_code}] 비동기 데이터 조회 실패: {e}")
+                        return stock_code, []
             
             if df_1min is None or df_1min.empty:
                 logger.warning(f"⚠️  [{stock_code}] 1분봉 데이터 없음")
