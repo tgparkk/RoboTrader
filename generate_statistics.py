@@ -137,8 +137,8 @@ def calculate_statistics(all_trades, start_date, end_date):
 
     # 실제 수익금 계산 (손익비 3:2, 거래당 100만원 기준)
     trade_amount = 1000000  # 100만원
-    target_profit_ratio = 3.0  # 목표 수익 3%
-    stop_loss_ratio = 2.0      # 손절 2%
+    target_profit_ratio = 3.5  # 목표 수익 3%
+    stop_loss_ratio = 2.5      # 손절 2%
 
     # 실제 수익금 계산 (승리시 +3%, 손실시 -2%)
     actual_profit = (win_count * trade_amount * target_profit_ratio / 100) - \
@@ -244,11 +244,13 @@ def save_statistics_log(stats, output_dir, start_date, end_date):
             f.write("\n")
 
             # 실제 수익금 통계
-            f.write("💰 실제 수익금 (손익비 3:2, 거래당 100만원 기준)\n")
+            target_profit = stats['target_profit_ratio']
+            stop_loss = stats['stop_loss_ratio']
+            f.write(f"💰 실제 수익금 (손익비 {target_profit}:{stop_loss}, 거래당 {stats['trade_amount']:,}원 기준)\n")
             f.write("-" * 40 + "\n")
             f.write(f"거래당 금액: {stats['trade_amount']:,}원\n")
-            f.write(f"목표 수익: {stats['target_profit_ratio']}% (승리시 +{stats['trade_amount'] * stats['target_profit_ratio'] / 100:,.0f}원)\n")
-            f.write(f"손절 기준: {stats['stop_loss_ratio']}% (손실시 -{stats['trade_amount'] * stats['stop_loss_ratio'] / 100:,.0f}원)\n")
+            f.write(f"목표 수익: {target_profit}% (승리시 +{stats['trade_amount'] * target_profit / 100:,.0f}원)\n")
+            f.write(f"손절 기준: {stop_loss}% (손실시 -{stats['trade_amount'] * stop_loss / 100:,.0f}원)\n")
             f.write(f"총 실제 수익금: {stats['actual_profit']:+,.0f}원\n")
             f.write(f"거래당 평균 수익금: {stats['avg_actual_profit']:+,.0f}원\n")
             f.write("\n")
@@ -437,7 +439,11 @@ def main():
         print(f"   승률: {stats.get('win_rate', 0):.1f}%")
         print(f"   손익비: {stats.get('profit_loss_ratio', 0):.2f}:1")
         print(f"   평균 수익: {stats.get('avg_profit', 0):+.2f}%")
-        print(f"\n💰 실제 수익금 (손익비 3:2, 거래당 100만원):")
+
+        target_profit = stats.get('target_profit_ratio', 0)
+        stop_loss = stats.get('stop_loss_ratio', 0)
+        trade_amount = stats.get('trade_amount', 0)
+        print(f"\n💰 실제 수익금 (손익비 {target_profit}:{stop_loss}, 거래당 {trade_amount:,}원):")
         print(f"   총 수익금: {stats.get('actual_profit', 0):+,.0f}원")
         print(f"   거래당 평균: {stats.get('avg_actual_profit', 0):+,.0f}원")
         return 0

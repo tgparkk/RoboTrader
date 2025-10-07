@@ -43,8 +43,8 @@ from __future__ import annotations
 
 # ==================== 손절/익절 설정 ====================
 # 📊 시뮬레이션 테스트를 위한 손절/익절 비율 설정 (쉬운 수정을 위해 상단 배치)
-PROFIT_TAKE_RATE = 3.0  # 익절 수익률 (%) - 수정하여 테스트 가능
-STOP_LOSS_RATE = 2.0    # 손절 수익률 (%) - 수정하여 테스트 가능
+PROFIT_TAKE_RATE = 3.5  # 익절 수익률 (%) - 수정하여 테스트 가능
+STOP_LOSS_RATE = 2.5    # 손절 수익률 (%) - 수정하여 테스트 가능
 
 print(f"[시뮬레이션 설정] 익절 +{PROFIT_TAKE_RATE}% / 손절 -{STOP_LOSS_RATE}%")
 print("=" * 60)
@@ -61,6 +61,8 @@ import os
 import sqlite3
 import concurrent.futures
 import time
+import pickle
+from pathlib import Path
 
 # 프로젝트 루트 디렉토리를 sys.path에 추가
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -981,12 +983,8 @@ def main():
             logger.info(f"🔄 [{stock_code}] 처리 시작...")
 
             # 데이터 조회 (파일 캐시 우선, 없으면 API 호출)
-            from visualization.data_processor import DataProcessor
             from core.timeframe_converter import TimeFrameConverter
             from utils.korean_time import now_kst
-            from datetime import datetime
-            import os
-            from pathlib import Path
 
             # 오늘 날짜인지 확인
             today_str = now_kst().strftime("%Y%m%d")
@@ -999,7 +997,6 @@ def main():
 
                 if cache_file.exists():
                     try:
-                        import pickle
                         with open(cache_file, 'rb') as f:
                             cached_data = pickle.load(f)
 
@@ -1017,7 +1014,7 @@ def main():
 
                             if has_morning and has_afternoon:
                                 df_1min = cached_data
-                                logger.info(f"✅ [{stock_code}] 캐시에서 로드 (09:00~15:00 데이터 포함, {len(df_1min)}개 봉)")
+                                logger.info(f"💾 [{stock_code}] 캐시 데이터 사용 - {len(df_1min)}개 봉")
                             else:
                                 logger.warning(f"⚠️  [{stock_code}] 캐시 데이터 불완전 (09:00~15:00 미포함), API 재조회")
                         else:
@@ -1031,20 +1028,41 @@ def main():
                 if date_str == today_str:
                     # 오늘 날짜면 실시간 데이터 사용
                     from api.kis_chart_api import get_full_trading_day_data
+                    logger.info(f"📡 [{stock_code}] 실시간 API 호출 (오늘 날짜)")
                     df_1min = get_full_trading_day_data(stock_code, date_str)
-                    logger.info(f"📡 [{stock_code}] 실시간 API 호출")
                 else:
                     # 과거 날짜는 DataProcessor 사용
+                    logger.info(f"📡 [{stock_code}] API 호출 시작 (캐시 없음)")
                     dp = DataProcessor()
-                    # 동기 호출로 변경
-                    import asyncio
                     try:
                         # 새로운 이벤트 루프 생성하여 충돌 방지
                         loop = asyncio.new_event_loop()
                         asyncio.set_event_loop(loop)
                         try:
                             df_1min = loop.run_until_complete(dp.get_historical_chart_data(stock_code, date_str))
-                            logger.info(f"📡 [{stock_code}] API 호출 완료")
+                            logger.info(f"✅ [{stock_code}] API 데이터 수신 완료")
+
+                            # API로 조회한 데이터를 캐시에 저장 (save_candidate_data.py 방식)
+                            if df_1min is not None and not df_1min.empty:
+                                cache_file.parent.mkdir(parents=True, exist_ok=True)
+
+                                # pickle로 저장
+                                with open(cache_file, 'wb') as f:
+                                    pickle.dump(df_1min, f)
+
+                                # 시간 범위 정보
+                                time_info = ""
+                                if 'time' in df_1min.columns:
+                                    start_time = df_1min.iloc[0]['time']
+                                    end_time = df_1min.iloc[-1]['time']
+                                    time_info = f" ({start_time}~{end_time})"
+                                elif 'datetime' in df_1min.columns:
+                                    start_dt = df_1min.iloc[0]['datetime']
+                                    end_dt = df_1min.iloc[-1]['datetime']
+                                    if hasattr(start_dt, 'strftime') and hasattr(end_dt, 'strftime'):
+                                        time_info = f" ({start_dt.strftime('%H%M%S')}~{end_dt.strftime('%H%M%S')})"
+
+                                logger.info(f"💾 [{stock_code}] 캐시 저장 완료: {len(df_1min)}건{time_info}")
                         finally:
                             loop.close()
                     except Exception as e:

@@ -278,8 +278,8 @@ class RiskManagementConfig:
     """리스크 관리 설정"""
     max_position_count: int = 20
     max_position_ratio: float = 0.3
-    stop_loss_ratio: float = 0.03
-    take_profit_ratio: float = 0.05
+    stop_loss_ratio: float = 0.025
+    take_profit_ratio: float = 0.035
     max_daily_loss: float = 0.1
 
 

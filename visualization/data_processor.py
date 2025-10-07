@@ -4,6 +4,8 @@
 import asyncio
 import pandas as pd
 import numpy as np
+import pickle
+from pathlib import Path
 from typing import Optional, Dict, List, Any
 from utils.logger import setup_logger
 from api.kis_chart_api import get_inquire_time_dailychartprice, get_div_code_for_stock, get_stock_data_with_fallback

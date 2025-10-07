@@ -1023,14 +1023,16 @@ class DayTradingBot:
                 ts.is_buying = False
                 ts.order_processed = True
 
-                # 매수가 기준 고정 비율로 목표가격 계산 (로깅용)
+                # 매수가 기준 고정 비율로 목표가격 계산 (로깅용 - config에서 읽기)
                 buy_price = avg_price
-                target_price = buy_price * 1.03    # +3% 목표
-                stop_loss = buy_price * 0.98       # -2% 손절
+                take_profit_ratio = self.config.risk_management.take_profit_ratio
+                stop_loss_ratio = self.config.risk_management.stop_loss_ratio
+                target_price = buy_price * (1 + take_profit_ratio)
+                stop_loss = buy_price * (1 - stop_loss_ratio)
 
                 # 상태 변경
                 self.trading_manager._change_stock_state(code, StockState.POSITIONED,
-                    f"잔고복구: {quantity}주 @{buy_price:,.0f}원, 목표: +3%/-2%")
+                    f"잔고복구: {quantity}주 @{buy_price:,.0f}원, 목표: +{take_profit_ratio*100:.1f}%/-{stop_loss_ratio*100:.1f}%")
 
                 self.logger.info(f"✅ {code} 복구완료: 매수 {buy_price:,.0f} → "
                                f"목표 {target_price:,.0f} / 손절 {stop_loss:,.0f}")
