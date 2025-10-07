@@ -4,8 +4,8 @@ from __future__ import annotations
 실데이터 기반 매매신호(눌림목/3분봉) 재현 리포트 스크립트
 
 🎯 손절/익절 설정:
-  PROFIT_TAKE_RATE = 3.0   # 익절 수익률 (%) - 기본 3%
-  STOP_LOSS_RATE = 1.5     # 손절 수익률 (%) - 기본 1.5%
+  config/trading_config.json 파일에서 자동으로 로드됩니다.
+  (risk_management.take_profit_ratio / stop_loss_ratio)
   
 🔄 로직 전환 방법:
   # v2 로직 사용 (SHA-1: 4d2836c2 복원):
@@ -42,12 +42,8 @@ from __future__ import annotations
 """
 
 # ==================== 손절/익절 설정 ====================
-# 📊 시뮬레이션 테스트를 위한 손절/익절 비율 설정 (쉬운 수정을 위해 상단 배치)
-PROFIT_TAKE_RATE = 3.5  # 익절 수익률 (%) - 수정하여 테스트 가능
-STOP_LOSS_RATE = 2.5    # 손절 수익률 (%) - 수정하여 테스트 가능
-
-print(f"[시뮬레이션 설정] 익절 +{PROFIT_TAKE_RATE}% / 손절 -{STOP_LOSS_RATE}%")
-print("=" * 60)
+# 📊 config/trading_config.json 에서 손절/익절 비율 로드
+# (하드코딩 제거 - 실시간 매매와 동일한 설정 사용)
 # =========================================================
 
 import argparse
@@ -111,6 +107,7 @@ from utils.korean_time import KST
 from core.indicators.pullback_candle_pattern import PullbackCandlePattern, SignalType
 from api.kis_api_manager import KISAPIManager
 from visualization.data_processor import DataProcessor
+from config.settings import load_trading_config
 from utils.signal_replay_utils import (
     parse_times_mapping,
     get_stocks_with_selection_date,
@@ -131,6 +128,14 @@ except Exception:
     pass
 
 logger = setup_logger(__name__)
+
+# 설정 파일에서 손절/익절 비율 로드
+_trading_config = load_trading_config()
+PROFIT_TAKE_RATE = _trading_config.risk_management.take_profit_ratio * 100  # 0.035 -> 3.5%
+STOP_LOSS_RATE = _trading_config.risk_management.stop_loss_ratio * 100      # 0.025 -> 2.5%
+
+print(f"[시뮬레이션 설정] 익절 +{PROFIT_TAKE_RATE}% / 손절 -{STOP_LOSS_RATE}%")
+print("=" * 60)
 
 
 def calculate_trading_signals_once(df_3min: pd.DataFrame, *, debug_logs: bool = False, 
