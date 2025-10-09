@@ -26,7 +26,9 @@
       "Read(/C:\\GIT\\RoboTrader\\utils/**)",
       "Bash(sqlite3:*)",
       "Bash(dir)",
-      "Read(//c/GIT/RoboTrader_NewStrategy/**)"
+      "Read(//c/GIT/RoboTrader_NewStrategy/**)",
+      "Bash(dir:*)",
+      "Bash(findstr:*)"
     ],
     "deny": [],
     "ask": []

@@ -12,7 +12,7 @@ from collections import defaultdict
 from utils.logger import setup_logger
 from utils.korean_time import now_kst, is_market_open
 from api.kis_chart_api import (
-    get_inquire_time_itemchartprice, 
+    get_inquire_time_itemchartprice,
     get_inquire_time_dailychartprice,
     get_full_trading_day_data_async,
     get_div_code_for_stock
@@ -21,6 +21,7 @@ from api.kis_market_api import get_inquire_daily_itemchartprice, get_inquire_pri
 from core.indicators.price_box import PriceBox
 from core.realtime_data_logger import log_intraday_data
 from core.realtime_candle_builder import get_realtime_candle_builder
+from core.dynamic_batch_calculator import DynamicBatchCalculator
 
 
 logger = setup_logger(__name__)
@@ -73,10 +74,13 @@ class IntradayStockManager:
         # 설정
         self.market_open_time = "090000"  # 장 시작 시간
         self.max_stocks = 80  # 최대 관리 종목 수
-        
+
         # 동기화
         self._lock = threading.RLock()
-        
+
+        # 🆕 동적 배치 계산기
+        self.batch_calculator = DynamicBatchCalculator()
+
         self.logger.info("🎯 장중 종목 관리자 초기화 완료")
     
     async def add_selected_stock(self, stock_code: str, stock_name: str, 
@@ -1223,9 +1227,10 @@ class IntradayStockManager:
             successful_price_updates = 0
             failed_updates = 0
             quality_issues = []
-            
-            # 동시 업데이트 (배치 크기 증가로 효율성 향상)
-            batch_size = 20  # 배치 크기 증가
+
+            # 🆕 동적 배치 크기 계산
+            batch_size, batch_delay = self.batch_calculator.calculate_optimal_batch(total_stocks)
+
             for i in range(0, len(stock_codes), batch_size):
                 batch = stock_codes[i:i + batch_size]
                 
@@ -1313,9 +1318,9 @@ class IntradayStockManager:
                             # 로깅 오류가 메인 로직에 영향을 주지 않도록 조용히 처리
                             pass
                 
-                # API 호출 간격 조절 (더 빠른 업데이트)
+                # 🆕 동적 배치 지연 시간 적용 (API 제한 준수)
                 if i + batch_size < len(stock_codes):
-                    await asyncio.sleep(0.2)  # 간격 단축
+                    await asyncio.sleep(batch_delay)
             
             # 데이터 품질 리포트
             minute_success_rate = (successful_minute_updates / total_stocks) * 100 if total_stocks > 0 else 0

@@ -20,6 +20,7 @@ from core.indicators.pullback_utils import (
 from typing import List, Tuple
 from core.indicators.pullback.volume_analyzer import VolumeAnalyzer
 from core.indicators.pullback.support_pattern_analyzer import SupportPatternAnalyzer
+from core.indicators.pullback.technical_filter import TechnicalFilter
 
 def analyze_daily_pattern_strength(stock_code, current_date, daily_data=None):
     """일봉 패턴 강도 분석 (전역 함수) - 임시로 디폴트 값 반환"""
@@ -545,6 +546,37 @@ class PullbackCandlePattern:
                 return (result, []) if return_risk_signals else result
 
             if support_pattern_info['has_support_pattern'] and support_pattern_info['confidence'] >= min_confidence:
+                # ================================
+                # 기술 지표 필터 (현재 비활성화 - 성능 저하로 주석 처리)
+                # 총 거래 325개 → 110개 감소
+                # 승률 52% → 57.3%로 향상했으나
+                # 총 수익 2,015,000원 → 1,030,000원으로 감소
+                # ================================
+                # tech_filter = TechnicalFilter.create_balanced_filter()
+                # filter_result = tech_filter.check_filter(
+                #     data=data,
+                #     current_idx=len(data) - 1,
+                #     daily_data=daily_data,
+                #     current_time=current_time.time() if hasattr(current_time, 'time') else None
+                # )
+                #
+                # # 필터 통과 체크
+                # if not filter_result['passed']:
+                #     # 필터 실패시 AVOID 반환
+                #     reasons = ['기술지표필터실패'] + filter_result['reasons']
+                #     result = SignalStrength(SignalType.AVOID, 0, 0, reasons, volume_analysis.volume_ratio, BisectorStatus.BROKEN)
+                #
+                #     if debug and logger:
+                #         logger.info(f"[{stock_code}] 기술필터실패: {', '.join(filter_result['reasons'])}")
+                #
+                #     return (result, []) if return_risk_signals else result
+                #
+                # # 필터 통과시 기존 로직 진행
+                # if debug and logger:
+                #     logger.info(f"[{stock_code}] 기술필터통과 (초반모드: {filter_result.get('early_mode', False)})")
+                #     for reason in filter_result['reasons']:
+                #         logger.info(f"  {reason}")
+
                 # 중복 신호 방지 로직 추가
                 current_time = datetime.now()
 
@@ -567,7 +599,7 @@ class PullbackCandlePattern:
                     signal_type=SignalType.STRONG_BUY if support_pattern_info['confidence'] >= 80 else SignalType.CAUTIOUS_BUY,
                     confidence=support_pattern_info['confidence'],
                     target_profit=3.0,
-                    reasons=support_pattern_info['reasons'],
+                    reasons=support_pattern_info['reasons'] + ['기술필터통과'],
                     volume_ratio=volume_analysis.volume_ratio,
                     bisector_status=PullbackUtils.get_bisector_status(current['close'], bisector_line) if bisector_line else BisectorStatus.BROKEN,
                     buy_price=support_pattern_info.get('entry_price'),
