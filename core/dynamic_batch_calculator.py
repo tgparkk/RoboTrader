@@ -18,7 +18,7 @@ class DynamicBatchCalculator:
 
     # API 제한 상수
     API_LIMIT_PER_SECOND = 20  # 초당 최대 20개
-    SAFETY_MARGIN = 0.7  # 안전 마진 30% (실제 14개/초로 제한)
+    SAFETY_MARGIN = 1.0  # 안전 마진 0% (정확히 20개/초 사용)
     TARGET_UPDATE_TIME = 10  # 목표 업데이트 시간 10초
     APIS_PER_STOCK = 2  # 종목당 API 호출 수 (분봉 1 + 현재가 1)
 
