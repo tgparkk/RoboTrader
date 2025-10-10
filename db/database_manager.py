@@ -562,6 +562,44 @@ class DatabaseManager:
         except Exception as e:
             self.logger.error(f"데이터 정리 실패: {e}")
     
+    def get_today_candidates(self) -> List[Dict[str, Any]]:
+        """당일 선정된 후보 종목 조회 (재시작 시 복원용)"""
+        try:
+            today_str = now_kst().strftime('%Y-%m-%d')
+            
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT DISTINCT 
+                        stock_code,
+                        stock_name,
+                        selection_date,
+                        score,
+                        reasons
+                    FROM candidate_stocks 
+                    WHERE DATE(selection_date) = ?
+                    ORDER BY selection_date ASC
+                ''', (today_str,))
+                
+                rows = cursor.fetchall()
+                candidates = []
+                
+                for row in rows:
+                    candidates.append({
+                        'stock_code': row[0],
+                        'stock_name': row[1],
+                        'selection_date': datetime.strptime(row[2], '%Y-%m-%d %H:%M:%S'),
+                        'score': row[3],
+                        'reason': row[4]
+                    })
+                
+                self.logger.info(f"📦 당일 선정 종목 조회: {len(candidates)}개")
+                return candidates
+                
+        except Exception as e:
+            self.logger.error(f"❌ 당일 종목 조회 실패: {e}")
+            return []
+    
     def get_database_stats(self) -> Dict[str, int]:
         """데이터베이스 통계"""
         try:

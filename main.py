@@ -169,8 +169,8 @@ class DayTradingBot:
             # 3. 텔레그램 초기화
             await self.telegram.initialize()
             
-            # 4. 후보 종목 설정 (동적 선정을 위해 초기화만 수행)
-            # TODO: 매일 장전 동적으로 후보 종목 선정 로직 구현
+            # 4. 당일 선정 종목 복원 (재시작 시)
+            await self._restore_today_candidates()
             
             self.logger.info("✅ 시스템 초기화 완료")
             return True
@@ -360,37 +360,14 @@ class DayTradingBot:
                 self.logger.debug(f"⚠️ {stock_code}: 매수 쿨다운 활성화 (남은 시간: {remaining_minutes}분)")
                 return
             
-            # 분봉 데이터 가져오기
+            # 분봉 데이터 가져오기 (실시간 모드에서는 메모리에서만 가져옴)
             combined_data = self.intraday_manager.get_combined_chart_data(stock_code)
             if combined_data is None:
                 self.logger.debug(f"❌ {stock_code} 1분봉 데이터 없음 (None)")
                 return
             if len(combined_data) < 15:
                 self.logger.debug(f"❌ {stock_code} 1분봉 데이터 부족: {len(combined_data)}개 (최소 15개 필요)")
-                
-                # 데이터 부족 시 자동 수집 시도
-                try:
-                    from trade_analysis.data_sufficiency_checker import check_and_collect_data
-                    from utils.korean_time import now_kst
-                    
-                    today = now_kst().strftime('%Y%m%d')
-                    self.logger.info(f"🔄 {stock_code} 데이터 부족으로 자동 수집 시도...")
-                    
-                    if check_and_collect_data(stock_code, today, 15):
-                        # 수집 후 다시 데이터 확인
-                        combined_data = self.intraday_manager.get_combined_chart_data(stock_code)
-                        if combined_data is None or len(combined_data) < 15:
-                            self.logger.warning(f"❌ {stock_code} 자동 수집 후에도 데이터 부족: {len(combined_data) if combined_data is not None else 0}개")
-                            return
-                        else:
-                            self.logger.info(f"✅ {stock_code} 자동 수집 완료: {len(combined_data)}개")
-                    else:
-                        self.logger.warning(f"❌ {stock_code} 자동 수집 실패")
-                        return
-                        
-                except Exception as e:
-                    self.logger.error(f"❌ {stock_code} 자동 수집 중 오류: {e}")
-                    return
+                return
             
             # 🆕 3분봉 변환 시 완성된 봉만 자동 필터링됨 (TimeFrameConverter에서 처리)
             from core.timeframe_converter import TimeFrameConverter
@@ -776,6 +753,47 @@ class DayTradingBot:
             return False
     
    
+    async def _restore_today_candidates(self):
+        """당일 선정된 종목 복원 (재시작 시)"""
+        try:
+            self.logger.info("📦 당일 선정 종목 복원 시작...")
+            
+            # DB에서 당일 종목 조회
+            today_candidates = self.db_manager.get_today_candidates()
+            
+            if not today_candidates:
+                self.logger.info("ℹ️ 복원할 당일 종목 없음")
+                return
+            
+            # 각 종목을 거래 관리자에 추가
+            restored_count = 0
+            for candidate in today_candidates:
+                try:
+                    stock_code = candidate['stock_code']
+                    stock_name = candidate['stock_name']
+                    reason = candidate.get('reason', 'DB 복원')
+                    
+                    # 거래 상태 관리자에 추가 (분봉 데이터 수집 + 거래 상태 관리)
+                    success = await self.trading_manager.add_selected_stock(
+                        stock_code=stock_code,
+                        stock_name=stock_name,
+                        selection_reason=reason,
+                        prev_close=0.0  # 복원 시에는 전날 종가 정보 없음
+                    )
+                    
+                    if success:
+                        restored_count += 1
+                        self.logger.debug(f"✅ 종목 복원: {stock_code}({stock_name})")
+                    
+                except Exception as stock_err:
+                    self.logger.error(f"❌ 종목 복원 실패 ({candidate.get('stock_code', 'unknown')}): {stock_err}")
+                    continue
+            
+            self.logger.info(f"✅ 당일 종목 복원 완료: {restored_count}/{len(today_candidates)}개")
+            
+        except Exception as e:
+            self.logger.error(f"❌ 당일 종목 복원 오류: {e}")
+    
     async def _check_condition_search(self):
         """장중 조건검색 체크"""
         try:

@@ -23,7 +23,7 @@ def is_market_open(dt: datetime = None) -> bool:
         return False
     
     market_open = time(9, 0)    # 09:00
-    market_close = time(15, 30) # 15:30
+    market_close = time(18, 30) # 15:30
     
     current_time = dt.time()
     return market_open <= current_time <= market_close

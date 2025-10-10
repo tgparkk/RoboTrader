@@ -944,37 +944,38 @@ class TradingDecisionEngine:
             return False, "", None
     
     def _is_candle_confirmed(self, data_3min) -> bool:
-        """3분봉 확정 여부 확인 (signal_replay.py와 완전히 동일한 방식)"""
+        """3분봉 확정 여부 확인 (signal_replay.py와 완전히 동일한 방식 + 안전 마진)"""
         try:
             if data_3min is None or data_3min.empty or 'datetime' not in data_3min.columns:
                 return False
-            
+
             from utils.korean_time import now_kst, KST
             import pandas as pd
-            
+
             current_time = now_kst()
             last_candle_time = pd.to_datetime(data_3min['datetime'].iloc[-1])
-            
+
             # timezone 통일: last_candle_time을 KST로 변환
             if last_candle_time.tz is None:
                 last_candle_time = last_candle_time.tz_localize(KST)
             elif last_candle_time.tz != KST:
                 last_candle_time = last_candle_time.tz_convert(KST)
-            
+
             # signal_replay.py와 동일한 방식: 라벨 + 3분 경과 후 확정
             # 라벨(ts_3min)은 구간 시작 시각이므로 [라벨, 라벨+2분]을 포함하고,
             # 라벨+3분 경과 후에 봉이 확정됨
-            candle_end_time = last_candle_time + pd.Timedelta(minutes=3)
+            # 🆕 안전 마진 추가: 3분 + 15초 후에 확정 (1분봉 수집 지연 및 3분봉 변환 완료 보장)
+            candle_end_time = last_candle_time + pd.Timedelta(minutes=3, seconds=15)
             is_confirmed = current_time >= candle_end_time
-            
+
             # 🆕 3분봉 확정될 때만 상세 로깅 (로그 길이 최적화)
             if is_confirmed:
                 time_diff_sec = (current_time - candle_end_time).total_seconds()
-                
-                self.logger.info(f"📊 3분봉 확정 완료!")
-                self.logger.info(f"  - 확정된 3분봉: {last_candle_time.strftime('%H:%M:%S')} ~ {candle_end_time.strftime('%H:%M:%S')}")
-                self.logger.info(f"  - 현재 시간: {current_time.strftime('%H:%M:%S')} (확정 후 {time_diff_sec:.1f}초 경과)")
-            
+
+                self.logger.info(f"📊 3분봉 확정 완료! (안전 마진 15초 포함)")
+                self.logger.info(f"  - 확정된 3분봉: {last_candle_time.strftime('%H:%M:%S')} ~ {(last_candle_time + pd.Timedelta(minutes=3)).strftime('%H:%M:%S')}")
+                self.logger.info(f"  - 현재 시간: {current_time.strftime('%H:%M:%S')} (확정 + 안전마진 후 {time_diff_sec:.1f}초 경과)")
+
             return is_confirmed
             
         except Exception as e:
