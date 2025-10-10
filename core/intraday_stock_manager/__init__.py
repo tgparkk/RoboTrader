@@ -178,8 +178,9 @@ class IntradayStockManager:
                 # 실패 시 폴백 방식으로 재시도
                 return await self._collect_historical_data_fallback(stock_code)
             
-            # 일봉 데이터 수집
-            daily_data = await self.collector.collect_daily_data_for_ml(stock_code)
+            # 🔇 일봉 데이터 수집 비활성화 (analyze_daily_pattern_strength가 기본값만 반환하므로 불필요)
+            # daily_data = await self.collector.collect_daily_data_for_ml(stock_code)
+            daily_data = pd.DataFrame()  # 빈 DataFrame 반환 (동작 유지)
             
             # 저장소 업데이트
             self.repository.update_stock(

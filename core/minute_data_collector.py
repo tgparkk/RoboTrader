@@ -284,7 +284,33 @@ class MinuteDataCollector:
 
                 # 1분 간격이 아니면 누락
                 if curr_hour != expected_hour or curr_min != expected_min:
-                    return {'valid': False, 'reason': f'분봉 누락: {prev_time_str}→{curr_time_str}'}
+                    # 🆕 15:18 이후 누락은 장 마감 후라 정상 (체크 생략)
+                    prev_time_int = prev_hour * 100 + prev_min
+                    if prev_time_int >= 1518:
+                        break  # 15:18 이후는 체크 안함
+                    
+                    # 🆕 누락 개수 계산 (1개는 HTS 데이터 없을 가능성 - 허용, 2개 이상만 에러)
+                    missing_count = 0
+                    check_hour, check_min = expected_hour, expected_min
+                    while check_hour < curr_hour or (check_hour == curr_hour and check_min < curr_min):
+                        missing_count += 1
+                        # 다음 분으로 이동
+                        if check_min == 59:
+                            check_hour += 1
+                            check_min = 0
+                        else:
+                            check_min += 1
+                        # 무한 루프 방지
+                        if missing_count > 60:
+                            break
+                    
+                    # 1개 누락은 HTS 자체에 데이터 없을 가능성 - 허용 (디버그 로그만)
+                    if missing_count == 1:
+                        self.logger.debug(f"{stock_code} 소규모 분봉 누락(1개): {prev_time_str}→{curr_time_str} (HTS 데이터 없음 가능)")
+                        continue  # 다음 체크 진행
+                    else:
+                        # 2개 이상 연속 누락은 에러
+                        return {'valid': False, 'reason': f'분봉 누락: {prev_time_str}→{curr_time_str} ({missing_count}개)'}
 
             return {'valid': True, 'reason': ''}
 
@@ -442,9 +468,8 @@ class MinuteDataCollector:
         try:
             # 일봉 API 호출 (최근 100일)
             result = get_inquire_daily_itemchartprice(
-                stock_code=stock_code,
-                period_code="D",
-                period_count=days
+                itm_no=stock_code,
+                period_code="D"
             )
 
             if result is None or len(result) != 2:

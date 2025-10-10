@@ -272,6 +272,11 @@ class DataValidator:
                         
                         # 1분 간격이 아니면 누락
                         if curr_hour != expected_hour or curr_min != expected_min:
+                            # 🆕 15:18 이후 누락은 장 마감 후라 정상 (체크 생략)
+                            prev_time_int = prev_hour * 100 + prev_min
+                            if prev_time_int >= 1518:
+                                break  # 15:18 이후는 체크 안함
+                            
                             # 누락된 시간들을 모두 수집
                             check_hour, check_min = expected_hour, expected_min
                             while check_hour < curr_hour or (check_hour == curr_hour and check_min < curr_min):
