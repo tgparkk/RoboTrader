@@ -174,26 +174,6 @@ class TradingDecisionEngine:
             #     # 조회 실패 시 차단하지 않음
             #     pass
 
-            # 🆕 전일 종가 대비 22% 이상 상승 종목 매수 금지
-            current_price = self._safe_float_convert(combined_data['close'].iloc[-1])
-            prev_close = getattr(trading_stock, 'prev_close', 0.0)
-
-            
-            # prev_close가 없으면 intraday_manager에서 가져오기 시도
-            if prev_close <= 0 and self.intraday_manager:
-                try:
-                    stock_data = self.intraday_manager.get_stock_data(stock_code)
-                    if stock_data and hasattr(stock_data, 'prev_close'):
-                        prev_close = stock_data.prev_close
-                except Exception:
-                    pass
-
-            if prev_close > 0:
-                price_change_pct = ((current_price - prev_close) / prev_close) * 100
-                if price_change_pct >= 22.0:
-                    return False, f"전일대비 {price_change_pct:.1f}% 상승으로 매수 제한 (22% 초과)", buy_info
-            
-
             # 🆕 현재 처리 중인 종목 코드 저장 (디버깅용)
             self._current_stock_code = stock_code
             

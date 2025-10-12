@@ -243,7 +243,7 @@ class DayTradingBot:
                 
                 # 🆕 장중 조건검색 체크 (오전 09:00 ~ 15:00)
                 if (9 <= current_time.hour < 15 and 
-                    (current_time - last_condition_check).total_seconds() >= 10):  # 10초
+                    (current_time - last_condition_check).total_seconds() >= 60):  # 60초
                     await self._check_condition_search()
                     last_condition_check = current_time
                 
@@ -402,7 +402,7 @@ class DayTradingBot:
                 self.logger.debug(f"❌ {stock_code} 3분봉 데이터 부족: {len(data_3min) if data_3min is not None else 0}개 (최소 5개 필요)")
                 return
 
-            # 🆕 3분봉 연속성 검증: 09:00, 09:03, 09:06... 순서대로 있어야 함
+            # 🆕 3분봉 연속성 검증: 경고만 표시 (시뮬레이션과 동일하게 차단하지 않음)
             if not data_3min.empty and len(data_3min) >= 2:
                 data_3min_copy = data_3min.copy()
                 data_3min_copy['datetime'] = pd.to_datetime(data_3min_copy['datetime'])
@@ -414,17 +414,17 @@ class DayTradingBot:
                 invalid_gaps = time_diffs[1:][(time_diffs[1:] != 3.0) & (time_diffs[1:] != 0.0)]
 
                 if len(invalid_gaps) > 0:
-                    # 불연속 구간 발견
+                    # 불연속 구간 발견 - 경고만 하고 진행
                     gap_indices = invalid_gaps.index.tolist()
                     gap_times = [data_3min_copy.loc[idx, 'datetime'].strftime('%H:%M') for idx in gap_indices]
-                    self.logger.debug(f"❌ {stock_code} 3분봉 불연속 구간 발견: {', '.join(gap_times)} (간격: {invalid_gaps.values} 분)")
-                    return
+                    self.logger.warning(f"⚠️ {stock_code} 3분봉 불연속 구간 발견: {', '.join(gap_times)} (간격: {invalid_gaps.values} 분) - 경고만, 진행")
+                    # return 제거 - 시뮬레이션과 동일하게 차단하지 않음
 
                 # 09:00부터 시작하는지 확인
                 first_time = data_3min_copy['datetime'].iloc[0]
                 if first_time.hour == 9 and first_time.minute not in [0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30]:
-                    self.logger.debug(f"❌ {stock_code} 첫 3분봉이 정규 시간이 아님: {first_time.strftime('%H:%M')} (09:00, 09:03, 09:06... 중 하나여야 함)")
-                    return
+                    self.logger.warning(f"⚠️ {stock_code} 첫 3분봉이 정규 시간이 아님: {first_time.strftime('%H:%M')} (09:00, 09:03, 09:06... 중 하나여야 함) - 경고만, 진행")
+                    # return 제거 - 시뮬레이션과 동일하게 차단하지 않음
                 
             current_time = now_kst()
             last_3min_time = data_3min['datetime'].iloc[-1] if not data_3min.empty else None
