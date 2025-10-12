@@ -597,8 +597,8 @@ class DayTradingBot:
                     await self._refresh_api()
                     last_api_refresh = current_time
 
-                # 🆕 장중 종목 실시간 데이터 업데이트
-                if (current_time - last_intraday_update).total_seconds() >= 10:  # 10초
+                # 🆕 장중 종목 실시간 데이터 업데이트 (매분 10~30초 사이에 실행)
+                if 10 <= current_time.second <= 30 and (current_time - last_intraday_update).total_seconds() >= 30:  # 매분 10~30초
                     if is_market_open():
                         await self._update_intraday_data()
                     last_intraday_update = current_time
