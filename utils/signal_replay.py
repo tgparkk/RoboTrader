@@ -519,9 +519,9 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
             # 매수 성공 시 신호 캔들 시점 저장 (중복 신호 방지)
             last_signal_candle_time = normalized_signal_time
             
-            # 🆕 3분봉 기준: 돌파봉의 다음 2개 3분봉(6분) 타임아웃 적용
+            # 🆕 실시간과 동일: 5분 타임아웃 적용
             signal_time_start = signal_completion_time
-            signal_time_end = signal_completion_time + timedelta(minutes=6)  # 6분 타임아웃 (다음 2개 3분봉)
+            signal_time_end = signal_completion_time + timedelta(minutes=5)  # 5분 타임아웃 (실시간과 동일)
             
             check_candles = df_1min[
                 (df_1min['datetime'] >= signal_time_start) & 
@@ -533,7 +533,7 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                     logger.debug(f"⚠️ [{stock_code}] 체결 검증용 1분봉 데이터 없음, 거래 건너뜀")
                 continue
             
-            # 6분 내에 3/5가 이하로 떨어지는 시점 찾기 (체결 가능성만 확인)
+            # 5분 내에 3/5가 이하로 떨어지는 시점 찾기 (체결 가능성만 확인)
             buy_executed = False
             for _, candle in check_candles.iterrows():
                 # 해당 1분봉의 저가가 3/5가 이하면 체결 가능
@@ -544,9 +544,9 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                     break
             
             if not buy_executed:
-                # 6분 내에 3/5가 이하로 떨어지지 않음 → 매수 미체결
+                # 5분 내에 3/5가 이하로 떨어지지 않음 → 매수 미체결
                 if logger:
-                    logger.debug(f"💸 [{stock_code}] 매수 미체결: 6분 내 3/5가({three_fifths_price:,.0f}원) 도달 실패")
+                    logger.debug(f"💸 [{stock_code}] 매수 미체결: 5분 내 3/5가({three_fifths_price:,.0f}원) 도달 실패")
                 
                 # 미체결 신호도 기록에 추가
                 trades.append({
@@ -562,7 +562,7 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                     'max_profit_rate': 0.0,
                     'max_loss_rate': 0.0,
                     'duration_minutes': 0,
-                    'reason': f'미체결: 6분 내 3/5가({three_fifths_price:,.0f}원) 도달 실패'
+                    'reason': f'미체결: 5분 내 3/5가({three_fifths_price:,.0f}원) 도달 실패'
                 })
                 continue
             
