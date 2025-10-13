@@ -1102,8 +1102,11 @@ class IntradayStockManager:
 
             # 🆕 15:30 장 마감 시 메모리 데이터 자동 저장
             current_time = now_kst()
-            if current_time.hour == 15 and current_time.minute == 30:
+            if current_time.hour == 15 and current_time.minute >= 30:
                 if not hasattr(self, '_data_saved_today'):
+                    # 1. cache/minute_data에 pickle로 저장 (시뮬 비교용)
+                    self._save_minute_data_to_cache()
+                    # 2. 텍스트 파일로도 저장 (디버깅용)
                     self._save_minute_data_to_file()
                     self._data_saved_today = True  # 하루에 한 번만 저장
 
@@ -1425,6 +1428,58 @@ class IntradayStockManager:
         except Exception as e:
             self.logger.error(f"❌ {stock_code} 일봉 데이터 수집 오류: {e}")
             return pd.DataFrame()
+
+    def _save_minute_data_to_cache(self):
+        """
+        메모리에 있는 모든 종목의 분봉 데이터를 cache/minute_data에 pickle로 저장
+        시뮬레이션 데이터와 비교용 (15:30 장 마감 시)
+        """
+        try:
+            from utils.korean_time import now_kst
+            import pickle
+            from pathlib import Path
+
+            current_time = now_kst()
+            today = current_time.strftime('%Y%m%d')
+            
+            # cache/minute_data 디렉토리 생성
+            cache_dir = Path("cache/minute_data")
+            cache_dir.mkdir(parents=True, exist_ok=True)
+
+            with self._lock:
+                stock_codes = list(self.selected_stocks.keys())
+
+            if not stock_codes:
+                self.logger.info("💾 캐시 저장할 종목 없음")
+                return
+
+            saved_count = 0
+            for stock_code in stock_codes:
+                try:
+                    # combined_data (historical + realtime 병합) 가져오기
+                    combined_data = self.get_combined_chart_data(stock_code)
+                    
+                    if combined_data is None or combined_data.empty:
+                        self.logger.warning(f"⚠️ {stock_code} 저장할 데이터 없음")
+                        continue
+                    
+                    # 파일명: 종목코드_날짜.pkl (save_candidate_data.py와 동일)
+                    cache_file = cache_dir / f"{stock_code}_{today}.pkl"
+                    
+                    # pickle로 저장
+                    with open(cache_file, 'wb') as f:
+                        pickle.dump(combined_data, f)
+                    
+                    saved_count += 1
+                    self.logger.debug(f"💾 {stock_code} 캐시 저장: {len(combined_data)}건 → {cache_file.name}")
+                    
+                except Exception as e:
+                    self.logger.error(f"❌ {stock_code} 캐시 저장 실패: {e}")
+            
+            self.logger.info(f"✅ 실시간 분봉 데이터 캐시 저장 완료: {saved_count}/{len(stock_codes)}개 종목")
+            
+        except Exception as e:
+            self.logger.error(f"❌ 분봉 데이터 캐시 저장 실패: {e}")
 
     def _save_minute_data_to_file(self):
         """
