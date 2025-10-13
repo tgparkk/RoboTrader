@@ -236,10 +236,16 @@ class DayTradingBot:
                 
                 current_time = now_kst()
                 
-                # 🚨 15시 시장가 일괄매도 체크
+                # 🚨 15시 시장가 일괄매도 체크 (한 번만 실행)
                 if current_time.hour >= 15 and current_time.minute >= 0:
-                    await self._execute_end_of_day_liquidation()
-                    break  # 매도 완료 후 루프 종료
+                    if not hasattr(self, '_eod_liquidation_done'):
+                        await self._execute_end_of_day_liquidation()
+                        self._eod_liquidation_done = True
+                    
+                    # 15시 이후에는 매매 판단 건너뛰고 모니터링만 계속
+                    # (15:30 데이터 저장을 위해 루프 계속 실행)
+                    await asyncio.sleep(5)
+                    continue
                 
                 # 🆕 장중 조건검색 체크 (오전 09:00 ~ 15:00)
                 if (9 <= current_time.hour < 15 and 
@@ -580,11 +586,12 @@ class DayTradingBot:
                     last_api_refresh = current_time
 
                 # 🆕 장중 종목 실시간 데이터 업데이트 (매분 10~45초 사이에 실행)
-                # 10~45초 구간에서는 이전 실행으로부터 최소 15초 이상 간격만 유지
+                # 10~45초 구간에서는 이전 실행으로부터 최소 10초 이상 간격만 유지
                 if 10 <= current_time.second <= 45 and (current_time - last_intraday_update).total_seconds() >= 10:
-                    if is_market_open():
+                    # 장중이거나 15:30~15:40 구간에서는 실행 (데이터 저장 위해)
+                    if is_market_open() or (current_time.hour == 15 and 30 <= current_time.minute <= 40):
                         await self._update_intraday_data()
-                    last_intraday_update = current_time
+                        last_intraday_update = current_time
                 
                 # 장마감 청산 로직 제거: 15:00 시장가 매도로 대체됨
                 
