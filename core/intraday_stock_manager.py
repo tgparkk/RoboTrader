@@ -257,6 +257,26 @@ class IntradayStockManager:
                     # 실패 시 기존 방식으로 폴백
                     return await self._collect_historical_data_fallback(stock_code)
             
+            # 🆕 당일 데이터만 필터링 (전날 데이터 혼입 방지 - 최우선)
+            today_str = selected_time.strftime('%Y%m%d')
+            before_count = len(historical_data)
+            
+            if 'date' in historical_data.columns:
+                historical_data = historical_data[historical_data['date'].astype(str) == today_str].copy()
+            elif 'datetime' in historical_data.columns:
+                historical_data['date_str'] = pd.to_datetime(historical_data['datetime']).dt.strftime('%Y%m%d')
+                historical_data = historical_data[historical_data['date_str'] == today_str].copy()
+                if 'date_str' in historical_data.columns:
+                    historical_data = historical_data.drop('date_str', axis=1)
+            
+            if before_count != len(historical_data):
+                removed = before_count - len(historical_data)
+                self.logger.warning(f"⚠️ {stock_code} 초기 수집 시 전날 데이터 {removed}건 제외: {before_count} → {len(historical_data)}건")
+            
+            if historical_data.empty:
+                self.logger.error(f"❌ {stock_code} 당일 데이터 없음 (전날 데이터만 존재)")
+                return await self._collect_historical_data_fallback(stock_code)
+            
             # 데이터 정렬 및 정리 (시간 순서)
             if 'datetime' in historical_data.columns:
                 historical_data = historical_data.sort_values('datetime').reset_index(drop=True)
@@ -1299,7 +1319,27 @@ class IntradayStockManager:
             if all_data.empty:
                 return {'has_issues': True, 'issues': ['데이터 없음']}
             
-            # 🆕 시간순 정렬 및 중복 제거 (품질 검사 전 필수)
+            # 🆕 당일 데이터만 필터링 (품질 검사 전 최우선)
+            from utils.korean_time import now_kst
+            today_str = now_kst().strftime('%Y%m%d')
+            before_filter_count = len(all_data)
+            
+            if 'date' in all_data.columns:
+                all_data = all_data[all_data['date'].astype(str) == today_str].copy()
+            elif 'datetime' in all_data.columns:
+                all_data['date_str'] = pd.to_datetime(all_data['datetime']).dt.strftime('%Y%m%d')
+                all_data = all_data[all_data['date_str'] == today_str].copy()
+                if 'date_str' in all_data.columns:
+                    all_data = all_data.drop('date_str', axis=1)
+            
+            if before_filter_count != len(all_data):
+                removed = before_filter_count - len(all_data)
+                self.logger.warning(f"⚠️ {stock_code} 품질검사 시 전날 데이터 {removed}건 제외: {before_filter_count} → {len(all_data)}건")
+            
+            if all_data.empty:
+                return {'has_issues': True, 'issues': ['당일 데이터 없음']}
+            
+            # 시간순 정렬 및 중복 제거
             if 'time' in all_data.columns:
                 all_data = all_data.drop_duplicates(subset=['time'], keep='last').sort_values('time').reset_index(drop=True)
             elif 'datetime' in all_data.columns:
