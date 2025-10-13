@@ -733,16 +733,26 @@ async def get_full_trading_day_data_async(stock_code: str, target_date: str = ""
         # selected_time 그대로 사용 (미래 데이터 수집 방지)
         logger.info(f"📊 {stock_code} 분봉 데이터 수집: 09:00 ~ {selected_time}")
 
+        # 🔥 당일분봉조회 API는 30건 제한이므로 30분씩 나눠서 수집
         time_segments = [
-            ("090000", "110000"),  # 09:00~11:00 (120분)
-            ("110000", "130000"),  # 11:00~13:00 (120분)
-            ("130000", "143000"),  # 13:00~14:30 (90분)
-            ("143000", "153000")   # 14:30~15:30 (60분)
+            ("090000", "092900"),  # 09:00~09:29 (30분)
+            ("093000", "095900"),  # 09:30~09:59 (30분)
+            ("100000", "102900"),  # 10:00~10:29 (30분)
+            ("103000", "105900"),  # 10:30~10:59 (30분)
+            ("110000", "112900"),  # 11:00~11:29 (30분)
+            ("113000", "115900"),  # 11:30~11:59 (30분)
+            ("120000", "122900"),  # 12:00~12:29 (30분)
+            ("123000", "125900"),  # 12:30~12:59 (30분)
+            ("130000", "132900"),  # 13:00~13:29 (30분)
+            ("133000", "135900"),  # 13:30~13:59 (30분)
+            ("140000", "142900"),  # 14:00~14:29 (30분)
+            ("143000", "145900"),  # 14:30~14:59 (30분)
+            ("150000", "153000")   # 15:00~15:30 (31분)
         ]
 
         for back in range(0, FALLBACK_MAX_DAYS + 1):
             attempt_date = (base_dt - _td(days=back)).strftime("%Y%m%d")
-            logger.info(f"📊 {stock_code} 전체 거래시간 분봉 데이터 수집 시작 (비동기, {attempt_date} {selected_time}까지)")
+            logger.info(f"📊 {stock_code} 당일 분봉 데이터 수집 시작 (비동기, {attempt_date} {selected_time}까지)")
 
             needed_segments = []
             for segment_start, segment_end in time_segments:
@@ -752,27 +762,27 @@ async def get_full_trading_day_data_async(stock_code: str, target_date: str = ""
                 # selected_time보다 늦은 구간은 건너뛰기
                 if segment_start >= selected_time:
                     break
-                
+
                 # 실제 필요한 구간 계산
                 actual_start = max(segment_start, start_time)
                 actual_end = min(segment_end, selected_time)
-                
+
                 if actual_start < actual_end:
                     needed_segments.append((actual_start, actual_end))
 
             async def fetch_segment_data(start_time: str, end_time: str):
                 try:
-                    await asyncio.sleep(0.1)
-                    
+                    await asyncio.sleep(0.05)  # API 제한 준수
+
                     # 종목별 적절한 시장 구분 코드 사용
                     div_code = get_div_code_for_stock(stock_code)
-                    
-                    result = get_inquire_time_dailychartprice(
+
+                    # 🔥 당일분봉조회 API 사용 (30건 제한)
+                    result = get_inquire_time_itemchartprice(
                         div_code=div_code,
                         stock_code=stock_code,
-                        input_date=attempt_date,
                         input_hour=end_time,
-                        past_data_yn="N"
+                        past_data_yn="Y"  # 과거 데이터 포함
                     )
                     if result is None:
                         return None

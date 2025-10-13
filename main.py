@@ -366,31 +366,9 @@ class DayTradingBot:
                 self.logger.debug(f"❌ {stock_code} 1분봉 데이터 없음 (None)")
                 return
             if len(combined_data) < 15:
-                self.logger.debug(f"❌ {stock_code} 1분봉 데이터 부족: {len(combined_data)}개 (최소 15개 필요)")
-                
-                # 데이터 부족 시 자동 수집 시도
-                try:
-                    from trade_analysis.data_sufficiency_checker import check_and_collect_data
-                    from utils.korean_time import now_kst
-                    
-                    today = now_kst().strftime('%Y%m%d')
-                    self.logger.info(f"🔄 {stock_code} 데이터 부족으로 자동 수집 시도...")
-                    
-                    if check_and_collect_data(stock_code, today, 15):
-                        # 수집 후 다시 데이터 확인
-                        combined_data = self.intraday_manager.get_combined_chart_data(stock_code)
-                        if combined_data is None or len(combined_data) < 15:
-                            self.logger.warning(f"❌ {stock_code} 자동 수집 후에도 데이터 부족: {len(combined_data) if combined_data is not None else 0}개")
-                            return
-                        else:
-                            self.logger.info(f"✅ {stock_code} 자동 수집 완료: {len(combined_data)}개")
-                    else:
-                        self.logger.warning(f"❌ {stock_code} 자동 수집 실패")
-                        return
-                        
-                except Exception as e:
-                    self.logger.error(f"❌ {stock_code} 자동 수집 중 오류: {e}")
-                    return
+                self.logger.debug(f"❌ {stock_code} 1분봉 데이터 부족: {len(combined_data)}개 (최소 15개 필요) - 실시간 데이터 대기 중")
+                # 실시간 환경에서는 메모리에 있는 데이터만 사용 (캐시 파일 체크 불필요)
+                return
             
             # 🆕 3분봉 변환 시 완성된 봉만 자동 필터링됨 (TimeFrameConverter에서 처리)
             from core.timeframe_converter import TimeFrameConverter
@@ -402,29 +380,33 @@ class DayTradingBot:
                 self.logger.debug(f"❌ {stock_code} 3분봉 데이터 부족: {len(data_3min) if data_3min is not None else 0}개 (최소 5개 필요)")
                 return
 
-            # 🆕 3분봉 연속성 검증: 경고만 표시 (시뮬레이션과 동일하게 차단하지 않음)
+            # 🆕 3분봉 품질 검증: 경고만 표시 (시뮬레이션과 동일하게 차단하지 않음)
             if not data_3min.empty and len(data_3min) >= 2:
                 data_3min_copy = data_3min.copy()
                 data_3min_copy['datetime'] = pd.to_datetime(data_3min_copy['datetime'])
 
-                # 각 봉 사이의 시간 간격 계산 (분 단위)
+                # 1. 시간 간격 검증 (3분봉 연속성)
                 time_diffs = data_3min_copy['datetime'].diff().dt.total_seconds().fillna(0) / 60
-
-                # 3분봉이므로 간격이 정확히 3분이어야 함 (첫 봉은 0이므로 제외)
                 invalid_gaps = time_diffs[1:][(time_diffs[1:] != 3.0) & (time_diffs[1:] != 0.0)]
 
                 if len(invalid_gaps) > 0:
-                    # 불연속 구간 발견 - 경고만 하고 진행
                     gap_indices = invalid_gaps.index.tolist()
                     gap_times = [data_3min_copy.loc[idx, 'datetime'].strftime('%H:%M') for idx in gap_indices]
                     self.logger.warning(f"⚠️ {stock_code} 3분봉 불연속 구간 발견: {', '.join(gap_times)} (간격: {invalid_gaps.values} 분) - 경고만, 진행")
-                    # return 제거 - 시뮬레이션과 동일하게 차단하지 않음
 
-                # 09:00부터 시작하는지 확인
+                # 2. 🆕 각 3분봉의 구성 분봉 개수 검증 (HTS 분봉 누락 감지)
+                if 'candle_count' in data_3min_copy.columns:
+                    incomplete_candles = data_3min_copy[data_3min_copy['candle_count'] < 3]
+                    if not incomplete_candles.empty:
+                        for idx, row in incomplete_candles.iterrows():
+                            candle_time = row['datetime'].strftime('%H:%M')
+                            count = int(row['candle_count'])
+                            self.logger.warning(f"⚠️ {stock_code} 3분봉 내부 누락: {candle_time} ({count}/3개 분봉) - HTS 분봉 누락 가능성")
+
+                # 3. 09:00 시작 확인
                 first_time = data_3min_copy['datetime'].iloc[0]
                 if first_time.hour == 9 and first_time.minute not in [0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30]:
                     self.logger.warning(f"⚠️ {stock_code} 첫 3분봉이 정규 시간이 아님: {first_time.strftime('%H:%M')} (09:00, 09:03, 09:06... 중 하나여야 함) - 경고만, 진행")
-                    # return 제거 - 시뮬레이션과 동일하게 차단하지 않음
                 
             current_time = now_kst()
             last_3min_time = data_3min['datetime'].iloc[-1] if not data_3min.empty else None
@@ -597,8 +579,9 @@ class DayTradingBot:
                     await self._refresh_api()
                     last_api_refresh = current_time
 
-                # 🆕 장중 종목 실시간 데이터 업데이트 (매분 10~30초 사이에 실행)
-                if 10 <= current_time.second <= 30 and (current_time - last_intraday_update).total_seconds() >= 30:  # 매분 10~30초
+                # 🆕 장중 종목 실시간 데이터 업데이트 (매분 10~45초 사이에 실행)
+                # 10~45초 구간에서는 이전 실행으로부터 최소 15초 이상 간격만 유지
+                if 10 <= current_time.second <= 45 and (current_time - last_intraday_update).total_seconds() >= 10:
                     if is_market_open():
                         await self._update_intraday_data()
                     last_intraday_update = current_time
@@ -626,8 +609,8 @@ class DayTradingBot:
                         if chart_generation_count >= 1:
                             self.logger.info("✅ 장 마감 후 차트 생성 완료 (1회 실행 완료)")
                 
-                # 시스템 모니터링 루프 대기 (30초 주기)
-                await asyncio.sleep(30)  
+                # 시스템 모니터링 루프 대기 (5초 주기)
+                await asyncio.sleep(5)  
                 
                 # 30분마다 시스템 상태 로깅
                 if (current_time - last_market_check).total_seconds() >= 30 * 60:  # 30분

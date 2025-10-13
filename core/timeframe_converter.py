@@ -115,7 +115,10 @@ class TimeFrameConverter:
             
             # floor 방식으로 3분봉 경계 계산 (signal_replay와 동일)
             df['floor_3min'] = df.index.floor('3min')
-            
+
+            # 🆕 각 3분봉의 1분봉 개수 카운트 (HTS 분봉 누락 감지)
+            candle_counts = df.groupby('floor_3min').size()
+
             # 3분 구간별로 그룹핑하여 OHLCV 계산
             resampled = df.groupby('floor_3min').agg({
                 'open': 'first',
@@ -124,8 +127,11 @@ class TimeFrameConverter:
                 'close': 'last',
                 'volume': 'sum'
             }).reset_index()
-            
+
             resampled = resampled.rename(columns={'floor_3min': 'datetime'})
+
+            # 🆕 각 3분봉의 구성 분봉 개수 추가
+            resampled['candle_count'] = resampled['datetime'].map(candle_counts)
             
             # 현재 시간 기준으로 완성된 봉만 필터링
             from utils.korean_time import now_kst

@@ -634,7 +634,7 @@ class TradingDecisionEngine:
             self.logger.error(f"❌ 가상 매도 실행 오류: {e}")
     
     def _check_simple_stop_profit_conditions(self, trading_stock, current_price) -> Tuple[bool, str]:
-        """간단한 손절/익절 조건 확인 (매수가격 기준 +3% 익절, -2% 손절)"""
+        """간단한 손절/익절 조건 확인 (trading_config.json의 손익비 설정 사용)"""
         try:
             if not trading_stock.position:
                 return False, ""
@@ -648,13 +648,19 @@ class TradingDecisionEngine:
             # 수익률 계산 (HTS 방식과 동일: 백분율로 계산)
             profit_rate_percent = (current_price - buy_price) / buy_price * 100
             
-            # 익절 조건: +3% 이상
-            if profit_rate_percent >= 3.0:
-                return True, f"익절 {profit_rate_percent:.1f}% (기준: +3.0%)"
+            # 🆕 trading_config.json에서 손익비 설정 가져오기
+            from config.settings import load_trading_config
+            config = load_trading_config()
+            take_profit_percent = config.risk_management.take_profit_ratio * 100  # 0.035 -> 3.5%
+            stop_loss_percent = config.risk_management.stop_loss_ratio * 100      # 0.025 -> 2.5%
             
-            # 손절 조건: -2% 이하
-            if profit_rate_percent <= -2.0:
-                return True, f"손절 {profit_rate_percent:.1f}% (기준: -2.0%)"
+            # 익절 조건: config에서 설정한 % 이상
+            if profit_rate_percent >= take_profit_percent:
+                return True, f"익절 {profit_rate_percent:.1f}% (기준: +{take_profit_percent:.1f}%)"
+            
+            # 손절 조건: config에서 설정한 % 이하
+            if profit_rate_percent <= -stop_loss_percent:
+                return True, f"손절 {profit_rate_percent:.1f}% (기준: -{stop_loss_percent:.1f}%)"
             
             return False, ""
             
@@ -663,7 +669,7 @@ class TradingDecisionEngine:
             return False, ""
     
     def _check_stop_loss_conditions(self, trading_stock, data) -> Tuple[bool, str]:
-        """손절 조건 확인 (신호강도별 손익비 2:1 적용)"""
+        """손절 조건 확인 (trading_config.json의 손익비 설정 사용)"""
         try:
             if not trading_stock.position:
                 return False, ""
@@ -671,9 +677,11 @@ class TradingDecisionEngine:
             current_price = data['close'].iloc[-1]
             buy_price = trading_stock.position.avg_price
             
-            # 임시 고정: 익절 +3%, 손절 -2%
-            target_profit_rate = 0.03  # 3% 고정
-            stop_loss_rate = 0.02      # 2% 고정
+            # 🆕 trading_config.json에서 손익비 설정 가져오기
+            from config.settings import load_trading_config
+            config = load_trading_config()
+            target_profit_rate = config.risk_management.take_profit_ratio  # 0.035 (3.5%)
+            stop_loss_rate = config.risk_management.stop_loss_ratio        # 0.025 (2.5%)
             
             loss_rate = (current_price - buy_price) / buy_price
             if loss_rate <= -stop_loss_rate:
@@ -817,6 +825,7 @@ class TradingDecisionEngine:
             if not self._is_candle_confirmed(data_3min):
                 return False, "3분봉 미확정", None
             
+            '''
             # 일봉 데이터 가져오기 (intraday_manager에서)
             daily_data = None
             if self.intraday_manager:
@@ -828,6 +837,7 @@ class TradingDecisionEngine:
                             self.logger.debug(f"📊 {trading_stock.stock_code} 일봉 데이터 전달: {len(daily_data)}개")
                 except Exception as e:
                     self.logger.debug(f"⚠️ {trading_stock.stock_code} 일봉 데이터 조회 실패: {e}")
+            '''
 
             # 🆕 개선된 신호 생성 로직 사용 (3/5가 계산 포함 + 일봉 데이터 제외 - 시뮬과 동일)
             signal_strength = PullbackCandlePattern.generate_improved_signals(
@@ -947,14 +957,19 @@ class TradingDecisionEngine:
             candle_end_time = last_candle_time + pd.Timedelta(minutes=3)
             is_confirmed = current_time >= candle_end_time
             
-            # 🆕 3분봉 확정될 때만 상세 로깅 (로그 길이 최적화)
+            # 🆕 3분봉 확정될 때만 상세 로깅 + 지연 체크 (로그 길이 최적화)
             if is_confirmed:
                 time_diff_sec = (current_time - candle_end_time).total_seconds()
-                
+
                 self.logger.info(f"📊 3분봉 확정 완료!")
                 self.logger.info(f"  - 확정된 3분봉: {last_candle_time.strftime('%H:%M:%S')} ~ {candle_end_time.strftime('%H:%M:%S')}")
                 self.logger.info(f"  - 현재 시간: {current_time.strftime('%H:%M:%S')} (확정 후 {time_diff_sec:.1f}초 경과)")
-            
+
+                # 🚫 HTS 분봉 누락 대비: 5분(300초) 이상 지연된 3분봉은 신호 무효
+                if time_diff_sec > 300:
+                    self.logger.warning(f"⚠️ 3분봉 지연 초과 ({time_diff_sec/60:.1f}분) - HTS 분봉 누락 가능성")
+                    return False  # 매수 신호 차단
+
             return is_confirmed
             
         except Exception as e:

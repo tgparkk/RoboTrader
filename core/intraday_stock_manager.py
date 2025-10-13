@@ -283,8 +283,9 @@ class IntradayStockManager:
                     # 데이터가 불완전하면 폴백 방식으로 재시도
                     return await self._collect_historical_data_fallback(stock_code)
             
-            # 📊 ML용 일봉 데이터 수집 
-            daily_data = await self._collect_daily_data_for_ml(stock_code)
+            # 📊 ML용 일봉 데이터 수집 (주석 처리)
+            # daily_data = await self._collect_daily_data_for_ml(stock_code)
+            daily_data = pd.DataFrame()  # 빈 DataFrame
             
             # 메모리에 저장
             with self._lock:
@@ -511,6 +512,7 @@ class IntradayStockManager:
             with self._lock:
                 if stock_code in self.selected_stocks:
                     current_realtime = self.selected_stocks[stock_code].realtime_data.copy()
+                    before_count = len(current_realtime)
                     
                     # 새로운 데이터를 realtime_data에 추가
                     if current_realtime.empty:
@@ -518,16 +520,29 @@ class IntradayStockManager:
                     else:
                         # 중복 제거하면서 병합 (최신 데이터 우선)
                         updated_realtime = pd.concat([current_realtime, latest_minute_data], ignore_index=True)
+                        before_merge_count = len(updated_realtime)
+                        
                         if 'datetime' in updated_realtime.columns:
                             # keep='last': 동일 시간이면 최신 데이터 유지
                             updated_realtime = updated_realtime.drop_duplicates(subset=['datetime'], keep='last').sort_values('datetime').reset_index(drop=True)
                         elif 'time' in updated_realtime.columns:
                             updated_realtime = updated_realtime.drop_duplicates(subset=['time'], keep='last').sort_values('time').reset_index(drop=True)
+                        
+                        # 🆕 중복 제거 결과 로깅
+                        after_merge_count = len(updated_realtime)
+                        if before_merge_count != after_merge_count:
+                            removed = before_merge_count - after_merge_count
+                            self.logger.debug(f"   {stock_code} 중복 제거: {before_merge_count} → {after_merge_count} ({removed}개 중복)")
                     
                     self.selected_stocks[stock_code].realtime_data = updated_realtime
                     self.selected_stocks[stock_code].last_update = current_time
+                    
+                    # 🆕 업데이트 결과 로깅
+                    after_count = len(updated_realtime)
+                    new_added = after_count - before_count
+                    if new_added > 0:
+                        self.logger.debug(f"✅ {stock_code} realtime_data 업데이트: {before_count} → {after_count} (+{new_added}개)")
             
-            #self.logger.debug(f"✅ {stock_code} 최신 분봉 1건 업데이트 완료")
             return True
             
         except Exception as e:
@@ -632,31 +647,46 @@ class IntradayStockManager:
             # 분봉 API로 완성된 데이터 조회
             div_code = get_div_code_for_stock(stock_code)
             
+            # 🆕 매분 1개 분봉만 가져오기 (중복 방지)
             result = get_inquire_time_itemchartprice(
                 div_code=div_code,
                 stock_code=stock_code,
                 input_hour=target_hour,
-                past_data_yn="N"  # 최신 데이터만
+                past_data_yn="Y"  # 요청 시간의 1분봉만 가져오기
             )
-            
+
             if result is None:
                 return None
-            
+
             summary_df, chart_df = result
-            
+
             if chart_df.empty:
                 return None
-            
-            # 요청한 시간의 완성된 분봉 데이터만 선택
-            latest_data = chart_df.tail(1).copy()
-            
-            # 로깅: 실제 수집된 데이터 시간 확인
-            '''
-            if 'time' in latest_data.columns and not latest_data.empty:
-                actual_time = str(latest_data['time'].iloc[0]).zfill(6)
-                self.logger.debug(f"✅ {stock_code} 완성된 분봉 수집: {actual_time} (요청: {target_hour})")
-            '''
-            
+
+            # 🆕 past_data_yn="Y"로 여러 개가 왔을 경우, 요청한 시간의 분봉만 추출
+            if 'time' in chart_df.columns and len(chart_df) > 1:
+                # 요청한 시간과 정확히 일치하는 분봉만 필터링
+                target_time = int(target_hour)
+                matched_data = chart_df[chart_df['time'] == target_time]
+                
+                if not matched_data.empty:
+                    latest_data = matched_data.copy()
+                    self.logger.debug(f"✅ {stock_code} 분봉 수집: {target_hour} (API: {len(chart_df)}개 중 1개 추출)")
+                else:
+                    # 정확히 일치하는 데이터가 없으면 마지막(최신) 데이터 사용
+                    # 시간순 정렬 후 마지막 데이터
+                    chart_df_sorted = chart_df.sort_values('time')
+                    latest_data = chart_df_sorted.tail(1).copy()
+                    actual_time = str(latest_data['time'].iloc[0]).zfill(6)
+                    self.logger.debug(f"✅ {stock_code} 분봉 수집: {actual_time} (요청: {target_hour}, API: {len(chart_df)}개 중 최신 추출)")
+            else:
+                latest_data = chart_df.copy()
+                if 'time' in latest_data.columns and not latest_data.empty:
+                    time_str = str(latest_data['time'].iloc[0]).zfill(6)
+                    self.logger.debug(f"✅ {stock_code} 분봉 수집: {time_str} (요청: {target_hour})")
+                elif latest_data.empty:
+                    self.logger.warning(f"⚠️ {stock_code} API 응답 빈 데이터 (요청: {target_hour})")
+
             return latest_data
             
         except Exception as e:
@@ -786,7 +816,7 @@ class IntradayStockManager:
                 return None
             elif realtime_data.empty:
                 combined_data = historical_data.copy()
-                self.logger.error(f"📊 {stock_code} 과거 데이터만 사용: {len(combined_data)}건")
+                self.logger.debug(f"📊 {stock_code} 과거 데이터만 사용: {len(combined_data)}건 (realtime_data 아직 없음)")
                 
                 # 데이터 부족 시 자동 수집 시도
                 if len(combined_data) < 15:
@@ -1249,6 +1279,12 @@ class IntradayStockManager:
             all_data = pd.concat([stock_data.historical_data, stock_data.realtime_data], ignore_index=True)
             if all_data.empty:
                 return {'has_issues': True, 'issues': ['데이터 없음']}
+            
+            # 🆕 시간순 정렬 (품질 검사 전 필수)
+            if 'time' in all_data.columns:
+                all_data = all_data.sort_values('time').reset_index(drop=True)
+            elif 'datetime' in all_data.columns:
+                all_data = all_data.sort_values('datetime').reset_index(drop=True)
             
             issues = []
             # DataFrame을 dict 형태로 변환하여 기존 로직과 호환
