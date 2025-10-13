@@ -541,7 +541,12 @@ class IntradayStockManager:
                     after_count = len(updated_realtime)
                     new_added = after_count - before_count
                     if new_added > 0:
-                        self.logger.debug(f"✅ {stock_code} realtime_data 업데이트: {before_count} → {after_count} (+{new_added}개)")
+                        # 최근 추가된 분봉 시간 표시
+                        if 'time' in updated_realtime.columns and new_added <= 3:
+                            recent_times = [str(int(t)).zfill(6) for t in updated_realtime['time'].tail(new_added).tolist()]
+                            self.logger.debug(f"✅ {stock_code} realtime_data 업데이트: {before_count} → {after_count} (+{new_added}개: {', '.join(recent_times)})")
+                        else:
+                            self.logger.debug(f"✅ {stock_code} realtime_data 업데이트: {before_count} → {after_count} (+{new_added}개)")
             
             return True
             
@@ -663,28 +668,39 @@ class IntradayStockManager:
             if chart_df.empty:
                 return None
 
-            # 🆕 past_data_yn="Y"로 여러 개가 왔을 경우, 요청한 시간의 분봉만 추출
-            if 'time' in chart_df.columns and len(chart_df) > 1:
-                # 요청한 시간과 정확히 일치하는 분봉만 필터링
+            # 🆕 past_data_yn="Y"로 여러 개가 왔을 경우, 최근 2개 분봉 추출 (현재 + 1분 전)
+            # 선정 시점과 첫 업데이트 사이의 누락 방지
+            if 'time' in chart_df.columns and len(chart_df) > 0:
+                # 시간순 정렬
+                chart_df_sorted = chart_df.sort_values('time')
                 target_time = int(target_hour)
-                matched_data = chart_df[chart_df['time'] == target_time]
+                
+                # 1분 전 시간 계산
+                prev_hour = int(target_hour[:2])
+                prev_min = int(target_hour[2:4])
+                if prev_min == 0:
+                    prev_hour = prev_hour - 1
+                    prev_min = 59
+                else:
+                    prev_min = prev_min - 1
+                prev_time = prev_hour * 10000 + prev_min * 100  # HHMMSS 형식
+                
+                # 요청 시간과 1분 전 시간의 분봉 추출 (최대 2개)
+                target_times = [prev_time, target_time]
+                matched_data = chart_df_sorted[chart_df_sorted['time'].isin(target_times)]
                 
                 if not matched_data.empty:
                     latest_data = matched_data.copy()
-                    self.logger.debug(f"✅ {stock_code} 분봉 수집: {target_hour} (API: {len(chart_df)}개 중 1개 추출)")
+                    collected_times = [str(int(t)).zfill(6) for t in latest_data['time'].tolist()]
+                    self.logger.debug(f"✅ {stock_code} 분봉 수집: {', '.join(collected_times)} ({len(latest_data)}개, 요청: {target_hour})")
                 else:
-                    # 정확히 일치하는 데이터가 없으면 마지막(최신) 데이터 사용
-                    # 시간순 정렬 후 마지막 데이터
-                    chart_df_sorted = chart_df.sort_values('time')
-                    latest_data = chart_df_sorted.tail(1).copy()
-                    actual_time = str(latest_data['time'].iloc[0]).zfill(6)
-                    self.logger.debug(f"✅ {stock_code} 분봉 수집: {actual_time} (요청: {target_hour}, API: {len(chart_df)}개 중 최신 추출)")
+                    # 일치하는 데이터가 없으면 최신 2개 사용
+                    latest_data = chart_df_sorted.tail(2).copy()
+                    collected_times = [str(int(t)).zfill(6) for t in latest_data['time'].tolist()]
+                    self.logger.debug(f"✅ {stock_code} 분봉 수집: {', '.join(collected_times)} (요청: {target_hour}, 최신 {len(latest_data)}개)")
             else:
                 latest_data = chart_df.copy()
-                if 'time' in latest_data.columns and not latest_data.empty:
-                    time_str = str(latest_data['time'].iloc[0]).zfill(6)
-                    self.logger.debug(f"✅ {stock_code} 분봉 수집: {time_str} (요청: {target_hour})")
-                elif latest_data.empty:
+                if latest_data.empty:
                     self.logger.warning(f"⚠️ {stock_code} API 응답 빈 데이터 (요청: {target_hour})")
 
             return latest_data
@@ -1280,11 +1296,11 @@ class IntradayStockManager:
             if all_data.empty:
                 return {'has_issues': True, 'issues': ['데이터 없음']}
             
-            # 🆕 시간순 정렬 (품질 검사 전 필수)
+            # 🆕 시간순 정렬 및 중복 제거 (품질 검사 전 필수)
             if 'time' in all_data.columns:
-                all_data = all_data.sort_values('time').reset_index(drop=True)
+                all_data = all_data.drop_duplicates(subset=['time'], keep='last').sort_values('time').reset_index(drop=True)
             elif 'datetime' in all_data.columns:
-                all_data = all_data.sort_values('datetime').reset_index(drop=True)
+                all_data = all_data.drop_duplicates(subset=['datetime'], keep='last').sort_values('datetime').reset_index(drop=True)
             
             issues = []
             # DataFrame을 dict 형태로 변환하여 기존 로직과 호환

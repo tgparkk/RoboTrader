@@ -169,8 +169,8 @@ class DayTradingBot:
             # 3. 텔레그램 초기화
             await self.telegram.initialize()
             
-            # 4. 후보 종목 설정 (동적 선정을 위해 초기화만 수행)
-            # TODO: 매일 장전 동적으로 후보 종목 선정 로직 구현
+            # 4. DB에서 오늘 날짜의 후보 종목 복원
+            await self._restore_todays_candidates()
             
             self.logger.info("✅ 시스템 초기화 완료")
             return True
@@ -758,6 +758,81 @@ class DayTradingBot:
             await self.telegram.notify_error("API Refresh", e)
             return False
     
+    async def _restore_todays_candidates(self):
+        """DB에서 오늘 날짜의 후보 종목 복원"""
+        try:
+            import sqlite3
+            from pathlib import Path
+            
+            # DB 경로
+            db_path = Path(__file__).parent / "data" / "robotrader.db"
+            if not db_path.exists():
+                self.logger.info("📊 DB 파일 없음 - 후보 종목 복원 건너뜀")
+                return
+            
+            # 오늘 날짜
+            today = now_kst().strftime('%Y-%m-%d')
+            
+            with sqlite3.connect(str(db_path)) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT DISTINCT stock_code, stock_name, score, reasons 
+                    FROM candidate_stocks 
+                    WHERE DATE(selection_date) = ?
+                    ORDER BY score DESC
+                ''', (today,))
+                
+                rows = cursor.fetchall()
+            
+            if not rows:
+                self.logger.info(f"📊 오늘({today}) 후보 종목 없음")
+                return
+            
+            self.logger.info(f"🔄 오늘({today}) 후보 종목 {len(rows)}개 복원 시작")
+            
+            restored_count = 0
+            for row in rows:
+                stock_code = row[0]
+                stock_name = row[1] or f"Stock_{stock_code}"
+                score = row[2] or 0.0
+                reason = row[3] or "DB 복원"
+                
+                # 전날 종가 조회
+                prev_close = 0.0
+                try:
+                    daily_data = self.api_manager.get_ohlcv_data(stock_code, "D", 7)
+                    if daily_data is not None and len(daily_data) >= 2:
+                        if hasattr(daily_data, 'iloc'):
+                            daily_data = daily_data.sort_values('stck_bsop_date')
+                            last_date = daily_data.iloc[-1]['stck_bsop_date']
+                            if isinstance(last_date, str):
+                                from datetime import datetime
+                                last_date = datetime.strptime(last_date, '%Y%m%d').date()
+                            elif hasattr(last_date, 'date'):
+                                last_date = last_date.date()
+                            
+                            if last_date == now_kst().date() and len(daily_data) >= 2:
+                                prev_close = float(daily_data.iloc[-2]['stck_clpr'])
+                            else:
+                                prev_close = float(daily_data.iloc[-1]['stck_clpr'])
+                except Exception as e:
+                    self.logger.debug(f"⚠️ {stock_code} 전날 종가 조회 실패: {e}")
+                
+                # 거래 상태 관리자에 추가
+                success = await self.trading_manager.add_selected_stock(
+                    stock_code=stock_code,
+                    stock_name=stock_name,
+                    selection_reason=f"DB복원: {reason} (점수: {score})",
+                    prev_close=prev_close
+                )
+                
+                if success:
+                    restored_count += 1
+            
+            self.logger.info(f"✅ 오늘 후보 종목 {restored_count}/{len(rows)}개 복원 완료")
+            
+        except Exception as e:
+            self.logger.error(f"❌ 오늘 후보 종목 복원 실패: {e}")
    
     async def _check_condition_search(self):
         """장중 조건검색 체크"""
