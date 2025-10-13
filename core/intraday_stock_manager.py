@@ -837,7 +837,7 @@ class IntradayStockManager:
                 # 데이터 부족 시 자동 수집 시도
                 if len(combined_data) < 15:
                     try:
-                        from trade_analysis.data_sufficiency_checker import collect_minute_data_from_api, save_minute_data_to_cache
+                        from trade_analysis.data_sufficiency_checker import collect_minute_data_from_api
                         from utils.korean_time import now_kst
                         
                         today = now_kst().strftime('%Y%m%d')
@@ -846,8 +846,8 @@ class IntradayStockManager:
                         # API에서 직접 분봉 데이터 수집
                         minute_data = collect_minute_data_from_api(stock_code, today)
                         if minute_data is not None and not minute_data.empty:
-                            # 캐시에 저장
-                            save_minute_data_to_cache(stock_code, today, minute_data)
+                            # 🆕 캐시 저장 제거 (15:30 장 마감 시에만 저장)
+                            # 메모리에만 저장
                             
                             # historical_data에 추가
                             with self._lock:
@@ -858,7 +858,7 @@ class IntradayStockManager:
                             
                             # 수정된 데이터로 다시 결합
                             combined_data = minute_data.copy()
-                            self.logger.info(f"✅ {stock_code} 자동 수집 완료: {len(combined_data)}개")
+                            self.logger.info(f"✅ {stock_code} 자동 수집 완료: {len(combined_data)}개 (메모리에만 저장)")
                         else:
                             self.logger.warning(f"❌ {stock_code} 자동 수집 실패")
                             return None
@@ -1461,6 +1461,24 @@ class IntradayStockManager:
                     
                     if combined_data is None or combined_data.empty:
                         self.logger.warning(f"⚠️ {stock_code} 저장할 데이터 없음")
+                        continue
+                    
+                    # 🆕 당일 데이터만 필터링 (이중 확인)
+                    before_count = len(combined_data)
+                    if 'date' in combined_data.columns:
+                        combined_data = combined_data[combined_data['date'].astype(str) == today].copy()
+                    elif 'datetime' in combined_data.columns:
+                        combined_data['date_str'] = pd.to_datetime(combined_data['datetime']).dt.strftime('%Y%m%d')
+                        combined_data = combined_data[combined_data['date_str'] == today].copy()
+                        if 'date_str' in combined_data.columns:
+                            combined_data = combined_data.drop('date_str', axis=1)
+                    
+                    if before_count != len(combined_data):
+                        removed = before_count - len(combined_data)
+                        self.logger.warning(f"⚠️ {stock_code} 저장 시 전날 데이터 {removed}건 제외: {before_count} → {len(combined_data)}건")
+                    
+                    if combined_data.empty:
+                        self.logger.warning(f"⚠️ {stock_code} 당일 데이터 없음 (저장 건너뜀)")
                         continue
                     
                     # 파일명: 종목코드_날짜.pkl (save_candidate_data.py와 동일)
