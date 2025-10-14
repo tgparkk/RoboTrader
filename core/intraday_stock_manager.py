@@ -1104,45 +1104,6 @@ class IntradayStockManager:
             self.logger.error(f"❌ {stock_code} 결합 차트 데이터 생성 오류: {e}")
             return None
     
-    def get_combined_chart_data_with_realtime(self, stock_code: str) -> Optional[pd.DataFrame]:
-        """
-        종목의 당일 전체 차트 데이터 조회 (완성된 봉 + 실시간 진행중인 봉)
-        
-        기존 get_combined_chart_data()에 현재가 API를 이용한 실시간 생성 1분봉을 추가하여
-        3분봉 매매 판단 시 지연을 최소화합니다.
-        
-        Args:
-            stock_code: 종목코드
-            
-        Returns:
-            pd.DataFrame: 당일 전체 차트 데이터 (완성된 봉 + 실시간 진행중인 봉)
-        """
-        try:
-            # 기존 완성된 분봉 데이터 가져오기
-            completed_data = self.get_combined_chart_data(stock_code)
-            if completed_data is None or completed_data.empty:
-                return completed_data
-            
-            # 실시간 캔들 빌더를 통해 누락된 완성 분봉 보완 + 진행중인 1분봉 추가
-            candle_builder = get_realtime_candle_builder()
-            enhanced_data = candle_builder.fill_missing_candles_and_combine(stock_code, completed_data)
-            
-            # 종목명 가져오기 (로깅용)
-            stock_name = ""
-            with self._lock:
-                if stock_code in self.selected_stocks:
-                    stock_name = self.selected_stocks[stock_code].stock_name
-            
-            # 실시간 데이터가 추가되었는지 로깅
-            if len(enhanced_data) > len(completed_data):
-                self.logger.debug(f"🔄 {stock_code}({stock_name}) 실시간 1분봉 추가: {len(completed_data)} → {len(enhanced_data)}건")
-            
-            return enhanced_data
-            
-        except Exception as e:
-            self.logger.error(f"❌ {stock_code} 실시간 포함 차트 데이터 생성 오류: {e}")
-            # 오류 시 기존 완성된 데이터라도 반환
-            return self.get_combined_chart_data(stock_code)
     
     def get_stock_analysis(self, stock_code: str) -> Optional[Dict[str, Any]]:
         """
@@ -1582,47 +1543,6 @@ class IntradayStockManager:
         """당일 데이터인지 검증 (래퍼 함수)"""
         return validate_today_data(data)
 
-    async def _collect_daily_data_for_ml(self, stock_code: str) -> pd.DataFrame:
-        """
-        ML 예측용 일봉 데이터 수집 (100일치)
-        
-        Args:
-            stock_code: 종목코드
-            
-        Returns:
-            pd.DataFrame: 일봉 데이터 (100일치) 
-        """
-        try:
-            self.logger.info(f"📈 {stock_code} ML용 일봉 데이터 수집 시작 (100일)")
-            
-            # 기존 API를 사용하여 일봉 데이터 수집
-            from api.kis_market_api import get_inquire_daily_itemchartprice
-            from datetime import timedelta
-            from utils.korean_time import now_kst
-            
-            # 100일치 일봉 데이터 수집
-            end_date = now_kst().strftime("%Y%m%d")
-            start_date = (now_kst() - timedelta(days=100)).strftime("%Y%m%d")
-            
-            daily_data = get_inquire_daily_itemchartprice(
-                div_code="J",
-                itm_no=stock_code,
-                inqr_strt_dt=start_date,
-                inqr_end_dt=end_date,
-                period_code="D",  # 일봉
-                adj_prc="0"  # 수정주가
-            )
-            
-            if daily_data is not None and not daily_data.empty:
-                self.logger.info(f"✅ {stock_code} 일봉 데이터 수집 성공: {len(daily_data)}일치")
-                return daily_data
-            else:
-                self.logger.warning(f"⚠️ {stock_code} 일봉 데이터 수집 실패 - 빈 데이터")
-                return pd.DataFrame()
-                
-        except Exception as e:
-            self.logger.error(f"❌ {stock_code} 일봉 데이터 수집 오류: {e}")
-            return pd.DataFrame()
 
     def _save_minute_data_to_cache(self):
         """

@@ -273,55 +273,37 @@ class DayTradingBot:
             self.logger.error(f"❌ 매매 의사결정 태스크 오류: {e}")
     
     async def _execute_trading_decision(self, available_funds: float = None):
-        """매매 판단 시스템 실행
+        """매매 판단 시스템 실행 (매도 판단 + 포지션 동기화)
 
         Args:
-            available_funds: 사용 가능한 자금 (미리 계산된 값)
+            available_funds: 사용 가능한 자금 (미리 계산된 값) - 현재 미사용
         """
         try:
-            # 자금 정보 로깅
-            if available_funds is not None:
-                self.logger.debug(f"💰 전달된 가용 자금: {available_funds:,.0f}원")
-
             # TradingStockManager에서 관리 중인 종목들 확인
             from core.models import StockState
-            
+
             selected_stocks = self.trading_manager.get_stocks_by_state(StockState.SELECTED)
             positioned_stocks = self.trading_manager.get_stocks_by_state(StockState.POSITIONED)
             buy_pending_stocks = self.trading_manager.get_stocks_by_state(StockState.BUY_PENDING)
             sell_pending_stocks = self.trading_manager.get_stocks_by_state(StockState.SELL_PENDING)
             completed_stocks = self.trading_manager.get_stocks_by_state(StockState.COMPLETED)
-            
+
             self.logger.info(
                 f"📦 종목 상태 현황:\n"
-                f"  - SELECTED: {len(selected_stocks)}개 (매수 판단 대상)\n"
+                f"  - SELECTED: {len(selected_stocks)}개 (매수 대기)\n"
                 f"  - COMPLETED: {len(completed_stocks)}개 (재거래 가능)\n"
                 f"  - BUY_PENDING: {len(buy_pending_stocks)}개 (매수 주문 중)\n"
                 f"  - POSITIONED: {len(positioned_stocks)}개 (보유중)\n"
                 f"  - SELL_PENDING: {len(sell_pending_stocks)}개 (매도 주문 중)"
             )
-            
+
             # 매수 주문 중인 종목 상세 정보
             if buy_pending_stocks:
                 for stock in buy_pending_stocks:
                     self.logger.info(f"  📊 매수 체결 대기: {stock.stock_code}({stock.stock_name}) - 주문ID: {stock.current_order_id}")
-            
-            # 매수 판단: 선정된 종목들 + 재거래 가능한 완료 종목들
-            buy_decision_candidates = selected_stocks + completed_stocks
-            
-            # 12시 이후 매수 금지 체크
-            current_time = now_kst()
-            is_after_Npm = current_time.hour >= 12
-            
-            if buy_decision_candidates and not is_after_Npm:
-                self.logger.debug(f"🔍 매수 판단 대상: SELECTED={len(selected_stocks)}개, COMPLETED={len(completed_stocks)}개 (총 {len(buy_decision_candidates)}개)")
-                for trading_stock in buy_decision_candidates:
-                    await self._analyze_buy_decision(trading_stock, available_funds)
-            else:
-                if is_after_Npm:
-                    self.logger.debug("📊 12시 이후이므로 매수 금지")
-                else:
-                    self.logger.debug("📊 매수 판단 대상 종목 없음 (SELECTED + COMPLETED 상태 종목 없음)")
+
+            # 🆕 매수 판단은 _update_intraday_data()에서 데이터 업데이트 직후 실행됨 (3분봉 + 10초 타이밍)
+            # 이 함수에서는 매도 판단과 포지션 동기화만 수행
 
             # 🔧 긴급 포지션 동기화 (주석 처리됨 - 필요시 활성화)
             await self.emergency_sync_positions()
@@ -337,7 +319,7 @@ class DayTradingBot:
                         self.logger.warning(f"⚠️ {trading_stock.stock_code} 포지션 정보 없음 (매도 판단 건너뜀)")
             else:
                 self.logger.debug("📊 매도 판단 대상 종목 없음 (POSITIONED 상태 종목 없음)")
-                
+
         except Exception as e:
             self.logger.error(f"❌ 매매 판단 시스템 오류: {e}")
     
@@ -351,9 +333,9 @@ class DayTradingBot:
         try:
             stock_code = trading_stock.stock_code
             stock_name = trading_stock.stock_name
-            
+
             self.logger.debug(f"🔍 매수 판단 시작: {stock_code}({stock_name})")
-            
+
             # 추가 안전 검증: 현재 보유 중인 종목인지 다시 한번 확인
             positioned_stocks = self.trading_manager.get_stocks_by_state(StockState.POSITIONED)
             if any(pos_stock.stock_code == stock_code for pos_stock in positioned_stocks):
@@ -365,7 +347,10 @@ class DayTradingBot:
                 remaining_minutes = trading_stock.get_remaining_cooldown_minutes()
                 self.logger.debug(f"⚠️ {stock_code}: 매수 쿨다운 활성화 (남은 시간: {remaining_minutes}분)")
                 return
-            
+
+            # 🆕 타이밍 체크는 _update_intraday_data()에서 이미 수행됨 (3분봉 완성 + 10초 후)
+            # 여기서는 종목별 매수 판단만 수행
+
             # 분봉 데이터 가져오기
             combined_data = self.intraday_manager.get_combined_chart_data(stock_code)
             if combined_data is None:
@@ -378,7 +363,6 @@ class DayTradingBot:
             
             # 🆕 3분봉 변환 시 완성된 봉만 자동 필터링됨 (TimeFrameConverter에서 처리)
             from core.timeframe_converter import TimeFrameConverter
-            from utils.korean_time import now_kst
 
             data_3min = TimeFrameConverter.convert_to_3min_data(combined_data)
 
@@ -413,14 +397,7 @@ class DayTradingBot:
                 first_time = data_3min_copy['datetime'].iloc[0]
                 if first_time.hour == 9 and first_time.minute not in [0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30]:
                     self.logger.warning(f"⚠️ {stock_code} 첫 3분봉이 정규 시간이 아님: {first_time.strftime('%H:%M')} (09:00, 09:03, 09:06... 중 하나여야 함) - 경고만, 진행")
-                
-            current_time = now_kst()
-            last_3min_time = data_3min['datetime'].iloc[-1] if not data_3min.empty else None
-            
-            #self.logger.debug(f"📊 {stock_code} 매수판단 - 현재: {current_time.strftime('%H:%M:%S')}, "
-            #                f"마지막 완성된 3분봉: {last_3min_time.strftime('%H:%M:%S') if last_3min_time else 'None'} "
-            #                f"(총 {len(data_3min)}개 3분봉)")
-            
+
             # 매매 판단 엔진으로 매수 신호 확인 (완성된 3분봉 데이터 사용)
             buy_signal, buy_reason, buy_info = await self.decision_engine.analyze_buy_decision(trading_stock, data_3min)
             
@@ -955,18 +932,55 @@ class DayTradingBot:
             await self.telegram.notify_error("Condition Search", e)
     
     async def _update_intraday_data(self):
-        """장중 종목 실시간 데이터 업데이트 (완성된 분봉만 수집)"""
+        """장중 종목 실시간 데이터 업데이트 + 매수 판단 실행 (완성된 분봉만 수집)"""
         try:
             from utils.korean_time import now_kst
             current_time = now_kst()
-            
+
             # 🆕 완성된 봉만 수집하는 것을 로깅
             #self.logger.debug(f"🔄 실시간 데이터 업데이트 시작: {current_time.strftime('%H:%M:%S')} "
             #                f"(모든 관리 종목 - 재거래 대응)")
-            
+
             # 모든 관리 종목의 실시간 데이터 업데이트 (재거래를 위해 COMPLETED, FAILED 상태도 포함)
             await self.intraday_manager.batch_update_realtime_data()
-            
+
+            # 🆕 3분봉 완성 + 10초 후 시점 체크
+            # 3분봉 완성 시점: 매 3분마다 (09:00, 09:03, 09:06, ...)
+            # 매수 판단 허용 시점: 각 3분봉 완성 후 10~59초 사이의 첫 번째 호출만
+            minute_in_3min_cycle = current_time.minute % 3
+            current_second = current_time.second
+
+            # 3분봉 사이클의 첫 번째 분(0, 3, 6, 9...)이고 10초 이후일 때만 매수 판단
+            is_3min_candle_completed = (minute_in_3min_cycle == 0 and current_second >= 10)
+
+            if not is_3min_candle_completed:
+                self.logger.debug(f"⏱️ 3분봉 미완성 또는 10초 미경과: {current_time.strftime('%H:%M:%S')} - 매수 판단 건너뜀")
+                return
+
+            # 🆕 데이터 업데이트 직후 매수 판단 실행 (3분봉 완성 + 10초 후)
+            # 12시 이전이고 SELECTED/COMPLETED 상태 종목만 매수 판단
+            is_after_noon = current_time.hour >= 12
+
+            if not is_after_noon:
+                # 가용 자금 계산
+                balance_info = self.api_manager.get_account_balance()
+                if balance_info:
+                    self.fund_manager.update_total_funds(float(balance_info.account_balance))
+
+                fund_status = self.fund_manager.get_status()
+                available_funds = fund_status['available_funds']
+
+                # SELECTED + COMPLETED 상태 종목 가져오기
+                selected_stocks = self.trading_manager.get_stocks_by_state(StockState.SELECTED)
+                completed_stocks = self.trading_manager.get_stocks_by_state(StockState.COMPLETED)
+                buy_candidates = selected_stocks + completed_stocks
+
+                if buy_candidates:
+                    self.logger.info(f"🎯 3분봉 완성 후 매수 판단 실행: {current_time.strftime('%H:%M:%S')} - {len(buy_candidates)}개 종목")
+
+                    for trading_stock in buy_candidates:
+                        await self._analyze_buy_decision(trading_stock, available_funds)
+
         except Exception as e:
             self.logger.error(f"❌ 장중 종목 실시간 데이터 업데이트 오류: {e}")
             await self.telegram.notify_error("Intraday Data Update", e)
