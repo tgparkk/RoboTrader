@@ -944,6 +944,9 @@ class DayTradingBot:
             # 모든 관리 종목의 실시간 데이터 업데이트 (재거래를 위해 COMPLETED, FAILED 상태도 포함)
             await self.intraday_manager.batch_update_realtime_data()
 
+            # 🆕 데이터 수집 후 1초 대기 (데이터 안정화)
+            await asyncio.sleep(1)
+
             # 🆕 3분봉 완성 + 10초 후 시점 체크
             # 3분봉 완성 시점: 매 3분마다 (09:00, 09:03, 09:06, ...)
             # 매수 판단 허용 시점: 각 3분봉 완성 후 10~59초 사이의 첫 번째 호출만
