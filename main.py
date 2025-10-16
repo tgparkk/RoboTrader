@@ -562,9 +562,9 @@ class DayTradingBot:
                     await self._refresh_api()
                     last_api_refresh = current_time
 
-                # 🆕 장중 종목 실시간 데이터 업데이트 (매분 10~45초 사이에 실행)
-                # 10~45초 구간에서는 이전 실행으로부터 최소 10초 이상 간격만 유지
-                if 10 <= current_time.second <= 45 and (current_time - last_intraday_update).total_seconds() >= 10:
+                # 🆕 장중 종목 실시간 데이터 업데이트 (매분 13~45초 사이에 실행)
+                # 13~45초 구간에서는 이전 실행으로부터 최소 13초 이상 간격만 유지
+                if 13 <= current_time.second <= 45 and (current_time - last_intraday_update).total_seconds() >= 13:
                     # 장중이거나 15:30~15:40 구간에서는 실행 (데이터 저장 위해)
                     if is_market_open() or (current_time.hour == 15 and 30 <= current_time.minute <= 40):
                         await self._update_intraday_data()
@@ -935,6 +935,7 @@ class DayTradingBot:
         """장중 종목 실시간 데이터 업데이트 + 매수 판단 실행 (완성된 분봉만 수집)"""
         try:
             from utils.korean_time import now_kst
+            from core.data_reconfirmation import reconfirm_intraday_data
             current_time = now_kst()
 
             # 🆕 완성된 봉만 수집하는 것을 로깅
@@ -946,6 +947,14 @@ class DayTradingBot:
 
             # 🆕 데이터 수집 후 1초 대기 (데이터 안정화)
             await asyncio.sleep(1)
+
+            # 🆕 최근 3분 데이터 재확인 (volume=0 but price changed 감지 및 재조회)
+            updated_stocks = await reconfirm_intraday_data(
+                self.intraday_manager,
+                minutes_back=3
+            )
+            if updated_stocks:
+                self.logger.info(f"🔄 데이터 재확인 완료: {len(updated_stocks)}개 종목 업데이트됨")
 
             # 🆕 3분봉 완성 + 10초 후 시점 체크
             # 3분봉 완성 시점: 매 3분마다 (09:00, 09:03, 09:06, ...)
