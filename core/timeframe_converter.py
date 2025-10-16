@@ -155,12 +155,8 @@ class TimeFrameConverter:
                         current_3min_floor = pd.Timestamp(current_3min_floor).tz_localize(resampled['datetime'].dt.tz.iloc[0])
                 
                 # 현재 진행중인 3분봉은 제외 (완성되지 않았으므로)
-                # 예: 09:54:36 시점이면 current_3min_floor=09:54:00
-                #     09:51:00 3분봉(09:51~09:53)은 이미 완성됨 → 포함해야 함
-                #     09:54:00 3분봉(09:54~09:56)은 진행중 → 제외해야 함
-                last_completed_3min = current_3min_floor - pd.Timedelta(minutes=3)
                 completed_data = resampled[
-                    resampled['datetime'] <= last_completed_3min
+                    resampled['datetime'] < current_3min_floor
                 ].copy()
                 
             except Exception as compare_error:
