@@ -476,21 +476,35 @@ class PullbackCandlePattern:
                 result = SignalStrength(SignalType.AVOID, 0, 0, ["이등분선아래"], volume_analysis.volume_ratio, BisectorStatus.BROKEN)
                 return (result, []) if return_risk_signals else result
 
-            # 3. 시가 대비 22% 상승 체크 (매수 차단)
+            # 3. 시가 대비 2% 이상 상승 체크 (매수 필수 조건)
             if day_open_price:
                 current_price = float(current['close'])
                 price_increase_pct = (current_price - day_open_price) / day_open_price * 100
-                
-                if price_increase_pct >= 22.0:
+
+                if price_increase_pct < 2.0:
                     result = SignalStrength(
-                        SignalType.AVOID, 0, 0, 
-                        [f"시가대비{price_increase_pct:.1f}%상승(22%이상차단)"], 
-                        volume_analysis.volume_ratio, 
+                        SignalType.AVOID, 0, 0,
+                        [f"시가대비{price_increase_pct:.1f}%상승(2%미만차단)"],
+                        volume_analysis.volume_ratio,
                         BisectorStatus.BROKEN
                     )
                     return (result, []) if return_risk_signals else result
 
-            # 4. 4단계 지지 패턴 분석 (핵심)
+            # 4. 시가 대비 22% 상승 체크 (매수 차단)
+            if day_open_price:
+                current_price = float(current['close'])
+                price_increase_pct = (current_price - day_open_price) / day_open_price * 100
+
+                if price_increase_pct >= 22.0:
+                    result = SignalStrength(
+                        SignalType.AVOID, 0, 0,
+                        [f"시가대비{price_increase_pct:.1f}%상승(22%이상차단)"],
+                        volume_analysis.volume_ratio,
+                        BisectorStatus.BROKEN
+                    )
+                    return (result, []) if return_risk_signals else result
+
+            # 5. 4단계 지지 패턴 분석 (핵심)
             # 통합된 로직 사용 (현재 시간 기준 분석 + 전체 데이터 분석)
             support_pattern_info = PullbackCandlePattern.analyze_support_pattern(data, debug)
 

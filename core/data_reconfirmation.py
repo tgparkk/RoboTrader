@@ -59,8 +59,8 @@ async def reconfirm_intraday_data(
     total_updated = 0
 
     # IntradayStockManager에서 모든 종목의 realtime_data 수집
-    async with intraday_manager.lock:
-        stocks_to_check = list(intraday_manager.stocks.items())
+    with intraday_manager._lock:
+        stocks_to_check = list(intraday_manager.selected_stocks.items())
 
     for stock_code, stock in stocks_to_check:
         if stock.realtime_data is None or len(stock.realtime_data) < 2:
