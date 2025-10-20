@@ -480,7 +480,7 @@ class PullbackCandlePattern:
             if day_open_price:
                 current_price = float(current['close'])
                 price_increase_pct = (current_price - day_open_price) / day_open_price * 100
-
+                
                 if price_increase_pct < 2.0:
                     result = SignalStrength(
                         SignalType.AVOID, 0, 0,
