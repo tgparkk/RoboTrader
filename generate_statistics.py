@@ -137,12 +137,11 @@ def calculate_statistics(all_trades, start_date, end_date):
 
     # 실제 수익금 계산 (손익비 3:2, 거래당 100만원 기준)
     trade_amount = 1000000  # 100만원
-    target_profit_ratio = 3.5  # 목표 수익 3%
-    stop_loss_ratio = 2.5      # 손절 2%
+    target_profit_ratio = 3.5  # 목표 수익 3.5%
+    stop_loss_ratio = 2.5      # 손절 2.5%
 
-    # 실제 수익금 계산 (승리시 +3%, 손실시 -2%)
-    actual_profit = (win_count * trade_amount * target_profit_ratio / 100) - \
-                   (loss_count * trade_amount * stop_loss_ratio / 100)
+    # 실제 수익금 계산 (각 거래의 실제 수익률 사용)
+    actual_profit = sum(trade_amount * (t['profit'] / 100) for t in all_trades)
     avg_actual_profit = actual_profit / total_trades if total_trades > 0 else 0
 
     # 시간대별 통계
@@ -180,9 +179,8 @@ def calculate_statistics(all_trades, start_date, end_date):
         morning_total_profit = sum(t['profit'] for t in morning_trades)
         morning_avg_profit = morning_total_profit / morning_total if morning_total > 0 else 0
 
-        # 12시 이전 실제 수익금 계산
-        morning_actual_profit = (morning_win_count * trade_amount * target_profit_ratio / 100) - \
-                               (morning_loss_count * trade_amount * stop_loss_ratio / 100)
+        # 12시 이전 실제 수익금 계산 (각 거래의 실제 수익률 사용)
+        morning_actual_profit = sum(trade_amount * (t['profit'] / 100) for t in morning_trades)
         morning_avg_actual_profit = morning_actual_profit / morning_total if morning_total > 0 else 0
 
         morning_stats = {

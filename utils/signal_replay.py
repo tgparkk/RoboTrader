@@ -1293,8 +1293,17 @@ def main():
                         profit_loss_ratio = PROFIT_TAKE_RATE / STOP_LOSS_RATE
                         investment_per_trade = 1_000_000  # 거래당 100만원
 
-                        total_profit = investment_per_trade * (PROFIT_TAKE_RATE / 100) * total_wins
-                        total_loss = investment_per_trade * (STOP_LOSS_RATE / 100) * total_losses
+                        # 실제 수익률을 기반으로 계산
+                        total_profit = 0
+                        total_loss = 0
+                        for trade in all_completed_trades:
+                            if trade.get('sell_time'):  # 매도된 거래만
+                                profit_rate = trade.get('profit_rate', 0)
+                                if profit_rate > 0:
+                                    total_profit += investment_per_trade * (profit_rate / 100)
+                                else:
+                                    total_loss += investment_per_trade * abs(profit_rate / 100)
+
                         net_profit = total_profit - total_loss
                         net_profit_rate = (net_profit / investment_per_trade) * 100
 
@@ -1305,8 +1314,8 @@ def main():
                         lines.append(f"=== 💰 당일 수익 요약 ===")
                         lines.append(f"총 거래: {total_trades}건 ({total_wins}승 {total_losses}패)")
                         lines.append(f"총 수익금: {net_profit:+,.0f}원 ({net_profit_rate:+.1f}%)")
-                        lines.append(f"  ㄴ 승리 수익: +{total_profit:,.0f}원 ({investment_per_trade:,}원 × {PROFIT_TAKE_RATE:.1f}% × {total_wins}건)")
-                        lines.append(f"  ㄴ 손실 금액: -{total_loss:,.0f}원 ({investment_per_trade:,}원 × {STOP_LOSS_RATE:.1f}% × {total_losses}건)")
+                        lines.append(f"  ㄴ 승리 수익: +{total_profit:,.0f}원 (실제 수익률 합계)")
+                        lines.append(f"  ㄴ 손실 금액: -{total_loss:,.0f}원 (실제 손실률 합계)")
                         lines.append("")
 
                     lines.append(f"=== 총 승패: {total_wins}승 {total_losses}패 ===")
