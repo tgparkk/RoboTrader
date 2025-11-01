@@ -1325,7 +1325,25 @@ def main():
                     if morning_wins + morning_losses > 0:
                         morning_total = morning_wins + morning_losses
                         morning_win_rate = (morning_wins / morning_total * 100) if morning_total > 0 else 0
+
+                        # 12시 이전 매수 종목 수익 계산
+                        morning_profit = 0
+                        morning_loss = 0
+                        for detail in morning_trades_details:
+                            profit_rate = detail['profit_rate']
+                            if profit_rate > 0:
+                                morning_profit += investment_per_trade * (profit_rate / 100)
+                            else:
+                                morning_loss += investment_per_trade * abs(profit_rate / 100)
+
+                        morning_net_profit = morning_profit - morning_loss
+                        morning_net_profit_rate = (morning_net_profit / investment_per_trade) * 100 if investment_per_trade > 0 else 0
+
                         lines.append(f"=== 🌅 12시 이전 매수 종목: {morning_wins}승 {morning_losses}패 (승률 {morning_win_rate:.1f}%) ===")
+                        lines.append(f"총 수익금: {morning_net_profit:+,.0f}원 ({morning_net_profit_rate:+.1f}%)")
+                        lines.append(f"  ㄴ 승리 수익: +{morning_profit:,.0f}원")
+                        lines.append(f"  ㄴ 손실 금액: -{morning_loss:,.0f}원")
+                        lines.append("")
 
                         # 개별 거래 상세 표시
                         for detail in sorted(morning_trades_details, key=lambda x: x['buy_time']):
