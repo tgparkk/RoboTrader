@@ -220,6 +220,19 @@ def save_statistics_log(stats, output_dir, start_date, end_date):
     os.makedirs(output_dir, exist_ok=True)
     stats_filename = os.path.join(output_dir, f"statistics_{start_date}_{end_date}.txt")
 
+    # 기존 파일이 있으면 백업
+    if os.path.exists(stats_filename):
+        from datetime import datetime
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        backup_filename = os.path.join(output_dir, f"statistics_{start_date}_{end_date}_backup_{timestamp}.txt")
+
+        try:
+            import shutil
+            shutil.copy2(stats_filename, backup_filename)
+            print(f"   기존 파일 백업: {os.path.basename(backup_filename)}")
+        except Exception as e:
+            print(f"   ⚠️ 백업 실패: {e}")
+
     try:
         with open(stats_filename, 'w', encoding='utf-8') as f:
             f.write("=" * 80 + "\n")
