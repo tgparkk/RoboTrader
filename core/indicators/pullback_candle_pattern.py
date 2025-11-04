@@ -630,7 +630,8 @@ class PullbackCandlePattern:
                     volume_ratio=volume_analysis.volume_ratio,
                     bisector_status=PullbackUtils.get_bisector_status(current['close'], bisector_line) if bisector_line else BisectorStatus.BROKEN,
                     buy_price=support_pattern_info.get('entry_price'),
-                    entry_low=support_pattern_info.get('entry_price')
+                    entry_low=support_pattern_info.get('entry_price'),
+                    pattern_data=support_pattern_info  # 📊 4단계 패턴 구간 데이터
                 )
 
                 if debug and logger:

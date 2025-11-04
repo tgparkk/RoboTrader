@@ -170,7 +170,10 @@ class TradingStock:
     # 🆕 매수 시간 추적
     last_buy_time: Optional[datetime] = None  # 마지막 매수 체결 시간
     buy_cooldown_minutes: int = 25  # 매수 쿨다운 시간 (분)
-    
+
+    # 📊 패턴 데이터 로깅용 ID (매매 결과 연결)
+    last_pattern_id: Optional[str] = None
+
     def change_state(self, new_state: StockState, reason: str = ""):
         """상태 변경 및 이력 기록"""
         old_state = self.state

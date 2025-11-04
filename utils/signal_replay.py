@@ -259,6 +259,25 @@ def list_all_buy_signals(df_3min: pd.DataFrame, *, logger: Optional[logging.Logg
                 except Exception as e:
                     print(f"⚠️ {stock_code} 패턴 필터 오류: {e}")
                     # 필터 오류 시에도 매수 신호 진행 (안전장치)
+
+                # 📊 4단계 패턴 구간 데이터 로깅 (시뮬레이션)
+                try:
+                    from core.pattern_data_logger import PatternDataLogger
+                    pattern_logger = PatternDataLogger()
+
+                    if hasattr(signal_strength, 'pattern_data') and signal_strength.pattern_data:
+                        pattern_id = pattern_logger.log_pattern_data(
+                            stock_code=stock_code,
+                            signal_type=signal_strength.signal_type.value,
+                            confidence=signal_strength.confidence,
+                            support_pattern_info=signal_strength.pattern_data,
+                            data_3min=current_data
+                        )
+                        # pattern_id를 나중에 사용하기 위해 저장
+                        signal_strength._pattern_id = pattern_id
+                except Exception as log_err:
+                    print(f"⚠️ 패턴 데이터 로깅 실패: {log_err}")
+
                 # 현재 3분봉 정보
                 current_row = df_3min.iloc[i]
                 datetime_val = current_row.get('datetime')
@@ -282,7 +301,8 @@ def list_all_buy_signals(df_3min: pd.DataFrame, *, logger: Optional[logging.Logg
                     'buy_price': signal_strength.buy_price,  # 실시간과 동일한 3/5가
                     'entry_low': signal_strength.entry_low,  # 실시간과 동일한 진입저가
                     'low': low_val,
-                    'reasons': ' | '.join(signal_strength.reasons)  # 신호 사유
+                    'reasons': ' | '.join(signal_strength.reasons),  # 신호 사유
+                    'pattern_id': getattr(signal_strength, '_pattern_id', None)  # 📊 패턴 ID 저장
                 }
                 buy_signals.append(signal_info)
         
@@ -701,7 +721,23 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
             if sell_time is not None:
                 duration_minutes = int((sell_time - buy_time).total_seconds() / 60)
                 profit_rate = ((sell_price - buy_price) / buy_price) * 100
-                
+
+                # 📊 패턴 데이터 매매 결과 업데이트 (시뮬레이션)
+                try:
+                    from core.pattern_data_logger import PatternDataLogger
+                    pattern_logger = PatternDataLogger()
+
+                    if signal.get('pattern_id'):
+                        pattern_logger.update_trade_result(
+                            pattern_id=signal['pattern_id'],
+                            trade_executed=True,
+                            profit_rate=profit_rate,
+                            sell_reason=sell_reason
+                        )
+                except Exception as log_err:
+                    if logger:
+                        logger.debug(f"⚠️ 패턴 매매 결과 업데이트 실패: {log_err}")
+
                 # ==================== 포지션 업데이트: 매도 완료 ====================
                 current_position = {
                     'buy_time': buy_time,
@@ -1663,4 +1699,8 @@ def main():
 
 
 if __name__ == "__main__":
+    # 시뮬레이션에서는 패턴 로깅 활성화
+    import os
+    os.environ['ENABLE_PATTERN_LOGGING'] = 'true'
+
     main()

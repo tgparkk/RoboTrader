@@ -92,7 +92,23 @@ class TradingDecisionEngine:
         #     self._initialize_hardcoded_ml()
         # elif self.use_ml_filter:
         #     self._initialize_ml_predictor()
-        
+
+        # 🆕 패턴 데이터 로거 초기화 (환경 변수로 제어)
+        import os
+        enable_pattern_logging = os.getenv('ENABLE_PATTERN_LOGGING', 'false').lower() == 'true'
+
+        if enable_pattern_logging:
+            try:
+                from core.pattern_data_logger import PatternDataLogger
+                self.pattern_logger = PatternDataLogger()
+                self.logger.info("📊 패턴 데이터 로거 초기화 완료")
+            except Exception as e:
+                self.logger.warning(f"⚠️ 패턴 데이터 로거 초기화 실패: {e}")
+                self.pattern_logger = None
+        else:
+            self.pattern_logger = None
+            self.logger.info("📊 패턴 데이터 로거 비활성화 (실시간 성능 최적화)")
+
         self.logger.info("🧠 매매 판단 엔진 초기화 완료")
 
     def _initialize_hardcoded_ml(self):
@@ -608,18 +624,31 @@ class TradingDecisionEngine:
                 )
                 
                 if success:
-                    
-                    # 가상 포지션 정보 정리
-                    trading_stock.clear_virtual_buy_info()
-                    
-                    # 포지션 정리
-                    trading_stock.clear_position()
-                    
+
                     # 손익 계산 (로깅용)
                     profit_loss = (current_price - buy_price) * quantity if buy_price and buy_price > 0 else 0
                     profit_rate = ((current_price - buy_price) / buy_price) * 100 if buy_price and buy_price > 0 else 0
                     profit_sign = "+" if profit_loss >= 0 else ""
-                    
+
+                    # 📊 패턴 데이터 매매 결과 업데이트
+                    if self.pattern_logger and hasattr(trading_stock, 'last_pattern_id') and trading_stock.last_pattern_id:
+                        try:
+                            self.pattern_logger.update_trade_result(
+                                pattern_id=trading_stock.last_pattern_id,
+                                trade_executed=True,
+                                profit_rate=profit_rate,
+                                sell_reason=sell_reason
+                            )
+                            self.logger.debug(f"📝 패턴 매매 결과 업데이트 완료: {trading_stock.last_pattern_id}")
+                        except Exception as log_err:
+                            self.logger.warning(f"⚠️ 패턴 매매 결과 업데이트 실패: {log_err}")
+
+                    # 가상 포지션 정보 정리
+                    trading_stock.clear_virtual_buy_info()
+
+                    # 포지션 정리
+                    trading_stock.clear_position()
+
                     # 텔레그램 알림
                     if self.telegram:
                         await self.telegram.notify_signal_detected({
@@ -916,7 +945,23 @@ class TradingDecisionEngine:
                 self.logger.info(f"  - 매수 가격: {buy_price:,.0f}원 (4/5가)")
                 self.logger.info(f"  - 진입 저가: {entry_low:,.0f}원")
                 self.logger.info(f"  - 목표수익률: {signal_strength.target_profit:.1f}%")
-                
+
+                # 📊 4단계 패턴 구간 데이터 로깅
+                if self.pattern_logger and hasattr(signal_strength, 'pattern_data') and signal_strength.pattern_data:
+                    try:
+                        pattern_id = self.pattern_logger.log_pattern_data(
+                            stock_code=trading_stock.stock_code,
+                            signal_type=signal_strength.signal_type.value,
+                            confidence=signal_strength.confidence,
+                            support_pattern_info=signal_strength.pattern_data,
+                            data_3min=data_3min
+                        )
+                        # pattern_id를 나중에 매매 결과 업데이트에 사용
+                        trading_stock.last_pattern_id = pattern_id
+                        self.logger.debug(f"📝 패턴 데이터 로깅 완료: {pattern_id}")
+                    except Exception as log_err:
+                        self.logger.warning(f"⚠️ 패턴 데이터 로깅 실패: {log_err}")
+
                 return True, f"{signal_desc} - {reasons}", price_info
             
             # 매수 신호가 아닌 경우

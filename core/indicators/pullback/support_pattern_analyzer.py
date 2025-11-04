@@ -18,6 +18,7 @@ class UptrrendPhase:
     volume_avg: float  # 상승 구간 평균 거래량
     price_gain: float  # 상승률
     high_price: float  # 상승 구간의 최고가
+    max_volume_ratio_vs_20d: float = 0.0  # 20일 평균 거래량 대비 최대 거래량 비율
 
 @dataclass
 class DeclinePhase:
@@ -59,6 +60,7 @@ class SupportPatternResult:
     entry_price: Optional[float]  # 4/5 가격 (시가/종가 기준)
     confidence: float  # 신뢰도 점수 (0-100)
     reasons: List[str]  # 판단 근거
+    debug_info: Optional[Dict] = None  # 📊 4단계 상세 데이터 (패턴 분석용)
 
 
 class SupportPatternAnalyzer:
@@ -293,6 +295,42 @@ class SupportPatternAnalyzer:
                                 f"고성능최적화"
                             ]
 
+                            # 📊 디버그 정보 생성 (패턴 분석용)
+                            debug_info = {
+                                'uptrend': {
+                                    'start_idx': uptrend_start,
+                                    'end_idx': uptrend_end,
+                                    'max_volume': uptrend.max_volume,
+                                    'volume_avg': uptrend.volume_avg,
+                                    'max_volume_ratio_vs_avg': uptrend.max_volume_ratio_vs_20d,
+                                    'price_gain': f'{uptrend.price_gain:.2%}',
+                                    'high_price': uptrend.high_price
+                                },
+                                'decline': {
+                                    'start_idx': decline_start,
+                                    'end_idx': decline_end,
+                                    'decline_pct': f'{decline.decline_pct:.2%}',
+                                    'max_decline_price': decline.max_decline_price,
+                                    'avg_volume_ratio': f'{decline.avg_volume_ratio:.1%}',
+                                    'candle_count': decline.candle_count
+                                },
+                                'support': {
+                                    'start_idx': support_start,
+                                    'end_idx': support_end,
+                                    'support_price': support.support_price,
+                                    'price_volatility': f'{support.price_volatility:.3%}',
+                                    'avg_volume_ratio': f'{support.avg_volume_ratio:.1%}',
+                                    'candle_count': support.candle_count
+                                },
+                                'breakout': {
+                                    'idx': breakout_idx,
+                                    'body_size': breakout.body_size,
+                                    'volume': breakout.volume,
+                                    'volume_ratio_vs_prev': breakout.volume_ratio_vs_prev,
+                                    'body_increase_vs_support': breakout.body_increase_vs_support
+                                }
+                            }
+
                             best_pattern = SupportPatternResult(
                                 has_pattern=True,
                                 uptrend_phase=uptrend,
@@ -301,7 +339,8 @@ class SupportPatternAnalyzer:
                                 breakout_candle=breakout,
                                 entry_price=entry_price,
                                 confidence=confidence,
-                                reasons=reasons
+                                reasons=reasons,
+                                debug_info=debug_info
                             )
 
                             # 🔥 성능 최적화 4: 조기 종료 (80% 이상 신뢰도면 즉시 종료)
@@ -347,18 +386,23 @@ class SupportPatternAnalyzer:
         # 🆕 당일 전체 최대 거래량을 기준거래량으로 사용
         max_volume = numpy_arrays['volume'].max()
         avg_volume = volumes.mean() if len(volumes) > 0 else 0
-        
+
         # NumPy 배열로 고점 가격 계산 (슬라이싱)
         highs = numpy_arrays['high'][start_idx:end_idx+1]
         high_price = highs.max() if len(highs) > 0 else end_price
-        
+
+        # 📊 전체 데이터 평균 거래량 대비 비율 계산
+        total_avg_volume = numpy_arrays['volume'].mean() if len(numpy_arrays['volume']) > 0 else 1
+        max_volume_ratio_vs_avg = max_volume / total_avg_volume if total_avg_volume > 0 else 0
+
         return UptrrendPhase(
             start_idx=start_idx,
             end_idx=end_idx,
             max_volume=max_volume,
             volume_avg=avg_volume,
             price_gain=overall_gain,
-            high_price=high_price
+            high_price=high_price,
+            max_volume_ratio_vs_20d=max_volume_ratio_vs_avg
         )
     
     def _validate_decline(self, data: pd.DataFrame, numpy_arrays: Dict[str, np.ndarray], uptrend: UptrrendPhase, start_idx: int, end_idx: int) -> Optional[DeclinePhase]:
