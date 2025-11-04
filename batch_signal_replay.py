@@ -67,6 +67,10 @@ def run_signal_replay(date, time_range="9:00-16:00"):
     print(f"   명령어: {' '.join(cmd)}")
 
     try:
+        # 환경 변수 복사 및 패턴 로깅 활성화
+        env = os.environ.copy()
+        env['ENABLE_PATTERN_LOGGING'] = 'true'
+
         # subprocess로 명령 실행 (인코딩 문제 해결)
         result = subprocess.run(
             cmd,
@@ -74,7 +78,8 @@ def run_signal_replay(date, time_range="9:00-16:00"):
             text=True,
             cwd=os.getcwd(),
             encoding='utf-8',
-            errors='ignore'  # 디코딩 오류 무시
+            errors='ignore',  # 디코딩 오류 무시
+            env=env  # 환경 변수 전달
         )
 
         if result.returncode == 0:
@@ -434,4 +439,8 @@ def main():
 
 
 if __name__ == '__main__':
+    # 배치 시뮬레이션에서도 패턴 로깅 활성화
+    import os
+    os.environ['ENABLE_PATTERN_LOGGING'] = 'true'
+
     main()

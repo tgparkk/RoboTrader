@@ -203,7 +203,7 @@ def calculate_trading_signals_once(df_3min: pd.DataFrame, *, debug_logs: bool = 
     return signals, signals
 
 
-def list_all_buy_signals(df_3min: pd.DataFrame, *, logger: Optional[logging.Logger] = None, stock_code: str = "UNKNOWN") -> List[Dict[str, object]]:
+def list_all_buy_signals(df_3min: pd.DataFrame, *, logger: Optional[logging.Logger] = None, stock_code: str = "UNKNOWN", simulation_date: Optional[str] = None) -> List[Dict[str, object]]:
     """전체 3분봉에서 매수 신호 전체 리스트를 반환 (실시간과 동일한 방식)"""
     
     if df_3min is None or df_3min.empty:
@@ -263,7 +263,7 @@ def list_all_buy_signals(df_3min: pd.DataFrame, *, logger: Optional[logging.Logg
                 # 📊 4단계 패턴 구간 데이터 로깅 (시뮬레이션)
                 try:
                     from core.pattern_data_logger import PatternDataLogger
-                    pattern_logger = PatternDataLogger()
+                    pattern_logger = PatternDataLogger(simulation_date=simulation_date)
 
                     if hasattr(signal_strength, 'pattern_data') and signal_strength.pattern_data:
                         pattern_id = pattern_logger.log_pattern_data(
@@ -317,20 +317,20 @@ def list_all_buy_signals(df_3min: pd.DataFrame, *, logger: Optional[logging.Logg
         return []
 
 
-def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = None, *, logger: Optional[logging.Logger] = None, stock_code: str = "UNKNOWN", selection_date: Optional[str] = None) -> List[Dict[str, object]]:
+def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = None, *, logger: Optional[logging.Logger] = None, stock_code: str = "UNKNOWN", selection_date: Optional[str] = None, simulation_date: Optional[str] = None) -> List[Dict[str, object]]:
     """매수신호 발생 시점에서 1분봉 기준으로 실제 거래를 시뮬레이션 (ML 필터 적용)"""
-    
+
     if df_3min is None or df_3min.empty:
         return []
-        
+
     if df_1min is None or df_1min.empty:
         if logger:
             logger.warning(f"1분봉 데이터 없음 - 거래 시뮬레이션 불가 [{stock_code}]")
         return []
-    
+
     try:
         # 매수 신호 리스트 가져오기
-        buy_signals = list_all_buy_signals(df_3min, logger=logger, stock_code=stock_code)
+        buy_signals = list_all_buy_signals(df_3min, logger=logger, stock_code=stock_code, simulation_date=simulation_date)
         
         if not buy_signals:
             if logger:
@@ -725,7 +725,7 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                 # 📊 패턴 데이터 매매 결과 업데이트 (시뮬레이션)
                 try:
                     from core.pattern_data_logger import PatternDataLogger
-                    pattern_logger = PatternDataLogger()
+                    pattern_logger = PatternDataLogger(simulation_date=simulation_date)
 
                     if signal.get('pattern_id'):
                         pattern_logger.update_trade_result(
@@ -1123,7 +1123,7 @@ def main():
 
             # 거래 시뮬레이션 실행
             selection_date = stock_selection_map.get(stock_code)
-            simulation_result = simulate_trades(df_3min, df_1min, logger=logger, stock_code=stock_code, selection_date=selection_date)
+            simulation_result = simulate_trades(df_3min, df_1min, logger=logger, stock_code=stock_code, selection_date=selection_date, simulation_date=date_str)
             
             # 반환값 처리 (기존 호환성 유지)
             if isinstance(simulation_result, dict):
@@ -1521,7 +1521,7 @@ def main():
                                     signal_to_buy_mapping = {}  # 신호 시점 → 매수 기록 매핑
                                     
                                     # 실제 매수 신호를 다시 분석하여 신호 발생 시점을 찾기
-                                    buy_signals_for_mapping = list_all_buy_signals(df_3min_detailed, logger=logger, stock_code=stock_code)
+                                    buy_signals_for_mapping = list_all_buy_signals(df_3min_detailed, logger=logger, stock_code=stock_code, simulation_date=date_str)
                                     
                                     # 거래와 신호의 정확한 1:1 매핑을 위한 처리
                                     used_signals = set()  # 이미 매핑된 신호들
