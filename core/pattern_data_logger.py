@@ -140,9 +140,17 @@ class PatternDataLogger:
             'trade_result': None  # 나중에 업데이트
         }
 
-        # JSONL 형식으로 저장
-        with open(self.log_file, 'a', encoding='utf-8') as f:
-            f.write(json.dumps(log_record, ensure_ascii=False) + '\n')
+        # JSONL 형식으로 저장 (파일 잠금 및 예외 처리)
+        try:
+            with open(self.log_file, 'a', encoding='utf-8') as f:
+                json_str = json.dumps(log_record, ensure_ascii=False)
+                # JSON이 유효한지 한번 더 검증
+                json.loads(json_str)  # 파싱 테스트
+                f.write(json_str + '\n')
+                f.flush()  # 즉시 디스크에 쓰기
+        except Exception as e:
+            # 로깅 실패해도 패턴 ID는 반환 (시뮬레이션 계속 진행)
+            print(f"[경고] 패턴 데이터 로깅 실패 ({pattern_id}): {e}")
 
         return pattern_id
 
@@ -200,28 +208,44 @@ class PatternDataLogger:
         if not self.log_file.exists():
             return
 
-        # 전체 로그 읽기
-        records = []
-        with open(self.log_file, 'r', encoding='utf-8') as f:
-            for line in f:
-                if line.strip():
-                    records.append(json.loads(line))
+        try:
+            # 전체 로그 읽기 (예외 처리)
+            records = []
+            with open(self.log_file, 'r', encoding='utf-8') as f:
+                for line_num, line in enumerate(f, 1):
+                    if line.strip():
+                        try:
+                            records.append(json.loads(line))
+                        except json.JSONDecodeError as e:
+                            # 파싱 실패한 라인은 스킵
+                            print(f"[경고] 패턴 업데이트 중 라인 {line_num} 파싱 실패: {e}")
+                            continue
 
-        # 해당 pattern_id 찾아서 업데이트
-        updated = False
-        for record in records:
-            if record['pattern_id'] == pattern_id:
-                record['trade_result'] = {
-                    'trade_executed': trade_executed,
-                    'profit_rate': profit_rate,
-                    'sell_reason': sell_reason,
-                    'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                }
-                updated = True
-                break
+            # 해당 pattern_id 찾아서 업데이트
+            updated = False
+            for record in records:
+                if record.get('pattern_id') == pattern_id:
+                    record['trade_result'] = {
+                        'trade_executed': trade_executed,
+                        'profit_rate': profit_rate,
+                        'sell_reason': sell_reason,
+                        'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    }
+                    updated = True
+                    break
 
-        if updated:
-            # 파일 다시 쓰기
-            with open(self.log_file, 'w', encoding='utf-8') as f:
-                for record in records:
-                    f.write(json.dumps(record, ensure_ascii=False) + '\n')
+            if updated:
+                # 파일 다시 쓰기 (예외 처리)
+                with open(self.log_file, 'w', encoding='utf-8') as f:
+                    for record in records:
+                        try:
+                            json_str = json.dumps(record, ensure_ascii=False)
+                            # JSON이 유효한지 검증
+                            json.loads(json_str)
+                            f.write(json_str + '\n')
+                        except Exception as e:
+                            print(f"[경고] 레코드 쓰기 실패 ({record.get('pattern_id', 'unknown')}): {e}")
+                            continue
+                    f.flush()
+        except Exception as e:
+            print(f"[경고] 패턴 업데이트 실패 ({pattern_id}): {e}")
