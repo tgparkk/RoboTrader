@@ -9,6 +9,7 @@ from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
 import logging
 from utils.korean_time import now_kst
+from core.indicators.pattern_combination_filter import PatternCombinationFilter
 
 @dataclass
 class PatternQuality:
@@ -24,6 +25,9 @@ class PullbackPatternValidator:
 
     def __init__(self, logger=None):
         self.logger = logger or logging.getLogger(__name__)
+
+        # 마이너스 수익 조합 필터 초기화
+        self.combination_filter = PatternCombinationFilter(logger=self.logger)
 
         # 🎯 413630 실패 분석 기반 강화된 기준 설정
         self.quality_thresholds = {
@@ -89,8 +93,9 @@ class PullbackPatternValidator:
                 )
 
             debug_info = support_pattern_result.get('debug_info', {})
+
             if not debug_info:
-                # 디버그 정보 없으면 기본 점수로 통과 (완화된 조건)
+                # 디버그 정보 없으면 기본 점수로 통과
                 self.logger.debug(f"⚠️ 디버그 정보 없음 - 기본 점수로 평가")
                 return PatternQuality(
                     is_clear=True,
@@ -98,6 +103,18 @@ class PullbackPatternValidator:
                     weak_points=["디버그 정보 없음"],
                     strength_points=["기본 패턴 조건 충족"],
                     exclude_reason=None
+                )
+
+            # 🚫 마이너스 수익 조합 필터링 (최우선 체크)
+            should_exclude, exclude_reason = self.combination_filter.should_exclude(debug_info)
+            if should_exclude:
+                self.logger.info(f"🚫 {exclude_reason}")
+                return PatternQuality(
+                    is_clear=False,
+                    confidence_score=0.0,
+                    weak_points=[exclude_reason],
+                    strength_points=[],
+                    exclude_reason=exclude_reason
                 )
 
             weak_points = []

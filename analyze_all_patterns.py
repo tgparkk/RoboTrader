@@ -269,6 +269,24 @@ def compare_metric(win_data, loss_data, metric_key, metric_name, multiplier=1):
     print(f"    차이: {diff_sign}{diff:.2f} ({diff_sign}{diff_pct:.1f}%)")
 
 
+def clean_numeric_value(value):
+    """문자열 숫자를 파이썬 숫자로 변환 (%, 쉼표 제거)"""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, str):
+        # % 제거
+        value = value.replace('%', '')
+        # 쉼표 제거
+        value = value.replace(',', '')
+        try:
+            return float(value)
+        except:
+            return None
+    return None
+
+
 def export_all_patterns_csv(patterns, output_file: str = "all_patterns_analysis.csv"):
     """전체 패턴 데이터를 CSV로 내보내기"""
 
@@ -296,35 +314,35 @@ def export_all_patterns_csv(patterns, output_file: str = "all_patterns_analysis.
         # 1단계: 상승 구간
         uptrend = stages.get('1_uptrend', {})
         record.update({
-            'uptrend_candle_count': uptrend.get('candle_count'),
-            'uptrend_price_gain': uptrend.get('price_gain'),
-            'uptrend_max_volume': uptrend.get('max_volume'),
-            'uptrend_max_volume_ratio': uptrend.get('max_volume_ratio_vs_avg'),
+            'uptrend_candle_count': clean_numeric_value(uptrend.get('candle_count')),
+            'uptrend_price_gain': clean_numeric_value(uptrend.get('price_gain')),
+            'uptrend_max_volume': clean_numeric_value(uptrend.get('max_volume')),
+            'uptrend_max_volume_ratio': clean_numeric_value(uptrend.get('max_volume_ratio_vs_avg')),
         })
 
         # 2단계: 하락 구간
         decline = stages.get('2_decline', {})
         record.update({
-            'decline_candle_count': decline.get('candle_count'),
-            'decline_pct': decline.get('decline_pct'),
-            'decline_avg_volume_ratio': decline.get('avg_volume_ratio'),
+            'decline_candle_count': clean_numeric_value(decline.get('candle_count')),
+            'decline_pct': clean_numeric_value(decline.get('decline_pct')),
+            'decline_avg_volume_ratio': clean_numeric_value(decline.get('avg_volume_ratio')),
         })
 
         # 3단계: 지지 구간
         support = stages.get('3_support', {})
         record.update({
-            'support_candle_count': support.get('candle_count'),
-            'support_price_volatility': support.get('price_volatility'),
-            'support_avg_volume_ratio': support.get('avg_volume_ratio'),
+            'support_candle_count': clean_numeric_value(support.get('candle_count')),
+            'support_price_volatility': clean_numeric_value(support.get('price_volatility')),
+            'support_avg_volume_ratio': clean_numeric_value(support.get('avg_volume_ratio')),
         })
 
         # 4단계: 돌파 양봉
         breakout = stages.get('4_breakout', {})
         record.update({
-            'breakout_body_size': breakout.get('body_size'),
-            'breakout_volume': breakout.get('volume'),
-            'breakout_volume_ratio_vs_prev': breakout.get('volume_ratio_vs_prev'),
-            'breakout_body_increase_vs_support': breakout.get('body_increase_vs_support'),
+            'breakout_body_size': clean_numeric_value(breakout.get('body_size')),
+            'breakout_volume': clean_numeric_value(breakout.get('volume')),
+            'breakout_volume_ratio_vs_prev': clean_numeric_value(breakout.get('volume_ratio_vs_prev')),
+            'breakout_body_increase_vs_support': clean_numeric_value(breakout.get('body_increase_vs_support')),
         })
 
         records.append(record)

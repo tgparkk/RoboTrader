@@ -194,10 +194,10 @@ class PullbackCandlePattern:
         """거래량 패턴 분석 (PullbackCandlePattern 전용)"""
         return VolumeAnalyzer._analyze_volume_pattern_internal(data, baseline_volumes, period)
     
-    @staticmethod 
+    @staticmethod
     def analyze_support_pattern(data: pd.DataFrame, debug: bool = False) -> dict:
         """새로운 지지 패턴 분석 (상승 기준거래량 → 저거래량 하락 → 지지 → 돌파양봉)
-        
+
         Args:
             data: 분석할 데이터
             debug: 디버그 정보 포함 여부
@@ -212,20 +212,35 @@ class PullbackCandlePattern:
             lookback_period=200
         )
         result = analyzer.analyze(data)
-        
+
         pattern_info = {
             'has_support_pattern': result.has_pattern,
             'confidence': result.confidence,
             'entry_price': result.entry_price,
             'reasons': result.reasons
         }
-        
+
         if debug:
             pattern_info.update(analyzer.get_debug_info(data))
-        
+
         # 중복 신호 방지를 위해 항상 디버그 정보 포함 (동일한 분석기 사용)
         pattern_info['debug_info'] = analyzer.get_debug_info(data)
-            
+
+        # 🚫 마이너스 수익 조합 필터링
+        if result.has_pattern and pattern_info['debug_info']:
+            from core.indicators.pattern_combination_filter import PatternCombinationFilter
+            import logging
+            logger = logging.getLogger(__name__)
+
+            filter = PatternCombinationFilter(logger=logger)
+            should_exclude, exclude_reason = filter.should_exclude(pattern_info['debug_info'])
+
+            if should_exclude:
+                logger.info(f"🚫 {exclude_reason}")
+                # 패턴을 무효화
+                pattern_info['has_support_pattern'] = False
+                pattern_info['reasons'].append(exclude_reason)
+
         return pattern_info
     
     @staticmethod
