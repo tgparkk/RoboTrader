@@ -138,6 +138,52 @@ print(f"[시뮬레이션 설정] 익절 +{PROFIT_TAKE_RATE}% / 손절 -{STOP_LOS
 print("=" * 60)
 
 
+def calculate_max_concurrent_holdings(all_trades: Dict[str, List[Dict[str, object]]]) -> int:
+    """최대 동시 보유 종목 수를 계산
+
+    Args:
+        all_trades: {종목코드: [거래내역]} 딕셔너리
+
+    Returns:
+        int: 특정 시점에 최대로 동시에 보유한 종목 수
+    """
+    if not all_trades:
+        return 0
+
+    # 모든 매수/매도 이벤트를 시간순으로 정렬
+    events = []
+    for stock_code, trades in all_trades.items():
+        for trade in trades:
+            if trade.get('buy_time') and trade.get('sell_time'):
+                # 매수 시간
+                buy_time = trade['buy_time']
+                events.append((buy_time, 'buy', stock_code))
+
+                # 매도 시간
+                sell_time = trade['sell_time']
+                events.append((sell_time, 'sell', stock_code))
+
+    if not events:
+        return 0
+
+    # 시간순으로 정렬
+    events.sort(key=lambda x: x[0])
+
+    # 각 시점별로 보유 종목 수 추적
+    current_holdings = set()
+    max_holdings = 0
+
+    for time_str, event_type, stock_code in events:
+        if event_type == 'buy':
+            current_holdings.add(stock_code)
+        elif event_type == 'sell':
+            current_holdings.discard(stock_code)
+
+        max_holdings = max(max_holdings, len(current_holdings))
+
+    return max_holdings
+
+
 def calculate_trading_signals_once(df_3min: pd.DataFrame, *, debug_logs: bool = False, 
                                  logger: Optional[logging.Logger] = None,
                                  log_level: int = logging.INFO,
@@ -1186,13 +1232,17 @@ def main():
     total_missed_opportunities = sum(len(missed) for missed in all_missed_opportunities.values())
     successful_stocks = sum(1 for trades in all_trades.values() if trades)
     stocks_with_missed_opportunities = sum(1 for missed in all_missed_opportunities.values() if missed)
-    
+
+    # 🆕 최대 동시 보유 종목 수 계산
+    max_concurrent_holdings = calculate_max_concurrent_holdings(all_trades)
+
     logger.info(f"" + "="*60)
     logger.info(f"🎯 전체 처리 완료")
     logger.info(f"📊 처리된 종목: {len(codes_union)}개")
     logger.info(f"✅ 거래가 있는 종목: {successful_stocks}개")
     logger.info(f"💰 총 거래 건수: {total_trades}건")
     logger.info(f"🚫 매수 못한 기회: {total_missed_opportunities}건 ({stocks_with_missed_opportunities}개 종목)")
+    logger.info(f"📊 최대 동시 보유 종목 수: {max_concurrent_holdings}개")
 
     # 선택 날짜별 통계 (DB에서 selection_date 정보가 있을 때만)
     if stock_selection_map:
@@ -1356,6 +1406,7 @@ def main():
 
                     lines.append(f"=== 총 승패: {total_wins}승 {total_losses}패 ===")
                     lines.append(f"=== selection_date 이후 승패: {selection_date_wins}승 {selection_date_losses}패 ===")
+                    lines.append(f"=== 📊 최대 동시 보유 종목 수: {max_concurrent_holdings}개 ===")
 
                     # 🆕 12시 이전 매수 종목 승패 표시 추가
                     if morning_wins + morning_losses > 0:
