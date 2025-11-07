@@ -548,9 +548,9 @@ class DayTradingBot:
             last_api_refresh = now_kst()
             last_market_check = now_kst()
             last_intraday_update = now_kst()  # 🆕 장중 데이터 업데이트 시간
-            last_chart_generation = datetime(2000, 1, 1, tzinfo=KST)  # 🆕 장 마감 후 차트 생성 시간
-            chart_generation_count = 0  # 🆕 차트 생성 횟수 카운터
-            last_chart_reset_date = now_kst().date()  # 🆕 차트 카운터 리셋 기준 날짜
+            # last_chart_generation = datetime(2000, 1, 1, tzinfo=KST)  # 🆕 장 마감 후 차트 생성 시간 (주석처리)
+            # chart_generation_count = 0  # 🆕 차트 생성 횟수 카운터 (주석처리)
+            # last_chart_reset_date = now_kst().date()  # 🆕 차트 카운터 리셋 기준 날짜 (주석처리)
 
             self.logger.info("🔥 DEBUG: while 루프 진입 시도")  # 디버깅용
             while self.is_running:
@@ -572,26 +572,26 @@ class DayTradingBot:
                 
                 # 장마감 청산 로직 제거: 15:00 시장가 매도로 대체됨
                 
-                # 🆕 차트 생성 카운터 매일 리셋
-                current_date = current_time.date()
-                if current_date != last_chart_reset_date:
-                    chart_generation_count = 0  # 새로운 날이면 카운터 리셋
-                    last_chart_reset_date = current_date
-                    self.logger.info(f"📅 새로운 날 - 차트 생성 카운터 리셋 ({current_date})")
-                
-                # 🆕 장 마감 후 차트 생성 (16:00~24:00 시간대에 실행)
-                current_hour = current_time.hour
-                is_chart_time = (16 <= current_hour <= 23) and current_time.weekday() < 5  # 평일 16~24시
-                if is_chart_time and chart_generation_count < 2:  # 16~24시 시간대에만, 최대 2번
-                    if (current_time - last_chart_generation).total_seconds() >= 1 * 60:  # 1분 간격으로 체크
-                        #self.logger.info(f"🔥 DEBUG: 차트 생성 실행 시작 ({chart_generation_count + 1}/2)")  # 디버깅용
-                        await self._generate_post_market_charts()
-                        #self.logger.info(f"🔥 DEBUG: 차트 생성 실행 완료 ({chart_generation_count + 1}/2)")  # 디버깅용
-                        last_chart_generation = current_time
-                        chart_generation_count += 1
-                        
-                        if chart_generation_count >= 1:
-                            self.logger.info("✅ 장 마감 후 차트 생성 완료 (1회 실행 완료)")
+                # 🆕 차트 생성 카운터 매일 리셋 (주석처리)
+                # current_date = current_time.date()
+                # if current_date != last_chart_reset_date:
+                #     chart_generation_count = 0  # 새로운 날이면 카운터 리셋
+                #     last_chart_reset_date = current_date
+                #     self.logger.info(f"📅 새로운 날 - 차트 생성 카운터 리셋 ({current_date})")
+
+                # 🆕 장 마감 후 차트 생성 (16:00~24:00 시간대에 실행) - 주석처리
+                # current_hour = current_time.hour
+                # is_chart_time = (16 <= current_hour <= 23) and current_time.weekday() < 5  # 평일 16~24시
+                # if is_chart_time and chart_generation_count < 2:  # 16~24시 시간대에만, 최대 2번
+                #     if (current_time - last_chart_generation).total_seconds() >= 1 * 60:  # 1분 간격으로 체크
+                #         #self.logger.info(f"🔥 DEBUG: 차트 생성 실행 시작 ({chart_generation_count + 1}/2)")  # 디버깅용
+                #         await self._generate_post_market_charts()
+                #         #self.logger.info(f"🔥 DEBUG: 차트 생성 실행 완료 ({chart_generation_count + 1}/2)")  # 디버깅용
+                #         last_chart_generation = current_time
+                #         chart_generation_count += 1
+                #
+                #         if chart_generation_count >= 1:
+                #             self.logger.info("✅ 장 마감 후 차트 생성 완료 (1회 실행 완료)")
                 
                 # 시스템 모니터링 루프 대기 (5초 주기)
                 await asyncio.sleep(5)  

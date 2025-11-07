@@ -27,6 +27,7 @@ from core.intraday_data_utils import (
     validate_minute_data_continuity,
     validate_today_data
 )
+from core.post_market_data_saver import PostMarketDataSaver
 
 
 logger = setup_logger(__name__)
@@ -65,17 +66,17 @@ class IntradayStockManager:
     def __init__(self, api_manager):
         """
         초기화
-        
+
         Args:
             api_manager: KIS API 매니저 인스턴스
         """
         self.api_manager = api_manager
         self.logger = setup_logger(__name__)
-        
+
         # 메모리 저장소
         self.selected_stocks: Dict[str, StockMinuteData] = {}  # stock_code -> StockMinuteData
         self.selection_history: List[Dict[str, Any]] = []  # 선정 이력
-        
+
         # 설정
         self.market_open_time = "090000"  # 장 시작 시간
         self.max_stocks = 80  # 최대 관리 종목 수
@@ -85,6 +86,9 @@ class IntradayStockManager:
 
         # 🆕 동적 배치 계산기
         self.batch_calculator = DynamicBatchCalculator()
+
+        # 🆕 장 마감 후 데이터 저장기
+        self.data_saver = PostMarketDataSaver()
 
         self.logger.info("🎯 장중 종목 관리자 초기화 완료")
     
@@ -1236,15 +1240,15 @@ class IntradayStockManager:
         try:
             from utils.korean_time import now_kst
 
-            # 🆕 15:30 장 마감 시 메모리 데이터 자동 저장
+            # 🆕 15:30 장 마감 시 메모리 데이터 자동 저장 (분봉 + 일봉)
             current_time = now_kst()
             if current_time.hour == 15 and current_time.minute >= 30:
                 if not hasattr(self, '_data_saved_today'):
-                    # 1. cache/minute_data에 pickle로 저장 (시뮬 비교용)
-                    self._save_minute_data_to_cache()
-                    # 2. 텍스트 파일로도 저장 (디버깅용)
-                    self._save_minute_data_to_file()
+                    self.logger.info("🔔 15:30 장 마감 데이터 저장 시작...")
+                    # PostMarketDataSaver를 통해 모든 데이터 저장
+                    self.data_saver.save_all_data(self)
                     self._data_saved_today = True  # 하루에 한 번만 저장
+                    self.logger.info("✅ 15:30 장 마감 데이터 저장 완료")
 
             with self._lock:
                 stock_codes = list(self.selected_stocks.keys())
@@ -1546,135 +1550,22 @@ class IntradayStockManager:
 
     def _save_minute_data_to_cache(self):
         """
+        [DEPRECATED] 이 메서드는 더 이상 사용되지 않습니다.
+        대신 PostMarketDataSaver.save_minute_data_to_cache() 사용
+
         메모리에 있는 모든 종목의 분봉 데이터를 cache/minute_data에 pickle로 저장
         시뮬레이션 데이터와 비교용 (15:30 장 마감 시)
         """
-        try:
-            from utils.korean_time import now_kst
-            import pickle
-            from pathlib import Path
-
-            current_time = now_kst()
-            today = current_time.strftime('%Y%m%d')
-            
-            # cache/minute_data 디렉토리 생성
-            cache_dir = Path("cache/minute_data")
-            cache_dir.mkdir(parents=True, exist_ok=True)
-
-            with self._lock:
-                stock_codes = list(self.selected_stocks.keys())
-
-            if not stock_codes:
-                self.logger.info("💾 캐시 저장할 종목 없음")
-                return
-
-            saved_count = 0
-            for stock_code in stock_codes:
-                try:
-                    # combined_data (historical + realtime 병합) 가져오기
-                    combined_data = self.get_combined_chart_data(stock_code)
-                    
-                    if combined_data is None or combined_data.empty:
-                        self.logger.warning(f"⚠️ {stock_code} 저장할 데이터 없음")
-                        continue
-                    
-                    # 🆕 당일 데이터만 필터링 (이중 확인)
-                    before_count = len(combined_data)
-                    if 'date' in combined_data.columns:
-                        combined_data = combined_data[combined_data['date'].astype(str) == today].copy()
-                    elif 'datetime' in combined_data.columns:
-                        combined_data['date_str'] = pd.to_datetime(combined_data['datetime']).dt.strftime('%Y%m%d')
-                        combined_data = combined_data[combined_data['date_str'] == today].copy()
-                        if 'date_str' in combined_data.columns:
-                            combined_data = combined_data.drop('date_str', axis=1)
-                    
-                    if before_count != len(combined_data):
-                        removed = before_count - len(combined_data)
-                        self.logger.warning(f"⚠️ {stock_code} 저장 시 전날 데이터 {removed}건 제외: {before_count} → {len(combined_data)}건")
-                    
-                    if combined_data.empty:
-                        self.logger.warning(f"⚠️ {stock_code} 당일 데이터 없음 (저장 건너뜀)")
-                        continue
-                    
-                    # 파일명: 종목코드_날짜.pkl (save_candidate_data.py와 동일)
-                    cache_file = cache_dir / f"{stock_code}_{today}.pkl"
-                    
-                    # pickle로 저장
-                    with open(cache_file, 'wb') as f:
-                        pickle.dump(combined_data, f)
-                    
-                    saved_count += 1
-                    self.logger.debug(f"💾 {stock_code} 캐시 저장: {len(combined_data)}건 → {cache_file.name}")
-                    
-                except Exception as e:
-                    self.logger.error(f"❌ {stock_code} 캐시 저장 실패: {e}")
-            
-            self.logger.info(f"✅ 실시간 분봉 데이터 캐시 저장 완료: {saved_count}/{len(stock_codes)}개 종목")
-            
-        except Exception as e:
-            self.logger.error(f"❌ 분봉 데이터 캐시 저장 실패: {e}")
+        self.logger.warning("⚠️ _save_minute_data_to_cache는 deprecated입니다. PostMarketDataSaver를 사용하세요.")
+        return self.data_saver.save_minute_data_to_cache(self)
 
     def _save_minute_data_to_file(self):
         """
+        [DEPRECATED] 이 메서드는 더 이상 사용되지 않습니다.
+        대신 PostMarketDataSaver.save_minute_data_to_file() 사용
+
         메모리에 있는 모든 종목의 분봉 데이터를 텍스트 파일로 저장 (15:30 장 마감 시)
         """
-        try:
-            from utils.korean_time import now_kst
-
-            current_time = now_kst()
-            filename = f"memory_minute_data_{current_time.strftime('%Y%m%d_%H%M%S')}.txt"
-
-            with self._lock:
-                stock_codes = list(self.selected_stocks.keys())
-
-            if not stock_codes:
-                self.logger.info("💾 저장할 종목 없음")
-                return
-
-            with open(filename, 'w', encoding='utf-8') as f:
-                f.write(f"=" * 100 + "\n")
-                f.write(f"메모리 분봉 데이터 덤프 - {current_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(f"=" * 100 + "\n\n")
-                f.write(f"총 종목 수: {len(stock_codes)}개\n\n")
-
-                for stock_code in stock_codes:
-                    with self._lock:
-                        if stock_code not in self.selected_stocks:
-                            continue
-
-                        stock_data = self.selected_stocks[stock_code]
-                        stock_name = stock_data.stock_name
-                        selected_time = stock_data.selected_time.strftime('%H:%M:%S')
-                        historical_data = stock_data.historical_data.copy() if not stock_data.historical_data.empty else pd.DataFrame()
-                        realtime_data = stock_data.realtime_data.copy() if not stock_data.realtime_data.empty else pd.DataFrame()
-
-                    f.write(f"\n{'=' * 100}\n")
-                    f.write(f"종목코드: {stock_code} | 종목명: {stock_name} | 선정시간: {selected_time}\n")
-                    f.write(f"{'=' * 100}\n\n")
-
-                    # Historical Data
-                    f.write(f"[Historical Data: {len(historical_data)}건]\n")
-                    if not historical_data.empty:
-                        f.write(historical_data.to_string(index=False) + "\n")
-                    else:
-                        f.write("데이터 없음\n")
-
-                    f.write(f"\n[Realtime Data: {len(realtime_data)}건]\n")
-                    if not realtime_data.empty:
-                        f.write(realtime_data.to_string(index=False) + "\n")
-                    else:
-                        f.write("데이터 없음\n")
-
-                    # Combined Data
-                    combined_data = self.get_combined_chart_data(stock_code)
-                    f.write(f"\n[Combined Data (당일만): {len(combined_data) if combined_data is not None else 0}건]\n")
-                    if combined_data is not None and not combined_data.empty:
-                        f.write(combined_data.to_string(index=False) + "\n")
-                    else:
-                        f.write("데이터 없음\n")
-
-            self.logger.info(f"💾 메모리 분봉 데이터 저장 완료: {filename} ({len(stock_codes)}개 종목)")
-
-        except Exception as e:
-            self.logger.error(f"❌ 메모리 분봉 데이터 저장 실패: {e}")
+        self.logger.warning("⚠️ _save_minute_data_to_file은 deprecated입니다. PostMarketDataSaver를 사용하세요.")
+        return self.data_saver.save_minute_data_to_file(self)
 
