@@ -1,14 +1,13 @@
 """
-패턴 조합 필터 - 마이너스 수익 조합 제외 (거래 10건 이상)
+패턴 조합 필터 - 마이너스 수익 조합 제외
 
 analyze_negative_profit_combinations.py 분석 결과를 바탕으로
-거래 횟수 10건 이상인 마이너스 조합만 필터링합니다.
+손실이 큰 패턴 조합을 제외합니다.
 
 변경 이력:
 - v1: 11개 조합 제외 (백테스트: +31.3%, 실제: +2.3%)
 - v2: TOP 5 조합만 제외 (손실이 가장 큰 5개, 총 -39.16%)
-- v3: 거래 10건 이상만 제외 (4개, 총 97건, -25.42% 손실)
-      통계적 신뢰도 확보를 위해 최소 거래 수 기준 적용
+- v3: 거래 10건 이상만 제외 (4개, 총 97건, -25.42% 손실) ← 현재
 """
 
 from typing import Dict, Optional
@@ -16,56 +15,45 @@ import logging
 
 
 class PatternCombinationFilter:
-    """4단계 패턴 조합 필터 - 마이너스 수익 조합 제외"""
+    """4단계 패턴 조합 필터 - 거래 10건 이상 & 마이너스 수익 조합 제외"""
 
     def __init__(self, logger=None):
         self.logger = logger or logging.getLogger(__name__)
 
-        # 🚫 제외할 조합 (거래 10건 이상만)
+        # 제외할 조합 (거래 10건 이상 & 총 수익 마이너스)
         # analyze_negative_profit_combinations.py 분석 결과 기반
-        # 통계적 신뢰도 확보를 위해 10건 이상 거래된 조합만 필터링
         self.excluded_combinations = [
-            # 조합 1: 약함(<4%) + 보통(1.5-2.5%) + 짧음(≤2)
-            # 34건, 승률 32.4%, 총 손실 -15.38%
+            # 조합 1: 약함(<4%) + 깊음(>2.5%) + 짧음(≤2)
+            # 49건, 승률 44.9%, 총 -9.20%
+            {
+                '상승강도': '약함(<4%)',
+                '하락정도': '깊음(>2.5%)',
+                '지지길이': '짧음(≤2)',
+            },
+
+            # 조합 2: 약함(<4%) + 보통(1.5-2.5%) + 짧음(≤2)
+            # 21건, 승률 47.6%, 총 -3.85%
             {
                 '상승강도': '약함(<4%)',
                 '하락정도': '보통(1.5-2.5%)',
                 '지지길이': '짧음(≤2)',
             },
 
-            # 조합 2: 보통(4-6%) + 얕음(<1.5%) + 보통(3-4)
-            # 15건, 승률 40.0%, 총 손실 -5.52%
+            # 조합 3: 보통(4-6%) + 보통(1.5-2.5%) + 보통(3-4)
+            # 17건, 승률 47.1%, 총 -6.86%
             {
                 '상승강도': '보통(4-6%)',
-                '하락정도': '얕음(<1.5%)',
+                '하락정도': '보통(1.5-2.5%)',
                 '지지길이': '보통(3-4)',
             },
 
-            # 조합 3: 강함(>6%) + 깊음(>2.5%) + 짧음(≤2)
-            # 36건, 승률 41.7%, 총 손실 -4.53%
+            # 조합 4: 보통(4-6%) + 보통(1.5-2.5%) + 짧음(≤2)
+            # 10건, 승률 50.0%, 총 -5.51%
             {
-                '상승강도': '강함(>6%)',
-                '하락정도': '깊음(>2.5%)',
+                '상승강도': '보통(4-6%)',
+                '하락정도': '보통(1.5-2.5%)',
                 '지지길이': '짧음(≤2)',
             },
-
-            # 조합 4: 약함(<4%) + 깊음(>2.5%) + 짧음(≤2)
-            # 12건, 승률 41.7%, 총 손실 -0.00% (거의 제로)
-            {
-                '상승강도': '약함(<4%)',
-                '하락정도': '깊음(>2.5%)',
-                '지지길이': '짧음(≤2)',
-            },
-
-            # ===== 10건 미만 조합은 제외하지 않음 =====
-            # - 강함(>6%) + 얕음(<1.5%) + 보통(3-4): 7건, -9.73%
-            # - 강함(>6%) + 보통(1.5-2.5%) + 보통(3-4): 4건, -4.00%
-            # - 약함(<4%) + 보통(1.5-2.5%) + 김(>4): 4건, -1.83%
-            # - 보통(4-6%) + 보통(1.5-2.5%) + 김(>4): 3건, -1.50%
-            # - 강함(>6%) + 깊음(>2.5%) + 김(>4): 3건, -1.50%
-            # - 보통(4-6%) + 깊음(>2.5%) + 보통(3-4): 1건, -2.50%
-            # - 약함(<4%) + 보통(1.5-2.5%) + 보통(3-4): 1건, -2.50%
-            # 통계적 신뢰도가 낮아 제외하지 않음
         ]
 
     def categorize_pattern(self, debug_info: Dict) -> Dict[str, str]:
@@ -81,7 +69,6 @@ class PatternCombinationFilter:
         categories = {}
 
         # 1단계: 상승 강도 (가격 상승률)
-        # debug_info 구조: {'1_uptrend': {'price_gain': '5.23%', ...}, ...} 또는 {'uptrend': ...}
         uptrend = debug_info.get('1_uptrend') or debug_info.get('uptrend', {})
         price_gain_str = uptrend.get('price_gain', '0%')
 
@@ -153,8 +140,9 @@ class PatternCombinationFilter:
                     break
 
             if match:
+                # 패배 조합 - 제외
                 reason = (
-                    f"마이너스 수익 조합: "
+                    f"패배 조합: "
                     f"{pattern_category['상승강도']} + "
                     f"{pattern_category['하락정도']} + "
                     f"{pattern_category['지지길이']}"
@@ -162,6 +150,7 @@ class PatternCombinationFilter:
                 self.logger.info(f"🚫 {reason}")
                 return True, reason
 
+        # 제외 조합이 아님 - 허용
         return False, None
 
     def get_filter_stats(self) -> Dict:
@@ -173,8 +162,8 @@ class PatternCombinationFilter:
         """
         return {
             'excluded_combinations_count': len(self.excluded_combinations),
-            'expected_profit_improvement': '+31.3%',
-            'expected_win_rate_improvement': '49.1% → 53.1% (+4.0%p)',
-            'expected_avg_profit_improvement': '0.286% → 0.482% (+68.3%)',
-            'trades_filtered_percentage': '22.0%',
+            'filter_type': 'exclude_negative_combinations',
+            'excluded_total_trades': 97,
+            'excluded_total_loss': '-25.42%',
+            'version': 'v3',
         }

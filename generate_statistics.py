@@ -14,6 +14,22 @@ import re
 import json
 from datetime import datetime, timedelta
 from collections import defaultdict
+import sys
+
+# 프로젝트 루트를 sys.path에 추가
+project_root = os.path.dirname(os.path.abspath(__file__))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+# trading_config.json에서 손익비 로드
+from config.settings import load_trading_config
+
+_trading_config = load_trading_config()
+PROFIT_TAKE_RATE = _trading_config.risk_management.take_profit_ratio * 100  # 0.030 -> 3.0%
+STOP_LOSS_RATE = _trading_config.risk_management.stop_loss_ratio * 100      # 0.025 -> 2.5%
+
+print(f"[통계 생성 설정] 익절 +{PROFIT_TAKE_RATE}% / 손절 -{STOP_LOSS_RATE}% (from trading_config.json)")
+print("=" * 60)
 
 
 def parse_date(date_str):
@@ -41,12 +57,20 @@ def generate_date_range(start_date, end_date):
 def parse_signal_replay_result(txt_filename):
     """signal_replay 결과 파일에서 거래 데이터를 파싱"""
     if not os.path.exists(txt_filename):
-        return []
+        return [], None
 
     trades = []
+    max_concurrent_holdings = None
+
     try:
         with open(txt_filename, 'r', encoding='utf-8', errors='ignore') as f:
             content = f.read()
+
+        # 최대 동시 보유 종목 수 파싱
+        concurrent_pattern = r'=== 📊 최대 동시 보유 종목 수: (\d+)개 ==='
+        concurrent_match = re.search(concurrent_pattern, content)
+        if concurrent_match:
+            max_concurrent_holdings = int(concurrent_match.group(1))
 
         # 먼저 전체 승패 정보 확인
         overall_pattern = r'=== 총 승패: (\d+)승 (\d+)패 ==='
@@ -110,10 +134,10 @@ def parse_signal_replay_result(txt_filename):
     except Exception as e:
         print(f"⚠️ 파싱 오류 ({txt_filename}): {e}")
 
-    return trades
+    return trades, max_concurrent_holdings
 
 
-def calculate_statistics(all_trades, start_date, end_date):
+def calculate_statistics(all_trades, start_date, end_date, max_holdings_list=None):
     """전체 거래 데이터에서 통계 계산"""
     if not all_trades:
         return {}
@@ -135,14 +159,26 @@ def calculate_statistics(all_trades, start_date, end_date):
     # 손익비 계산
     profit_loss_ratio = abs(avg_win / avg_loss) if avg_loss != 0 else 0
 
-    # 실제 수익금 계산 (손익비 3:2, 거래당 100만원 기준)
+    # 실제 수익금 계산 (trading_config.json 기준)
     trade_amount = 1000000  # 100만원
-    target_profit_ratio = 3.5  # 목표 수익 3.5%
-    stop_loss_ratio = 2.5      # 손절 2.5%
+    target_profit_ratio = PROFIT_TAKE_RATE  # trading_config.json에서 로드
+    stop_loss_ratio = STOP_LOSS_RATE        # trading_config.json에서 로드
 
     # 실제 수익금 계산 (각 거래의 실제 수익률 사용)
     actual_profit = sum(trade_amount * (t['profit'] / 100) for t in all_trades)
     avg_actual_profit = actual_profit / total_trades if total_trades > 0 else 0
+
+    # 최대 동시 보유 종목 수 통계
+    max_holdings_stats = None
+    if max_holdings_list:
+        valid_holdings = [h for h in max_holdings_list if h is not None]
+        if valid_holdings:
+            max_holdings_stats = {
+                'max': max(valid_holdings),
+                'avg': sum(valid_holdings) / len(valid_holdings),
+                'min': min(valid_holdings),
+                'count': len(valid_holdings)
+            }
 
     # 시간대별 통계
     hourly_stats = defaultdict(lambda: {'wins': 0, 'losses': 0, 'total_profit': 0.0})
@@ -211,7 +247,8 @@ def calculate_statistics(all_trades, start_date, end_date):
         'actual_profit': actual_profit,
         'avg_actual_profit': avg_actual_profit,
         'hourly_stats': hourly_summary,
-        'morning_stats': morning_stats
+        'morning_stats': morning_stats,
+        'max_holdings_stats': max_holdings_stats
     }
 
 
@@ -265,6 +302,24 @@ def save_statistics_log(stats, output_dir, start_date, end_date):
             f.write(f"총 실제 수익금: {stats['actual_profit']:+,.0f}원\n")
             f.write(f"거래당 평균 수익금: {stats['avg_actual_profit']:+,.0f}원\n")
             f.write("\n")
+
+            # 최대 동시 보유 종목 수 통계
+            if stats.get('max_holdings_stats'):
+                h_stats = stats['max_holdings_stats']
+                f.write("📊 최대 동시 보유 종목 수 통계\n")
+                f.write("-" * 40 + "\n")
+                f.write(f"기간 중 최대: {h_stats['max']}개\n")
+                f.write(f"평균: {h_stats['avg']:.1f}개\n")
+                f.write(f"최소: {h_stats['min']}개\n")
+                f.write(f"분석 일수: {h_stats['count']}일\n")
+                f.write("\n")
+                f.write("💡 거래당 투자금 권장:\n")
+                total_capital = 1100  # 1100만원
+                recommended_per_trade = total_capital / h_stats['max']
+                f.write(f"  총 투자금 {total_capital}만원 기준\n")
+                f.write(f"  최대 {h_stats['max']}개 동시 보유 대비\n")
+                f.write(f"  → 거래당 {recommended_per_trade:.0f}만원 ({recommended_per_trade*10000:,.0f}원) 권장\n")
+                f.write("\n")
 
             # 12시 이전 매수 통계
             if stats.get('morning_stats'):
@@ -378,7 +433,7 @@ def main():
 
     # 날짜 범위 검증
     if args.start > args.end:
-        print("❌ 오류: 시작 날짜가 종료 날짜보다 늦습니다.")
+        print("[ERROR] 오류: 시작 날짜가 종료 날짜보다 늦습니다.")
         return 1
 
     # 날짜 리스트 생성
@@ -395,7 +450,7 @@ def main():
         print("처리할 날짜가 없습니다.")
         return 1
 
-    print(f"📊 통계 생성 시작")
+    print(f"통계 생성 시작")
     print(f"   처리할 날짜: {len(dates)}개")
     print(f"   날짜 범위: {dates[0]} ~ {dates[-1]}")
     print(f"   입력 디렉터리: {args.input_dir}")
@@ -406,46 +461,53 @@ def main():
     found_files = find_replay_files(args.input_dir, dates)
 
     if not found_files:
-        print(f"❌ {args.input_dir}에서 해당 날짜의 replay 파일을 찾을 수 없습니다.")
+        print(f"[ERROR] {args.input_dir}에서 해당 날짜의 replay 파일을 찾을 수 없습니다.")
         print(f"   찾는 날짜: {', '.join(dates)}")
         return 1
 
-    print(f"📁 발견된 파일: {len(found_files)}개")
+    print(f"발견된 파일: {len(found_files)}개")
 
-    # 각 파일에서 거래 데이터 수집
+    # 각 파일에서 거래 데이터 및 최대 보유 종목 수 수집
     all_trades = []
+    max_holdings_list = []
     for date, file_path in found_files:
         print(f"   처리 중: {date} ({os.path.basename(file_path)})")
-        trades = parse_signal_replay_result(file_path)
+        trades, max_holdings = parse_signal_replay_result(file_path)
         if trades:
             all_trades.extend(trades)
             print(f"      → {len(trades)}개 거래 발견")
         else:
             print(f"      → 거래 데이터 없음")
 
+        if max_holdings is not None:
+            max_holdings_list.append(max_holdings)
+            print(f"      → 최대 동시 보유: {max_holdings}개")
+
     if not all_trades:
-        print("❌ 거래 데이터를 찾을 수 없습니다.")
+        print("[ERROR] 거래 데이터를 찾을 수 없습니다.")
         return 1
 
-    print(f"\n📈 총 {len(all_trades)}개 거래 데이터 수집 완료")
+    print(f"\n[OK] 총 {len(all_trades)}개 거래 데이터 수집 완료")
+    if max_holdings_list:
+        print(f"[OK] 최대 동시 보유 종목 수: {len(max_holdings_list)}일 데이터 수집 완료")
 
     # 통계 계산
-    print("📊 통계 계산 중...")
-    stats = calculate_statistics(all_trades, dates[0], dates[-1])
+    print("통계 계산 중...")
+    stats = calculate_statistics(all_trades, dates[0], dates[-1], max_holdings_list)
 
     if not stats:
-        print("❌ 통계 계산에 실패했습니다.")
+        print("[ERROR] 통계 계산에 실패했습니다.")
         return 1
 
     # 통계 파일 저장
-    print("💾 통계 파일 저장 중...")
+    print("통계 파일 저장 중...")
     output_file = save_statistics_log(stats, args.output_dir, dates[0], dates[-1])
 
     if output_file:
         # 콘솔에 요약 출력
-        print(f"\n✅ 통계 생성 완료!")
+        print(f"\n[OK] 통계 생성 완료!")
         print(f"   파일: {output_file}")
-        print(f"\n📋 통계 요약:")
+        print(f"\n[통계 요약]")
         print(f"   총 거래: {stats.get('total_trades', 0)}개")
         print(f"   승률: {stats.get('win_rate', 0):.1f}%")
         print(f"   손익비: {stats.get('profit_loss_ratio', 0):.2f}:1")
@@ -454,12 +516,12 @@ def main():
         target_profit = stats.get('target_profit_ratio', 0)
         stop_loss = stats.get('stop_loss_ratio', 0)
         trade_amount = stats.get('trade_amount', 0)
-        print(f"\n💰 실제 수익금 (손익비 {target_profit}:{stop_loss}, 거래당 {trade_amount:,}원):")
+        print(f"\n[실제 수익금] (손익비 {target_profit}:{stop_loss}, 거래당 {trade_amount:,}원):")
         print(f"   총 수익금: {stats.get('actual_profit', 0):+,.0f}원")
         print(f"   거래당 평균: {stats.get('avg_actual_profit', 0):+,.0f}원")
         return 0
     else:
-        print("❌ 통계 파일 저장에 실패했습니다.")
+        print("[ERROR] 통계 파일 저장에 실패했습니다.")
         return 1
 
 
