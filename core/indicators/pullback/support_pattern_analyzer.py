@@ -755,11 +755,26 @@ class SupportPatternAnalyzer:
             }
         
         if result.breakout_candle:
+            # 기존 breakout 정보 (로그용)
             debug_info['breakout'] = {
                 'idx': result.breakout_candle.idx,
                 'body_increase': f"{result.breakout_candle.body_increase_vs_support:.1%}",
                 'volume_increase': f"{result.breakout_candle.volume_ratio_vs_prev:.1%}"
             }
+
+            # 🆕 best_breakout: 필터링에 필요한 캔들 상세 정보
+            breakout_idx = result.breakout_candle.idx
+            if breakout_idx < len(data):
+                breakout_row = data.iloc[breakout_idx]
+                debug_info['best_breakout'] = {
+                    'high': float(breakout_row['high']),
+                    'low': float(breakout_row['low']),
+                    'close': float(breakout_row['close']),
+                    'open': float(breakout_row['open']),
+                    'volume': float(breakout_row['volume']),
+                    'volume_ratio_vs_prev': result.breakout_candle.volume_ratio_vs_prev,
+                    'body_increase_vs_support': result.breakout_candle.body_increase_vs_support
+                }
             
         if result.entry_price:
             debug_info['entry_price'] = f"{result.entry_price:,.0f}"

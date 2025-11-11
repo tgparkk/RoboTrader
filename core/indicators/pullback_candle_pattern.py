@@ -241,8 +241,21 @@ class PullbackCandlePattern:
                 # 패턴을 무효화
                 pattern_info['has_support_pattern'] = False
                 pattern_info['reasons'].append(exclude_reason)
-        
-        
+
+        # 🆕 종가 위치 필터링 (승률 50.6% → 72.9% 개선)
+        if result.has_pattern and pattern_info['debug_info']:
+            from core.indicators.close_position_filter import ClosePositionFilter
+            import logging
+            logger = logging.getLogger(__name__)
+
+            close_filter = ClosePositionFilter(logger=logger, min_close_position=0.55)
+            should_exclude, exclude_reason = close_filter.should_exclude(pattern_info['debug_info'])
+
+            if should_exclude:
+                # 패턴을 무효화
+                pattern_info['has_support_pattern'] = False
+                pattern_info['reasons'].append(exclude_reason)
+
 
         return pattern_info
     
