@@ -246,23 +246,28 @@ class PullbackCandlePattern:
                 pattern_info['has_support_pattern'] = False
                 pattern_info['reasons'].append(exclude_reason)
 
-        # 🆕 종가 위치 필터링 (승률 50.6% → 72.9% 개선)
+        '''
+        # 🆕 시간대별 가중치 필터링 (승률 50.9% → 60-65% 예상)
+        # 고위험 시간대(10시, 14시) 강화 필터 적용
         if result.has_pattern and pattern_info['debug_info']:
-            from core.indicators.close_position_filter import ClosePositionFilter
+            from core.indicators.time_weighted_filter import TimeWeightedFilter
             from core.indicators.filter_stats import filter_stats
+            from utils.korean_time import now_kst
             import logging
             logger = logging.getLogger(__name__)
 
-            close_filter = ClosePositionFilter(logger=logger, min_close_position=0.55)
-            should_exclude, exclude_reason = close_filter.should_exclude(pattern_info['debug_info'])
+            time_filter = TimeWeightedFilter(logger=logger)
+            should_exclude, exclude_reason = time_filter.should_exclude(
+                pattern_info['debug_info'],
+                now_kst()
+            )
 
             if should_exclude:
-                filter_stats.increment('close_position_filter', exclude_reason)  # 통계 기록
+                filter_stats.increment('time_weighted_filter', exclude_reason)  # 통계 기록
                 # 패턴을 무효화
                 pattern_info['has_support_pattern'] = False
                 pattern_info['reasons'].append(exclude_reason)
-
-
+        '''
         return pattern_info
     
     @staticmethod

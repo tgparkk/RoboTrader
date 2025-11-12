@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """
 배치 신호 리플레이 스크립트
-날짜 범위를 입력받아 해당 기간의 모든 날짜에 대해 signal_replay를 실행합니다.
+날짜 범위를 입력받아 해당 기간의 모든 날짜에 대해 signal_replay를 병렬로 실행합니다.
 
 사용법:
 python batch_signal_replay.py --start 20250826 --end 20250828
 python batch_signal_replay.py --start 20250826 --end 20250828 --time-range 9:00-16:00
+
+병렬 처리 옵션:
+python batch_signal_replay.py -s 20250826 -e 20250828                # 기본 병렬 (CPU 코어의 절반)
+python batch_signal_replay.py -s 20250826 -e 20250828 --workers 4   # 4개 작업 동시 실행
+python batch_signal_replay.py -s 20250826 -e 20250828 --serial      # 순차 실행 (병렬 비활성화)
 """
 
 import argparse
@@ -16,6 +21,8 @@ import os
 import re
 from collections import defaultdict
 import json
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from multiprocessing import cpu_count
 
 
 def parse_date(date_str):
@@ -45,15 +52,15 @@ def run_signal_replay(date, time_range="9:00-16:00"):
     # signal_replay_log 폴더 생성
     log_dir = "signal_replay_log"
     os.makedirs(log_dir, exist_ok=True)
-    
+
     # 시간 범위를 파일명 형식으로 변환 (9:00-16:00 -> 9_9_0)
     start_time = time_range.split('-')[0]
     hour = start_time.split(':')[0]
     minute = start_time.split(':')[1] if ':' in start_time else '0'
     time_parts = f"{hour}_{minute}_0"
-    
+
     txt_filename = os.path.join(log_dir, f"signal_new2_replay_{date}_{time_parts}.txt")
-    
+
     # 명령어 구성
     cmd = [
         sys.executable, '-m', 'utils.signal_replay',
@@ -61,10 +68,8 @@ def run_signal_replay(date, time_range="9:00-16:00"):
         '--export', 'txt',
         '--txt-path', txt_filename
     ]
-    
+
     print(f"실행 중: {date}")
-    print(f"   출력 파일: {txt_filename}")
-    print(f"   명령어: {' '.join(cmd)}")
 
     try:
         # 환경 변수 복사 및 패턴 로깅 활성화
@@ -83,16 +88,18 @@ def run_signal_replay(date, time_range="9:00-16:00"):
         )
 
         if result.returncode == 0:
-            print(f"완료: {date}")
-            if result.stdout and result.stdout.strip():
-                print(f"   출력: {result.stdout.strip()}")
+            print(f"✅ 완료: {date}")
+            return True, date
         else:
-            print(f"오류: {date} (반환코드: {result.returncode})")
+            print(f"❌ 오류: {date} (반환코드: {result.returncode})")
             if result.stderr and result.stderr.strip():
-                print(f"   에러: {result.stderr.strip()}")
+                error_lines = result.stderr.strip().split('\n')
+                print(f"   에러: {error_lines[0]}")  # 첫 줄만 출력
+            return False, date
 
     except Exception as e:
-        print(f"실행 오류 ({date}): {e}")
+        print(f"❌ 실행 오류 ({date}): {e}")
+        return False, date
 
 
 def parse_signal_replay_result(txt_filename):
@@ -312,9 +319,17 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 사용 예시:
+  # 기본 병렬 실행 (CPU 코어의 절반)
   python batch_signal_replay.py --start 20250826 --end 20250828
-  python batch_signal_replay.py --start 20250826 --end 20250828 --time-range 9:00-15:30
-  python batch_signal_replay.py -s 20250826 -e 20250828
+
+  # 병렬 작업 수 지정 (4개 동시 실행)
+  python batch_signal_replay.py -s 20250826 -e 20250828 --workers 4
+
+  # 순차 실행 (병렬 비활성화)
+  python batch_signal_replay.py -s 20250826 -e 20250828 --serial
+
+  # 시간 범위 지정
+  python batch_signal_replay.py -s 20250826 -e 20250828 -t 9:00-15:30
         """
     )
     
@@ -344,7 +359,20 @@ def main():
         action='store_true',
         help='주말 포함 (기본적으로 평일만 처리)'
     )
-    
+
+    parser.add_argument(
+        '--workers', '-w',
+        type=int,
+        default=None,
+        help=f'병렬 작업 수 (기본값: CPU 코어 수의 절반, 최대 {cpu_count()})'
+    )
+
+    parser.add_argument(
+        '--serial',
+        action='store_true',
+        help='순차 실행 (병렬 처리 비활성화)'
+    )
+
     args = parser.parse_args()
     
     # 날짜 범위 검증
@@ -366,28 +394,89 @@ def main():
         print("처리할 날짜가 없습니다.")
         sys.exit(1)
     
+    # 병렬 작업 수 결정
+    if args.serial:
+        max_workers = 1
+        print("⚙️ 순차 실행 모드")
+    else:
+        if args.workers:
+            max_workers = min(args.workers, cpu_count())
+        else:
+            # CPU 코어 수의 절반 (최소 1, 최대 8)
+            max_workers = max(1, min(cpu_count() // 2, 8))
+        print(f"⚙️ 병렬 실행 모드: {max_workers}개 작업 동시 실행")
+
     print(f"처리할 날짜: {len(dates)}개")
     print(f"   범위: {dates[0]} ~ {dates[-1]}")
     print(f"   시간: {args.time_range}")
-    print(f"   날짜 목록: {', '.join(dates)}")
-    print("=" * 50)
-    
+    print(f"   CPU 코어: {cpu_count()}개")
+    print("=" * 70)
+
     # 각 날짜에 대해 signal_replay 실행
     success_count = 0
-    for i, date in enumerate(dates, 1):
-        print(f"\n[{i}/{len(dates)}] {date} 처리 중...")
-        
+    failed_dates = []
+
+    if max_workers == 1:
+        # 순차 실행
+        for i, date in enumerate(dates, 1):
+            print(f"\n[{i}/{len(dates)}] {date} 처리 중...")
+
+            try:
+                success, _ = run_signal_replay(date, args.time_range)
+                if success:
+                    success_count += 1
+                else:
+                    failed_dates.append(date)
+            except KeyboardInterrupt:
+                print("\n\n사용자가 중단했습니다.")
+                break
+            except Exception as e:
+                print(f"❌ 처리 오류 ({date}): {e}")
+                failed_dates.append(date)
+    else:
+        # 병렬 실행
+        print(f"\n🚀 {max_workers}개 작업으로 병렬 처리 시작...\n")
+
         try:
-            run_signal_replay(date, args.time_range)
-            success_count += 1
+            with ProcessPoolExecutor(max_workers=max_workers) as executor:
+                # 모든 작업 제출
+                future_to_date = {
+                    executor.submit(run_signal_replay, date, args.time_range): date
+                    for date in dates
+                }
+
+                # 완료되는 순서대로 결과 처리
+                completed = 0
+                for future in as_completed(future_to_date):
+                    completed += 1
+                    date = future_to_date[future]
+
+                    try:
+                        success, result_date = future.result()
+                        if success:
+                            success_count += 1
+                        else:
+                            failed_dates.append(result_date)
+
+                        # 진행률 표시
+                        print(f"진행률: {completed}/{len(dates)} ({completed/len(dates)*100:.1f}%)")
+
+                    except Exception as e:
+                        print(f"❌ 처리 오류 ({date}): {e}")
+                        failed_dates.append(date)
+
         except KeyboardInterrupt:
-            print("\n\n사용자가 중단했습니다.")
-            break
+            print("\n\n⚠️ 사용자가 중단했습니다. 진행 중인 작업을 종료합니다...")
         except Exception as e:
-            print(f"처리 오류 ({date}): {e}")
-    
-    print("\n" + "=" * 50)
+            print(f"❌ 병렬 처리 오류: {e}")
+
+    print("\n" + "=" * 70)
     print(f"배치 처리 완료: {success_count}/{len(dates)}개 성공")
+
+    if failed_dates:
+        print(f"\n⚠️ 실패한 날짜 ({len(failed_dates)}개):")
+        for date in failed_dates:
+            print(f"   - {date}")
 
     # 필터 통계 출력
     try:

@@ -286,6 +286,30 @@ class PullbackPatternValidator:
             weak_points.append("돌파 양봉 정보 없음")
             return 0.0
 
+        # 🆕 종가 위치 검증 (필수 조건) - 승률 72.9% → 82.8% 개선
+        # 종가가 캔들 범위의 55% 이상에 위치해야 함
+        candle_high = breakout.get('high', 0)
+        candle_low = breakout.get('low', 0)
+        candle_close = breakout.get('close', 0)
+
+        # 디버그: breakout 데이터 확인
+        self.logger.debug(f"🔍 Breakout 데이터: high={candle_high}, low={candle_low}, close={candle_close}, breakout_keys={list(breakout.keys())}")
+
+        candle_range = candle_high - candle_low
+        if candle_range > 0:
+            close_position = (candle_close - candle_low) / candle_range
+
+            if close_position < 0.55:
+                # 종가가 캔들 하단에 위치 = 위에서 저항받음 = 위험
+                weak_points.append(f"종가 하단위치 {close_position:.1%} (위에서 저항)")
+                self.logger.info(f"🚫 돌파봉 종가 하단위치 {close_position:.1%} < 55% - 필터링")
+                return 0.0  # 즉시 0점 처리하여 패턴 차단
+            elif close_position >= 0.70:
+                score += 5  # 보너스 점수
+                strength_points.append(f"종가 상단위치 {close_position:.1%}")
+            else:
+                strength_points.append(f"종가 적정위치 {close_position:.1%}")
+
         # 거래량 증가 검증 (15점) - 기준 완화
         volume_increase = breakout.get('volume_ratio_vs_prev', 1.0) * 100
         if volume_increase >= 50.0:  # 50% 이상이면 만점
