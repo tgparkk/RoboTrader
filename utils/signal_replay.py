@@ -1404,6 +1404,25 @@ def main():
                         lines.append(f"  ㄴ 손실 금액: -{total_loss:,.0f}원 (실제 손실률 합계)")
                         lines.append("")
 
+                    # 🆕 필터 통계 추가
+                    try:
+                        from core.indicators.filter_stats import filter_stats
+                        stats = filter_stats.get_stats()
+                        total_checked = stats.get('total_patterns_checked', 0)
+                        combo_blocked = stats.get('pattern_combination_filter', 0)
+                        close_blocked = stats.get('close_position_filter', 0)
+
+                        if total_checked > 0:
+                            passed = total_checked - combo_blocked - close_blocked
+                            lines.append(f"=== 📊 필터 통계 ===")
+                            lines.append(f"전체 패턴 체크: {total_checked}건")
+                            lines.append(f"  ✅ 통과: {passed}건 ({passed/total_checked*100:.1f}%)")
+                            lines.append(f"  🚫 마이너스 조합 필터 차단: {combo_blocked}건 ({combo_blocked/total_checked*100:.1f}%)")
+                            lines.append(f"  🚫 종가 위치 필터 차단: {close_blocked}건 ({close_blocked/total_checked*100:.1f}%)")
+                            lines.append("")
+                    except Exception as e:
+                        pass  # 필터 통계 오류는 무시
+
                     lines.append(f"=== 총 승패: {total_wins}승 {total_losses}패 ===")
                     lines.append(f"=== selection_date 이후 승패: {selection_date_wins}승 {selection_date_losses}패 ===")
                     lines.append(f"=== 📊 최대 동시 보유 종목 수: {max_concurrent_holdings}개 ===")

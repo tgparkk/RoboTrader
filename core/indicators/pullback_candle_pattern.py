@@ -230,14 +230,18 @@ class PullbackCandlePattern:
         # 🚫 마이너스 수익 조합 필터링
         if result.has_pattern and pattern_info['debug_info']:
             from core.indicators.pattern_combination_filter import PatternCombinationFilter
+            from core.indicators.filter_stats import filter_stats
             import logging
             logger = logging.getLogger(__name__)
+
+            filter_stats.increment_total()  # 전체 체크 횟수
 
             filter = PatternCombinationFilter(logger=logger)
             should_exclude, exclude_reason = filter.should_exclude(pattern_info['debug_info'])
 
             if should_exclude:
                 logger.info(f"🚫 {exclude_reason}")
+                filter_stats.increment('pattern_combination_filter', exclude_reason)  # 통계 기록
                 # 패턴을 무효화
                 pattern_info['has_support_pattern'] = False
                 pattern_info['reasons'].append(exclude_reason)
@@ -245,6 +249,7 @@ class PullbackCandlePattern:
         # 🆕 종가 위치 필터링 (승률 50.6% → 72.9% 개선)
         if result.has_pattern and pattern_info['debug_info']:
             from core.indicators.close_position_filter import ClosePositionFilter
+            from core.indicators.filter_stats import filter_stats
             import logging
             logger = logging.getLogger(__name__)
 
@@ -252,6 +257,7 @@ class PullbackCandlePattern:
             should_exclude, exclude_reason = close_filter.should_exclude(pattern_info['debug_info'])
 
             if should_exclude:
+                filter_stats.increment('close_position_filter', exclude_reason)  # 통계 기록
                 # 패턴을 무효화
                 pattern_info['has_support_pattern'] = False
                 pattern_info['reasons'].append(exclude_reason)

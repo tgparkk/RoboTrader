@@ -389,6 +389,13 @@ def main():
     print("\n" + "=" * 50)
     print(f"배치 처리 완료: {success_count}/{len(dates)}개 성공")
 
+    # 필터 통계 출력
+    try:
+        from core.indicators.filter_stats import filter_stats
+        print("\n" + filter_stats.get_summary())
+    except Exception as e:
+        print(f"필터 통계 출력 오류: {e}")
+
     if success_count < len(dates):
         print("일부 날짜에서 오류가 발생했습니다. 위의 로그를 확인해주세요.")
 
