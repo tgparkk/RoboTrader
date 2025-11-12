@@ -818,7 +818,12 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
             else:
                 # ==================== 포지션 업데이트: 미결제 (장 마감까지 보유) ====================
                 from utils.korean_time import now_kst
-                eod_time = buy_time.replace(hour=15, minute=30, second=0, microsecond=0)  # 15:30 장 마감
+                from config.market_hours import MarketHours
+
+                # 장마감 시간 동적으로 가져오기 (특수일 대응)
+                market_hours = MarketHours.get_market_hours('KRX', buy_time)
+                market_close_time = market_hours['market_close']
+                eod_time = buy_time.replace(hour=market_close_time.hour, minute=market_close_time.minute, second=0, microsecond=0)
                 
                 current_position = {
                     'buy_time': buy_time,
@@ -851,12 +856,16 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
             completed_trades = [t for t in trades if t['status'] == 'completed']
             successful_trades = [t for t in completed_trades if t['profit_rate'] > 0]
 
-            # 🆕 12시 이전 매수 종목들 필터링
+            # 🆕 매수 중단 시간 이전 매수 종목들 필터링 (동적 시간 적용)
+            from config.market_hours import MarketHours
+            market_hours = MarketHours.get_market_hours('KRX', datetime.strptime(date, '%Y%m%d'))
+            buy_cutoff_hour = market_hours.get('buy_cutoff_hour', 12)
+
             morning_trades = []
             for trade in completed_trades:
                 try:
                     buy_hour = int(trade['buy_time'].split(':')[0])
-                    if buy_hour < 12:
+                    if buy_hour < buy_cutoff_hour:
                         morning_trades.append(trade)
                 except (ValueError, IndexError):
                     continue
@@ -874,7 +883,7 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                 morning_win_rate = len(morning_successful) / len(morning_trades) * 100
                 morning_avg_profit = sum(t['profit_rate'] for t in morning_trades) / len(morning_trades)
 
-                logger.info(f"🌅 12시 이전 매수 거래:")
+                logger.info(f"🌅 {buy_cutoff_hour}시 이전 매수 거래:")
                 logger.info(f"   오전 거래 수: {len(morning_trades)}건")
                 logger.info(f"   오전 성공: {len(morning_successful)}건")
                 logger.info(f"   오전 실패: {len(morning_trades) - len(morning_successful)}건")
@@ -1354,8 +1363,13 @@ def main():
                                 buy_time_str = trade.get('buy_time', '')
                                 if buy_time_str:
                                     try:
+                                        # 동적 매수 중단 시간 적용
+                                        from config.market_hours import MarketHours
+                                        market_hours = MarketHours.get_market_hours('KRX', datetime.strptime(date, '%Y%m%d'))
+                                        buy_cutoff_hour = market_hours.get('buy_cutoff_hour', 12)
+
                                         buy_hour = int(buy_time_str.split(':')[0])
-                                        if buy_hour < 12:  # 12시 이전 매수
+                                        if buy_hour < buy_cutoff_hour:  # 매수 중단 시간 이전 매수
                                             profit_rate = trade.get('profit_rate', 0)
                                             if profit_rate > 0:
                                                 morning_wins += 1
@@ -1445,7 +1459,12 @@ def main():
                         morning_net_profit = morning_profit - morning_loss
                         morning_net_profit_rate = (morning_net_profit / investment_per_trade) * 100 if investment_per_trade > 0 else 0
 
-                        lines.append(f"=== 🌅 12시 이전 매수 종목: {morning_wins}승 {morning_losses}패 (승률 {morning_win_rate:.1f}%) ===")
+                        # 동적으로 시간 표시
+                        from config.market_hours import MarketHours
+                        market_hours_display = MarketHours.get_market_hours('KRX', datetime.strptime(date, '%Y%m%d'))
+                        buy_cutoff_display = market_hours_display.get('buy_cutoff_hour', 12)
+
+                        lines.append(f"=== 🌅 {buy_cutoff_display}시 이전 매수 종목: {morning_wins}승 {morning_losses}패 (승률 {morning_win_rate:.1f}%) ===")
                         lines.append(f"총 수익금: {morning_net_profit:+,.0f}원 ({morning_net_profit_rate:+.1f}%)")
                         lines.append(f"  ㄴ 승리 수익: +{morning_profit:,.0f}원")
                         lines.append(f"  ㄴ 손실 금액: -{morning_loss:,.0f}원")

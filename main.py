@@ -26,6 +26,7 @@ from api.kis_api_manager import KISAPIManager
 from config.settings import load_trading_config
 from utils.logger import setup_logger
 from utils.korean_time import now_kst, get_market_status, is_market_open, KST
+from config.market_hours import MarketHours
 from post_market_chart_generator import PostMarketChartGenerator
 
 
@@ -144,7 +145,11 @@ class DayTradingBot:
         """시스템 초기화"""
         try:
             self.logger.info("🚀 주식 단타 거래 시스템 초기화 시작")
-            
+
+            # 0. 오늘 거래시간 정보 출력 (특수일 확인)
+            today_info = MarketHours.get_today_info('KRX')
+            self.logger.info(f"📅 오늘 거래시간 정보:\n{today_info}")
+
             # 1. API 초기화
             self.logger.info("📡 API 매니저 초기화 시작...")
             if not self.api_manager.initialize():
@@ -235,20 +240,21 @@ class DayTradingBot:
                     continue
                 
                 current_time = now_kst()
-                
-                # 🚨 15시 시장가 일괄매도 체크 (한 번만 실행)
-                if current_time.hour >= 15 and current_time.minute >= 0:
+
+                # 🚨 장마감 시간 시장가 일괄매도 체크 (한 번만 실행) - 동적 시간 적용
+                if MarketHours.is_eod_liquidation_time('KRX', current_time):
                     if not hasattr(self, '_eod_liquidation_done'):
                         await self._execute_end_of_day_liquidation()
                         self._eod_liquidation_done = True
-                    
-                    # 15시 이후에는 매매 판단 건너뛰고 모니터링만 계속
-                    # (15:30 데이터 저장을 위해 루프 계속 실행)
+
+                    # 청산 시간 이후에는 매매 판단 건너뛰고 모니터링만 계속
+                    # (장마감 후 데이터 저장을 위해 루프 계속 실행)
                     await asyncio.sleep(5)
                     continue
                 
-                # 🆕 장중 조건검색 체크 (오전 09:00 ~ 15:00)
-                if (9 <= current_time.hour < 15 and 
+                # 🆕 장중 조건검색 체크 (장 시작 ~ 청산 시간 전까지) - 동적 시간 적용
+                if (is_market_open(current_time) and
+                    not MarketHours.is_eod_liquidation_time('KRX', current_time) and
                     (current_time - last_condition_check).total_seconds() >= 60):  # 60초
                     await self._check_condition_search()
                     last_condition_check = current_time
@@ -970,10 +976,10 @@ class DayTradingBot:
                 return
 
             # 🆕 데이터 업데이트 직후 매수 판단 실행 (3분봉 완성 + 10초 후)
-            # 12시 이전이고 SELECTED/COMPLETED 상태 종목만 매수 판단
-            is_after_noon = current_time.hour >= 12
+            # 매수 중단 시간 전이고 SELECTED/COMPLETED 상태 종목만 매수 판단 - 동적 시간 적용
+            should_stop_buy = MarketHours.should_stop_buying('KRX', current_time)
 
-            if not is_after_noon:
+            if not should_stop_buy:
                 # 가용 자금 계산
                 balance_info = self.api_manager.get_account_balance()
                 if balance_info:
