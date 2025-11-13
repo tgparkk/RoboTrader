@@ -32,6 +32,7 @@ from utils.logger import setup_logger
 from api.kis_api_manager import KISAPIManager
 from api.kis_chart_api import get_full_trading_day_data_async
 from api.kis_market_api import get_inquire_daily_itemchartprice
+from config.market_hours import MarketHours
 
 
 class CandidateDataSaver:
@@ -245,15 +246,23 @@ class CandidateDataSaver:
                 self.logger.debug(f"📉 {stock_code} 분봉 데이터 이미 존재 (스킵): {minute_file.name}")
                 return True
 
-            # 기존 함수 활용해서 전체 거래시간 분봉 데이터 수집
-            # 09:00~15:30 전체 데이터 (120건 제한 자동 우회)
-            self.logger.info(f"📉 {stock_code} 분봉 데이터 수집 중... ({target_date})")
+            # 🆕 동적 시장 거래시간 가져오기
+            target_date_obj = datetime.strptime(target_date, '%Y%m%d')
+            market_hours = MarketHours.get_market_hours('KRX', target_date_obj)
+            market_open = market_hours['market_open']
+            market_close = market_hours['market_close']
+
+            start_time_str = market_open.strftime('%H%M%S')
+            end_time_str = market_close.strftime('%H%M%S')
+
+            # 기존 함수 활용해서 전체 거래시간 분봉 데이터 수집 (동적 시간 적용)
+            self.logger.info(f"📉 {stock_code} 분봉 데이터 수집 중... ({target_date} {start_time_str}~{end_time_str})")
 
             minute_data = await get_full_trading_day_data_async(
                 stock_code=stock_code,
                 target_date=target_date,
-                selected_time="153000",  # 15:30까지
-                start_time="090000"      # 09:00부터
+                selected_time=end_time_str,   # 동적 장마감 시간
+                start_time=start_time_str     # 동적 장시작 시간
             )
 
             if minute_data is None or minute_data.empty:

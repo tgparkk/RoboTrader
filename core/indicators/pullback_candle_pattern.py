@@ -226,7 +226,7 @@ class PullbackCandlePattern:
         # 중복 신호 방지를 위해 항상 디버그 정보 포함 (동일한 분석기 사용)
         pattern_info['debug_info'] = analyzer.get_debug_info(data)
         
-        
+        '''
         # 🚫 마이너스 수익 조합 필터링
         if result.has_pattern and pattern_info['debug_info']:
             from core.indicators.pattern_combination_filter import PatternCombinationFilter
@@ -245,6 +245,7 @@ class PullbackCandlePattern:
                 # 패턴을 무효화
                 pattern_info['has_support_pattern'] = False
                 pattern_info['reasons'].append(exclude_reason)
+        '''
 
         '''
         # 🆕 시간대별 가중치 필터링 (승률 50.9% → 60-65% 예상)

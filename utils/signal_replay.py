@@ -51,7 +51,7 @@ import asyncio
 from typing import Dict, List, Tuple, Optional
 import io
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 import sys
 import os
 import sqlite3
@@ -867,7 +867,11 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
 
             # 🆕 매수 중단 시간 이전 매수 종목들 필터링 (동적 시간 적용)
             from config.market_hours import MarketHours
-            market_hours = MarketHours.get_market_hours('KRX', datetime.strptime(date, '%Y%m%d'))
+            if simulation_date:
+                market_hours = MarketHours.get_market_hours('KRX', datetime.strptime(simulation_date, '%Y%m%d'))
+            else:
+                # simulation_date가 없으면 오늘 날짜 사용
+                market_hours = MarketHours.get_market_hours('KRX', datetime.now())
             buy_cutoff_hour = market_hours.get('buy_cutoff_hour', 12)
 
             morning_trades = []
@@ -1105,23 +1109,31 @@ def main():
                         with open(cache_file, 'rb') as f:
                             cached_data = pickle.load(f)
 
-                        # 데이터 품질 검증: 09:00 ~ 15:00 시간대 포함 확인
+                        # 데이터 품질 검증: 동적 시장 시간대 포함 확인
                         if not cached_data.empty and 'datetime' in cached_data.columns:
                             cached_data['datetime'] = pd.to_datetime(cached_data['datetime'])
+
+                            # 해당 날짜의 시장 거래시간 가져오기
+                            from config.market_hours import MarketHours
+                            target_date = datetime.strptime(date_str, '%Y%m%d')
+                            market_hours = MarketHours.get_market_hours('KRX', target_date)
+                            market_open_time = market_hours['market_open']
+                            market_close_time = market_hours['market_close']
 
                             # 시간대 추출
                             times = cached_data['datetime'].dt.time
 
-                            # 09:00 이후 데이터 확인
-                            has_morning = any(t >= pd.Timestamp('09:00').time() for t in times)
-                            # 15:00 이전 데이터 확인
-                            has_afternoon = any(t >= pd.Timestamp('15:00').time() for t in times)
+                            # 시장 시작 시간 이후 데이터 확인
+                            has_morning = any(t >= market_open_time for t in times)
+                            # 시장 마감 시간 이전 데이터 확인 (15:00 또는 16:00 체크)
+                            check_time = time(market_close_time.hour - 1, 0)  # 마감 1시간 전 체크
+                            has_afternoon = any(t >= check_time for t in times)
 
                             if has_morning and has_afternoon:
                                 df_1min = cached_data
                                 logger.info(f"💾 [{stock_code}] 캐시 데이터 사용 - {len(df_1min)}개 봉")
                             else:
-                                logger.warning(f"⚠️  [{stock_code}] 캐시 데이터 불완전 (09:00~15:00 미포함), API 재조회")
+                                logger.warning(f"⚠️  [{stock_code}] 캐시 데이터 불완전 ({market_open_time.strftime('%H:%M')}~{market_close_time.strftime('%H:%M')} 미포함), API 재조회")
                         else:
                             logger.warning(f"⚠️  [{stock_code}] 캐시 데이터 형식 오류, API 재조회")
                     except Exception as e:
@@ -1374,7 +1386,7 @@ def main():
                                     try:
                                         # 동적 매수 중단 시간 적용
                                         from config.market_hours import MarketHours
-                                        market_hours = MarketHours.get_market_hours('KRX', datetime.strptime(date, '%Y%m%d'))
+                                        market_hours = MarketHours.get_market_hours('KRX', datetime.strptime(date_str, '%Y%m%d'))
                                         buy_cutoff_hour = market_hours.get('buy_cutoff_hour', 12)
 
                                         buy_hour = int(buy_time_str.split(':')[0])
@@ -1470,7 +1482,7 @@ def main():
 
                         # 동적으로 시간 표시
                         from config.market_hours import MarketHours
-                        market_hours_display = MarketHours.get_market_hours('KRX', datetime.strptime(date, '%Y%m%d'))
+                        market_hours_display = MarketHours.get_market_hours('KRX', datetime.strptime(date_str, '%Y%m%d'))
                         buy_cutoff_display = market_hours_display.get('buy_cutoff_hour', 12)
 
                         lines.append(f"=== 🌅 {buy_cutoff_display}시 이전 매수 종목: {morning_wins}승 {morning_losses}패 (승률 {morning_win_rate:.1f}%) ===")
@@ -1602,7 +1614,13 @@ def main():
                         
                         # ==================== 🆕 상세 3분봉 분석 추가 ====================
                         lines.append("")
-                        lines.append("  🔍 상세 3분봉 분석 (09:00~15:30):")
+                        # 동적 시장 시간 표시
+                        from config.market_hours import MarketHours
+                        target_date_display = datetime.strptime(date_str, '%Y%m%d')
+                        market_hours_display = MarketHours.get_market_hours('KRX', target_date_display)
+                        market_open_str = market_hours_display['market_open'].strftime('%H:%M')
+                        market_close_str = market_hours_display['market_close'].strftime('%H:%M')
+                        lines.append(f"  🔍 상세 3분봉 분석 ({market_open_str}~{market_close_str}):")
                         
                         # 해당 종목의 상세 분석을 위한 데이터 재처리
                         try:
