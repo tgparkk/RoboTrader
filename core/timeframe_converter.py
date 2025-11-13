@@ -239,14 +239,28 @@ class TimeFrameConverter:
                         # 인덱스가 datetime이 아닌 경우 기본값 사용
                         end_time = pd.Timestamp(f'2023-01-01 {target_hour:02d}:{target_min:02d}:00')
                     
-                    # 15:30을 넘지 않도록 제한
-                    if target_hour > 15 or (target_hour == 15 and target_min > 30):
+                    # 장마감 시간을 넘지 않도록 제한 (동적 시간 적용)
+                    from config.market_hours import MarketHours
+                    from utils.korean_time import now_kst
+
+                    # 데이터의 날짜 파악
+                    if hasattr(data.index, 'date') and len(data.index) > 0:
+                        data_date = data.index[0]
+                    else:
+                        data_date = now_kst()
+
+                    market_hours = MarketHours.get_market_hours('KRX', data_date)
+                    market_close = market_hours['market_close']
+                    close_hour = market_close.hour
+                    close_minute = market_close.minute
+
+                    if target_hour > close_hour or (target_hour == close_hour and target_min > close_minute):
                         if hasattr(data.index, 'date') and len(data.index) > 0:
                             base_date = data.index[0].date()
                             from datetime import time
-                            end_time = pd.Timestamp.combine(base_date, time(hour=15, minute=30, second=0))
+                            end_time = pd.Timestamp.combine(base_date, time(hour=close_hour, minute=close_minute, second=0))
                         else:
-                            end_time = pd.Timestamp('2023-01-01 15:30:00')
+                            end_time = pd.Timestamp(f'2023-01-01 {close_hour:02d}:{close_minute:02d}:00')
                     
                     data_5min_list.append({
                         'datetime': end_time,

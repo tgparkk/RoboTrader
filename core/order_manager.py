@@ -34,27 +34,34 @@ class OrderManager:
         self.trading_manager = trading_manager
     
     def _get_current_3min_candle_time(self) -> datetime:
-        """현재 시간을 기준으로 3분봉 시간 계산 (3분 단위로 반올림)"""
+        """현재 시간을 기준으로 3분봉 시간 계산 (3분 단위로 반올림) - 동적 시간 적용"""
         try:
+            from config.market_hours import MarketHours
+
             current_time = now_kst()
-            
-            # 9시부터의 경과 분 계산
-            market_open = current_time.replace(hour=9, minute=0, second=0, microsecond=0)
+
+            # 🆕 동적 시장 시간 가져오기
+            market_hours = MarketHours.get_market_hours('KRX', current_time)
+            market_open_time = market_hours['market_open']
+            market_close_time = market_hours['market_close']
+
+            # 시장 시작 시간부터의 경과 분 계산
+            market_open = current_time.replace(hour=market_open_time.hour, minute=market_open_time.minute, second=0, microsecond=0)
             elapsed_minutes = int((current_time - market_open).total_seconds() / 60)
-            
+
             # 3분 단위로 반올림 (예: 0-2분 → 3분, 3-5분 → 6분)
             candle_minute = ((elapsed_minutes // 3) + 1) * 3
-            
+
             # 실제 3분봉 시간 생성 (해당 구간의 끝 시간)
             candle_time = market_open + timedelta(minutes=candle_minute)
-            
-            # 15:30 초과 시 15:30으로 제한
-            market_close = current_time.replace(hour=15, minute=30, second=0, microsecond=0)
+
+            # 장마감 시간 초과 시 장마감 시간으로 제한
+            market_close = current_time.replace(hour=market_close_time.hour, minute=market_close_time.minute, second=0, microsecond=0)
             if candle_time > market_close:
                 candle_time = market_close
-            
+
             return candle_time
-            
+
         except Exception as e:
             self.logger.error(f"❌ 3분봉 시간 계산 오류: {e}")
             return now_kst()

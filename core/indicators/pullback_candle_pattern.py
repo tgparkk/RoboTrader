@@ -494,20 +494,27 @@ class PullbackCandlePattern:
                 return (signal_strength, risk_signals) if return_risk_signals else signal_strength
 
             # 핵심 매수 조건들만 체크
-            # 1. 당일 시가 이상 (09:00 3분봉의 시가 = 1분봉 09:00의 시가)
-            # data는 3분봉이지만, 09:00~09:03 3분봉의 open은 1분봉 09:00의 open과 동일
+            # 1. 당일 시가 이상 (시장 시작 3분봉의 시가 = 1분봉 시작시간의 시가) - 동적 시간 적용
+            # data는 3분봉이지만, 시작~시작+3분 3분봉의 open은 1분봉 시작시간의 open과 동일
+            from config.market_hours import MarketHours
+
             day_open_price = None
             if len(data) > 0:
                 # 첫 번째 3분봉의 datetime 확인
                 first_candle_time = pd.to_datetime(data['datetime'].iloc[0]) if 'datetime' in data.columns else None
 
-                # 09:00 3분봉(09:00~09:03)인 경우만 시가로 인정
-                if first_candle_time and first_candle_time.hour == 9 and first_candle_time.minute == 0:
-                    day_open_price = float(data['open'].iloc[0])
-                else:
-                    # 09:00 3분봉이 아니면 데이터 부족으로 판단
-                    result = SignalStrength(SignalType.AVOID, 0, 0, ["09:00시가없음"], volume_analysis.volume_ratio, BisectorStatus.BROKEN)
-                    return (result, []) if return_risk_signals else result
+                if first_candle_time:
+                    # 동적 시장 시작 시간 가져오기
+                    market_hours = MarketHours.get_market_hours('KRX', first_candle_time)
+                    market_open = market_hours['market_open']
+
+                    # 시장 시작 3분봉인 경우만 시가로 인정
+                    if first_candle_time.hour == market_open.hour and first_candle_time.minute == market_open.minute:
+                        day_open_price = float(data['open'].iloc[0])
+                    else:
+                        # 시장 시작 3분봉이 아니면 데이터 부족으로 판단
+                        result = SignalStrength(SignalType.AVOID, 0, 0, [f"{market_open.strftime('%H:%M')}시가없음"], volume_analysis.volume_ratio, BisectorStatus.BROKEN)
+                        return (result, []) if return_risk_signals else result
 
             if day_open_price and float(current['close']) <= day_open_price:
                 result = SignalStrength(SignalType.AVOID, 0, 0, [f"당일시가이하(시가:{day_open_price:.0f})"], volume_analysis.volume_ratio, BisectorStatus.BROKEN)

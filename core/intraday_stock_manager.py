@@ -151,9 +151,16 @@ class IntradayStockManager:
             self.logger.info(f"📈 {stock_code} 과거 데이터 수집 시작... (선정시간: {current_time.strftime('%H:%M:%S')})")
             success = await self._collect_historical_data(stock_code)
 
-            # 09:05 이전 선정이고 데이터 부족한 경우 플래그 설정
-            if not success and (current_time.hour == 9 and current_time.minute < 5):
-                self.logger.warning(f"⚠️ {stock_code} 09:05 이전 데이터 부족, batch_update에서 재시도 필요")
+            # 🆕 시장 시작 5분 이내 선정이고 데이터 부족한 경우 플래그 설정 (동적 시간 적용)
+            market_hours = MarketHours.get_market_hours('KRX', current_time)
+            market_open = market_hours['market_open']
+            open_hour = market_open.hour
+            open_minute = market_open.minute
+
+            is_early_selection = (current_time.hour == open_hour and current_time.minute < open_minute + 5)
+
+            if not success and is_early_selection:
+                self.logger.warning(f"⚠️ {stock_code} 시장 시작 5분 이내 데이터 부족, batch_update에서 재시도 필요")
                 # data_complete = False로 설정하여 나중에 재시도
                 with self._lock:
                     if stock_code in self.selected_stocks:
@@ -1250,15 +1257,20 @@ class IntradayStockManager:
         try:
             from utils.korean_time import now_kst
 
-            # 🆕 15:30 장 마감 시 메모리 데이터 자동 저장 (분봉 + 일봉)
+            # 🆕 장 마감 시 메모리 데이터 자동 저장 (분봉 + 일봉) - 동적 시간 적용
             current_time = now_kst()
-            if current_time.hour == 15 and current_time.minute >= 30:
+            market_hours = MarketHours.get_market_hours('KRX', current_time)
+            market_close = market_hours['market_close']
+            close_hour = market_close.hour
+            close_minute = market_close.minute
+
+            if current_time.hour == close_hour and current_time.minute >= close_minute:
                 if not hasattr(self, '_data_saved_today'):
-                    self.logger.info("🔔 15:30 장 마감 데이터 저장 시작...")
+                    self.logger.info(f"🔔 {close_hour}:{close_minute:02d} 장 마감 데이터 저장 시작...")
                     # PostMarketDataSaver를 통해 모든 데이터 저장
                     self.data_saver.save_all_data(self)
                     self._data_saved_today = True  # 하루에 한 번만 저장
-                    self.logger.info("✅ 15:30 장 마감 데이터 저장 완료")
+                    self.logger.info(f"✅ {close_hour}:{close_minute:02d} 장 마감 데이터 저장 완료")
 
             with self._lock:
                 stock_codes = list(self.selected_stocks.keys())

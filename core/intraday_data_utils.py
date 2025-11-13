@@ -65,12 +65,16 @@ def validate_minute_data_continuity(data: pd.DataFrame, stock_code: str,
             data_copy = data.copy()
             data_copy['datetime'] = pd.to_datetime(data_copy['datetime'])
 
-            # 첫 봉이 09:00인지 확인
+            # 첫 봉이 시장 시작 시간인지 확인 (동적 시간 적용)
+            from config.market_hours import MarketHours
             first_time = data_copy['datetime'].iloc[0]
-            if first_time.hour != 9 or first_time.minute != 0:
+            market_hours = MarketHours.get_market_hours('KRX', first_time)
+            market_open = market_hours['market_open']
+
+            if first_time.hour != market_open.hour or first_time.minute != market_open.minute:
                 return {
                     'valid': False,
-                    'reason': f'첫 봉이 09:00 아님 (실제: {first_time.strftime("%H:%M")})',
+                    'reason': f'첫 봉이 {market_open.strftime("%H:%M")} 아님 (실제: {first_time.strftime("%H:%M")})',
                     'missing_times': []
                 }
 
@@ -104,11 +108,20 @@ def validate_minute_data_continuity(data: pd.DataFrame, stock_code: str,
             data_copy = data.copy()
             data_copy['time_int'] = data_copy['time'].astype(str).str.zfill(6).str[:4].astype(int)
 
-            # 첫 봉이 0900인지 확인
-            if data_copy['time_int'].iloc[0] != 900:
+            # 첫 봉이 시장 시작 시간인지 확인 (동적 시간 적용)
+            from config.market_hours import MarketHours
+            from utils.korean_time import now_kst
+
+            # 데이터의 날짜 파악
+            current_date = now_kst() if 'date' not in data.columns else pd.to_datetime(str(data['date'].iloc[0]), format='%Y%m%d')
+            market_hours = MarketHours.get_market_hours('KRX', current_date)
+            market_open = market_hours['market_open']
+            expected_time_int = market_open.hour * 100 + market_open.minute
+
+            if data_copy['time_int'].iloc[0] != expected_time_int:
                 return {
                     'valid': False,
-                    'reason': f'첫 봉이 09:00 아님 (실제: {data_copy["time_int"].iloc[0]})',
+                    'reason': f'첫 봉이 {market_open.strftime("%H:%M")} 아님 (실제: {data_copy["time_int"].iloc[0]})',
                     'missing_times': []
                 }
 

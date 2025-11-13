@@ -475,15 +475,19 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                         logger.debug(f"🚫 [{signal_completion_time.strftime('%H:%M')}] {stock_code} 쿨다운 중: {remaining_minutes}분 남음")
                     continue  # 쿨다운 중이므로 매수 신호 건너뜀
             
-            # ==================== 15시 이후 매수 금지 체크 ====================
+            # ==================== 매수 중단 시간 이후 매수 금지 체크 (동적 시간 적용) ====================
+            from config.market_hours import MarketHours
+            market_hours = MarketHours.get_market_hours('KRX', signal_completion_time)
+            buy_cutoff_hour = market_hours['buy_cutoff_hour']
+
             signal_hour = signal_completion_time.hour
             signal_minute = signal_completion_time.minute
-            
-            # 15:00부터 매수 금지 (신호 표시는 유지)
-            if signal_hour >= 15:
+
+            # 매수 중단 시간부터 매수 금지 (신호 표시는 유지)
+            if signal_hour >= buy_cutoff_hour:
                 if logger:
-                    logger.debug(f"[{signal_completion_time.strftime('%H:%M')}] 15시 이후 매수금지")
-                continue  # 15시 이후 매수 신호 건너뜀
+                    logger.debug(f"[{signal_completion_time.strftime('%H:%M')}] {buy_cutoff_hour}시 이후 매수금지")
+                continue  # 매수 중단 시간 이후 매수 신호 건너뜀
             
             # ==================== 실시간과 완전 동일한 매수 로직 ====================
             
@@ -684,13 +688,18 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                 candle_low = row['low'] 
                 candle_close = row['close']
                 
-                # ==================== 15시 장마감 매도 (최우선) ====================
-                if candle_time.hour >= 15 and candle_time.minute >= 0:
+                # ==================== 장마감 시간 매도 (최우선) - 동적 시간 적용 ====================
+                from config.market_hours import MarketHours
+                market_hours = MarketHours.get_market_hours('KRX', candle_time)
+                eod_hour = market_hours['eod_liquidation_hour']
+                eod_minute = market_hours['eod_liquidation_minute']
+
+                if candle_time.hour >= eod_hour and candle_time.minute >= eod_minute:
                     sell_time = candle_time
-                    sell_price = candle_close  # 15시 종가로 매도
-                    sell_reason = "market_close_15h"
+                    sell_price = candle_close  # 장마감 종가로 매도
+                    sell_reason = f"market_close_{eod_hour}h"
                     if logger:
-                        logger.debug(f"[{stock_code}] 15시 장마감 매도: {sell_price:,.0f}원")
+                        logger.debug(f"[{stock_code}] {eod_hour}:{eod_minute:02d} 장마감 매도: {sell_price:,.0f}원")
                     break
                 
                 # 최대/최소 수익률 추적 (종가 기준)

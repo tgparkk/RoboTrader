@@ -571,8 +571,16 @@ class DayTradingBot:
                 # 🆕 장중 종목 실시간 데이터 업데이트 (매분 13~45초 사이에 실행)
                 # 13~45초 구간에서는 이전 실행으로부터 최소 13초 이상 간격만 유지
                 if 13 <= current_time.second <= 45 and (current_time - last_intraday_update).total_seconds() >= 13:
-                    # 장중이거나 15:30~15:40 구간에서는 실행 (데이터 저장 위해)
-                    if is_market_open() or (current_time.hour == 15 and 30 <= current_time.minute <= 40):
+                    # 장중이거나 장마감 후 10분 구간에서는 실행 (데이터 저장 위해) - 동적 시간 적용
+                    market_hours = MarketHours.get_market_hours('KRX', current_time)
+                    market_close = market_hours['market_close']
+                    close_hour = market_close.hour
+                    close_minute = market_close.minute
+
+                    is_after_close_window = (current_time.hour == close_hour and
+                                            close_minute <= current_time.minute <= close_minute + 10)
+
+                    if is_market_open() or is_after_close_window:
                         await self._update_intraday_data()
                         last_intraday_update = current_time
                 
@@ -662,47 +670,54 @@ class DayTradingBot:
             self.logger.error(f"❌ 장마감 일괄청산 오류: {e}")
     
     async def _execute_end_of_day_liquidation(self):
-        """15시 모든 보유 종목 시장가 일괄매도"""
+        """장마감 시간 모든 보유 종목 시장가 일괄매도 (동적 시간 적용)"""
         try:
             from core.models import StockState
+
+            # 동적 청산 시간 가져오기
+            current_time = now_kst()
+            market_hours = MarketHours.get_market_hours('KRX', current_time)
+            eod_hour = market_hours['eod_liquidation_hour']
+            eod_minute = market_hours['eod_liquidation_minute']
+
             positioned_stocks = self.trading_manager.get_stocks_by_state(StockState.POSITIONED)
-            
+
             if not positioned_stocks:
-                self.logger.info("📦 15시 시장가 매도: 보유 포지션 없음")
+                self.logger.info(f"📦 {eod_hour}:{eod_minute:02d} 시장가 매도: 보유 포지션 없음")
                 return
-            
-            self.logger.info(f"🚨 15시 시장가 일괄매도 시작: {len(positioned_stocks)}종목")
-            
+
+            self.logger.info(f"🚨 {eod_hour}:{eod_minute:02d} 시장가 일괄매도 시작: {len(positioned_stocks)}종목")
+
             # 모든 보유 종목 시장가 매도
             for trading_stock in positioned_stocks:
                 try:
                     if not trading_stock.position or trading_stock.position.quantity <= 0:
                         continue
-                    
+
                     stock_code = trading_stock.stock_code
                     stock_name = trading_stock.stock_name
                     quantity = int(trading_stock.position.quantity)
-                    
+
                     # 시장가 매도를 위해 현재가 조회 (시장가는 가격 0으로 주문)
                     current_price = 0.0  # 시장가는 0원으로 주문
-                    
+
                     # 상태를 매도 대기로 변경 후 시장가 매도 주문
-                    moved = self.trading_manager.move_to_sell_candidate(stock_code, "15시 시장가 일괄매도")
+                    moved = self.trading_manager.move_to_sell_candidate(stock_code, f"{eod_hour}:{eod_minute:02d} 시장가 일괄매도")
                     if moved:
                         await self.trading_manager.execute_sell_order(
-                            stock_code, quantity, current_price, "15시 시장가 일괄매도", market=True
+                            stock_code, quantity, current_price, f"{eod_hour}:{eod_minute:02d} 시장가 일괄매도", market=True
                         )
-                        self.logger.info(f"🚨 15시 시장가 매도: {stock_code}({stock_name}) {quantity}주 시장가 주문")
-                    
+                        self.logger.info(f"🚨 {eod_hour}:{eod_minute:02d} 시장가 매도: {stock_code}({stock_name}) {quantity}주 시장가 주문")
+
                 except Exception as se:
-                    self.logger.error(f"❌ 15시 시장가 매도 개별 처리 오류({trading_stock.stock_code}): {se}")
-            
+                    self.logger.error(f"❌ {eod_hour}:{eod_minute:02d} 시장가 매도 개별 처리 오류({trading_stock.stock_code}): {se}")
+
             # 가상 포지션 처리 제거 (실제 매매 모드)
-            
-            self.logger.info("✅ 15시 시장가 일괄매도 요청 완료")
-            
+
+            self.logger.info(f"✅ {eod_hour}:{eod_minute:02d} 시장가 일괄매도 요청 완료")
+
         except Exception as e:
-            self.logger.error(f"❌ 15시 시장가 매도 오류: {e}")
+            self.logger.error(f"❌ 장마감 시장가 매도 오류: {e}")
     
     async def _log_system_status(self):
         """시스템 상태 로깅"""
