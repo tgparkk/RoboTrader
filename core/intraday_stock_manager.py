@@ -11,6 +11,7 @@ from collections import defaultdict
 
 from utils.logger import setup_logger
 from utils.korean_time import now_kst, is_market_open
+from config.market_hours import MarketHours
 from api.kis_chart_api import (
     get_inquire_time_itemchartprice,
     get_inquire_time_dailychartprice,
@@ -78,7 +79,6 @@ class IntradayStockManager:
         self.selection_history: List[Dict[str, Any]] = []  # 선정 이력
 
         # 설정
-        self.market_open_time = "090000"  # 장 시작 시간
         self.max_stocks = 80  # 최대 관리 종목 수
 
         # 동기화
@@ -203,20 +203,24 @@ class IntradayStockManager:
             
             self.logger.info(f"📈 {stock_code} 전체 거래시간 분봉 데이터 수집 시작")
             self.logger.info(f"   선정 시간: {selected_time.strftime('%H:%M:%S')}")
-            
-            # 당일 09:00부터 선정시점까지의 전체 거래시간 데이터 수집
+
+            # 🆕 동적 시장 거래시간 가져오기
+            market_hours = MarketHours.get_market_hours('KRX', selected_time)
+            market_open = market_hours['market_open']
+            start_time_str = market_open.strftime('%H%M%S')
+
+            # 당일 시장 시작시간부터 선정시점까지의 전체 거래시간 데이터 수집
             target_date = selected_time.strftime("%Y%m%d")
             target_hour = selected_time.strftime("%H%M%S")
 
             # 🔥 중요: 미래 데이터 수집 방지 - 선정 시점까지만 수집
-            # (이전 로직: 09:10 이전 선정 시 09:15까지 수집 → 미래 데이터 포함!)
-            self.logger.info(f"📈 {stock_code} 과거 데이터 수집: 09:00 ~ {selected_time.strftime('%H:%M:%S')}")
+            self.logger.info(f"📈 {stock_code} 과거 데이터 수집: {market_open.strftime('%H:%M')} ~ {selected_time.strftime('%H:%M:%S')}")
 
             historical_data = await get_full_trading_day_data_async(
                 stock_code=stock_code,
                 target_date=target_date,
                 selected_time=target_hour,  # 선정 시점까지만!
-                start_time="090000"  # 09:00부터 시작 (KRX 정규장만)
+                start_time=start_time_str  # 동적 시장 시작 시간
             )
             
             if historical_data is None or historical_data.empty:
@@ -238,7 +242,7 @@ class IntradayStockManager:
                         stock_code=stock_code,
                         target_date=target_date,
                         selected_time=new_target_hour,
-                        start_time="090000"
+                        start_time=start_time_str  # 동적 시장 시작 시간 사용
                     )
                     
                     if historical_data is not None and not historical_data.empty:
@@ -336,21 +340,21 @@ class IntradayStockManager:
                 # 시간 범위 계산
                 time_range_minutes = calculate_time_range_minutes(start_time, end_time)
                 
-                self.logger.info(f"✅ {stock_code} 당일 전체 분봉 수집 성공! (09:00~{selected_time.strftime('%H:%M')})")
+                self.logger.info(f"✅ {stock_code} 당일 전체 분봉 수집 성공! ({market_open.strftime('%H:%M')}~{selected_time.strftime('%H:%M')})")
                 self.logger.info(f"   총 데이터: {data_count}건")
                 self.logger.info(f"   시간 범위: {start_time} ~ {end_time} ({time_range_minutes}분)")
-                
+
                 # 3분봉 변환 예상 개수 계산
                 expected_3min_count = data_count // 3
                 self.logger.info(f"   예상 3분봉: {expected_3min_count}개 (최소 5개 필요)")
-                
+
                 if expected_3min_count >= 5:
                     self.logger.info(f"   ✅ 신호 생성 조건 충족!")
                 else:
                     self.logger.warning(f"   ⚠️ 3분봉 데이터 부족 위험: {expected_3min_count}/5")
-                
-                # 09:00부터 데이터가 시작되는지 확인  
-                if start_time and start_time >= "090000":
+
+                # 시장 시작시간부터 데이터가 시작되는지 확인
+                if start_time and start_time >= start_time_str:
                     self.logger.info(f"   📊 정규장 데이터: {start_time}부터")
                 
             else:
@@ -676,7 +680,7 @@ class IntradayStockManager:
     
     def _check_sufficient_base_data(self, combined_data: Optional[pd.DataFrame], stock_code: str) -> bool:
         """
-        09시부터 분봉 데이터가 충분한지 간단 체크
+        시장 시작시간부터 분봉 데이터가 충분한지 간단 체크
 
         Args:
             combined_data: 결합된 차트 데이터
@@ -693,7 +697,13 @@ class IntradayStockManager:
                 return False
 
             # 1. 당일 데이터인지 먼저 확인
-            today_str = now_kst().strftime('%Y%m%d')
+            current_time = now_kst()
+            today_str = current_time.strftime('%Y%m%d')
+
+            # 🆕 동적 시장 시작 시간 가져오기
+            market_hours = MarketHours.get_market_hours('KRX', current_time)
+            market_open = market_hours['market_open']
+            expected_start_hour = market_open.hour
 
             # date 컬럼으로 당일 데이터만 필터링
             if 'date' in combined_data.columns:
@@ -720,23 +730,23 @@ class IntradayStockManager:
                 self.logger.debug(f"❌ {stock_code} 데이터 부족: {data_count}/15")
                 return False
 
-            # 시작 시간 체크 (09:00대 시작 확인)
+            # 시작 시간 체크 (시장 시작시간 확인)
             if 'time' in combined_data.columns:
                 start_time_str = str(combined_data.iloc[0]['time']).zfill(6)
                 start_hour = int(start_time_str[:2])
 
-                # 09시 시작 확인
-                if start_hour != 9:
-                    self.logger.debug(f"❌ {stock_code} 시작 시간 문제: {start_time_str} (09시 아님)")
+                # 시장 시작 시간 확인
+                if start_hour != expected_start_hour:
+                    self.logger.debug(f"❌ {stock_code} 시작 시간 문제: {start_time_str} ({expected_start_hour}시 아님)")
                     return False
 
             elif 'datetime' in combined_data.columns:
                 start_dt = combined_data.iloc[0]['datetime']
                 if hasattr(start_dt, 'hour'):
                     start_hour = start_dt.hour
-                    # 09시 시작 확인
-                    if start_hour != 9:
-                        self.logger.debug(f"❌ {stock_code} 시작 시간 문제: {start_hour}시 (09시 아님)")
+                    # 시장 시작 시간 확인
+                    if start_hour != expected_start_hour:
+                        self.logger.debug(f"❌ {stock_code} 시작 시간 문제: {start_hour}시 ({expected_start_hour}시 아님)")
                         return False
 
             #self.logger.debug(f"✅ {stock_code} 기본 데이터 충분: {data_count}개")

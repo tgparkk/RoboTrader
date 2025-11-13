@@ -10,6 +10,7 @@ from typing import Optional, Dict, List, Tuple, Any
 from utils.logger import setup_logger
 from . import kis_auth as kis
 from utils.korean_time import now_kst
+from config.market_hours import MarketHours
 
 logger = setup_logger(__name__)
 FALLBACK_MAX_DAYS = 3  # 주말/휴일 등 데이터 없을 때 최대 폴백 일수
@@ -705,17 +706,17 @@ def get_full_trading_day_data(stock_code: str, target_date: str = "",
         return None
 
 
-async def get_full_trading_day_data_async(stock_code: str, target_date: str = "", 
+async def get_full_trading_day_data_async(stock_code: str, target_date: str = "",
                                         selected_time: str = "", start_time: str = "") -> Optional[pd.DataFrame]:
     """
     비동기 버전의 전체 거래시간 분봉 데이터 조회
-    
+
     Args:
         stock_code: 종목코드
         target_date: 조회 날짜 (YYYYMMDD, 기본값: 오늘)
         selected_time: 종목 선정 시간 (HHMMSS, 기본값: 현재시간)
-        start_time: 시작 시간 (HHMMSS, 기본값: 090000)
-        
+        start_time: 시작 시간 (HHMMSS, 기본값: 동적 시장 시작 시간)
+
     Returns:
         pd.DataFrame: start_time부터 selected_time까지의 전체 분봉 데이터
     """
@@ -724,31 +725,60 @@ async def get_full_trading_day_data_async(stock_code: str, target_date: str = ""
             target_date = now_kst().strftime("%Y%m%d")
         if not selected_time:
             selected_time = now_kst().strftime("%H%M%S")
-        if not start_time:
-            start_time = "090000"
 
         from datetime import datetime as _dt, timedelta as _td
         base_dt = _dt.strptime(target_date, "%Y%m%d")
 
+        # 🆕 동적 시장 시작 시간 가져오기
+        if not start_time:
+            market_hours = MarketHours.get_market_hours('KRX', base_dt)
+            market_open = market_hours['market_open']
+            start_time = market_open.strftime('%H%M%S')
+
         # selected_time 그대로 사용 (미래 데이터 수집 방지)
-        logger.info(f"📊 {stock_code} 분봉 데이터 수집: 09:00 ~ {selected_time}")
+        start_hour = int(start_time[:2])
+        start_minute = int(start_time[2:4])
+        logger.info(f"📊 {stock_code} 분봉 데이터 수집: {start_hour:02d}:{start_minute:02d} ~ {selected_time}")
 
         # 🔥 당일분봉조회 API는 30건 제한이므로 30분씩 나눠서 수집
-        time_segments = [
-            ("090000", "092900"),  # 09:00~09:29 (30분)
-            ("093000", "095900"),  # 09:30~09:59 (30분)
-            ("100000", "102900"),  # 10:00~10:29 (30분)
-            ("103000", "105900"),  # 10:30~10:59 (30분)
-            ("110000", "112900"),  # 11:00~11:29 (30분)
-            ("113000", "115900"),  # 11:30~11:59 (30분)
-            ("120000", "122900"),  # 12:00~12:29 (30분)
-            ("123000", "125900"),  # 12:30~12:59 (30분)
-            ("130000", "132900"),  # 13:00~13:29 (30분)
-            ("133000", "135900"),  # 13:30~13:59 (30분)
-            ("140000", "142900"),  # 14:00~14:29 (30분)
-            ("143000", "145900"),  # 14:30~14:59 (30분)
-            ("150000", "153000")   # 15:00~15:30 (31분)
-        ]
+        # 🆕 동적 시장 시간에 맞춰 시간 구간 생성
+        market_hours = MarketHours.get_market_hours('KRX', base_dt)
+        market_open = market_hours['market_open']
+        market_close = market_hours['market_close']
+
+        # 시장 시작부터 마감까지 30분 단위로 구간 생성
+        time_segments = []
+        current_hour = market_open.hour
+        current_minute = market_open.minute
+
+        while True:
+            segment_start = f"{current_hour:02d}{current_minute:02d}00"
+
+            # 30분 후 계산
+            end_minute = current_minute + 29
+            end_hour = current_hour
+            if end_minute >= 60:
+                end_hour += 1
+                end_minute -= 60
+
+            segment_end = f"{end_hour:02d}{end_minute:02d}00"
+
+            # 장마감 시간을 초과하면 장마감 시간으로 설정
+            market_close_str = f"{market_close.hour:02d}{market_close.minute:02d}00"
+            if segment_end > market_close_str:
+                segment_end = market_close_str
+
+            time_segments.append((segment_start, segment_end))
+
+            # 다음 구간 시작
+            current_minute += 30
+            if current_minute >= 60:
+                current_hour += 1
+                current_minute -= 60
+
+            # 장마감 시간 도달하면 중단
+            if segment_end >= market_close_str:
+                break
 
         for back in range(0, FALLBACK_MAX_DAYS + 1):
             attempt_date = (base_dt - _td(days=back)).strftime("%Y%m%d")

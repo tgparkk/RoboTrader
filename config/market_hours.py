@@ -244,7 +244,7 @@ class MarketHours:
         info = f"[{market}] "
         if hours.get('is_special_day', False):
             reason = hours.get('reason', '특수일')
-            info += f"⚠️ {reason}\n"
+            info += f"[!] {reason}\n"
 
         info += f"장 시작: {hours['market_open'].strftime('%H:%M')}\n"
         info += f"장 마감: {hours['market_close'].strftime('%H:%M')}\n"
