@@ -1,0 +1,2328 @@
+{
+  "win_patterns": [
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 0.69
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 1.78
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 2.98
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 0.11
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 1.52
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 0.47
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 0.05
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 1.31
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 0.61
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 1.46
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 0.8
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 0.43
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 0.47
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 0.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 0.56
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 0.8
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 0.54
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 1.36
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 0.34
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 1.0
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 0.96
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 1.36
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 0.09
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 0.19
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 1.62
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 2.17
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 1.43
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 1.34
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 1.15
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 1.02
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 1.08
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 0.49
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.09
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 2.65
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 0.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 2.25
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 2.32
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 0.23
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 0.03
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 0.24
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 0.38
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 1.46
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 1.01
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 0.09
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 1.54
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 1.96
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 0.79
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": 3.5
+    }
+  ],
+  "loss_patterns": [
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -0.41
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -0.28
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -0.45
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -0.47
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -1.33
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -0.74
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.0
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -0.83
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -0.54
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -0.55
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -0.67
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -1.41
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -0.53
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -0.22
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -0.73
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -0.69
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -0.29
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.32
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -0.39
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -0.56
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -1.34
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -0.33
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -0.38
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -1.56
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -0.33
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -0.76
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -1.56
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -0.03
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -1.23
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -1.53
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -1.76
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -0.23
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -0.96
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -0.69
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -0.94
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -0.87
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -1.61
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -0.42
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.5
+    },
+    {
+      "has_pattern": false,
+      "stage_count": 0,
+      "uptrend_exists": false,
+      "pullback_exists": false,
+      "support_exists": false,
+      "breakout_exists": false,
+      "profit_pct": -2.43
+    }
+  ],
+  "win_summary": {
+    "stage_count": {
+      "count": 127.0,
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "25%": 0.0,
+      "50%": 0.0,
+      "75%": 0.0,
+      "max": 0.0
+    },
+    "profit_pct": {
+      "count": 127.0,
+      "mean": 2.592283464566929,
+      "std": 1.2806317816921322,
+      "min": 0.03,
+      "25%": 1.36,
+      "50%": 3.5,
+      "75%": 3.5,
+      "max": 3.5
+    }
+  },
+  "loss_summary": {
+    "stage_count": {
+      "count": 126.0,
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "25%": 0.0,
+      "50%": 0.0,
+      "75%": 0.0,
+      "max": 0.0
+    },
+    "profit_pct": {
+      "count": 126.0,
+      "mean": -1.998968253968254,
+      "std": 0.8225140284421459,
+      "min": -2.5,
+      "25%": -2.5,
+      "50%": -2.5,
+      "75%": -1.5375,
+      "max": -0.03
+    }
+  },
+  "timestamp": "20251101_145421"
+}

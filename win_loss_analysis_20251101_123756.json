@@ -1,0 +1,43 @@
+{
+  "summary": {
+    "total_trades": 441,
+    "wins": 227,
+    "losses": 214,
+    "win_rate": 51.47392290249433
+  },
+  "win_features_avg": {
+    "volume_ratio": 0.15484891443271362,
+    "avg_volume": 34152.63700440528,
+    "volume_std": 24193.873032394175,
+    "is_bullish": 0.29515418502202645,
+    "body_pct": 0.3286267141584059,
+    "is_meaningful_body": 0.21145374449339208,
+    "bisector_distance": 3.711764930544095,
+    "price_change_10candles": 1.0198959724433738,
+    "price_from_open": 8.585724484322148,
+    "price_volatility": 0.5839328044630547,
+    "distance_from_high": -0.904393830095279,
+    "distance_from_low": 2.2341709514830703,
+    "rsi": 60.005068876602905,
+    "confidence": 75.0,
+    "profit_pct": 2.9057268722466962
+  },
+  "loss_features_avg": {
+    "volume_ratio": 0.1286742400771087,
+    "avg_volume": 45608.129439252334,
+    "volume_std": 35346.62734077683,
+    "is_bullish": 0.17757009345794392,
+    "body_pct": 0.4611708919166689,
+    "is_meaningful_body": 0.308411214953271,
+    "bisector_distance": 3.417241173512079,
+    "price_change_10candles": 0.9412341901953641,
+    "price_from_open": 8.475325801783706,
+    "price_volatility": 0.6422532930618328,
+    "distance_from_high": -1.1719671206253728,
+    "distance_from_low": 2.2426653052937215,
+    "rsi": 56.86503052518194,
+    "confidence": 75.0,
+    "profit_pct": -2.230280373831776
+  },
+  "timestamp": "20251101_123756"
+}

@@ -1,0 +1,18 @@
+{
+  "summary": {
+    "total_wins": 216,
+    "total_losses": 211,
+    "avg_vol_ratio_win": 1.783719070441462,
+    "avg_vol_ratio_loss": 1.7602460360917513,
+    "increasing_ratio_win": 0.37962962962962965,
+    "increasing_ratio_loss": 0.3459715639810427
+  },
+  "win_trades": [
+    {
+      "symbol": "484810",
+      "date": "20250901",
+      "time": "09:36",
+      "signal_vol": 9873.0,
+      "avg_vol_prev": 7771.75,
+      "vol_ratio": 1.2703702512304178,
+      "vol_increasing": 

@@ -1,0 +1,55 @@
+# 백테스트 설정 - 보수적 전략
+name: "conservative"
+description: "고신뢰도만 거래, 약한 패턴 강력 차단"
+
+# 시간대 필터
+time_filter:
+  enable: true
+  hour_9_min_confidence: 75   # 75 (강화)
+  hour_10_min_confidence: 90  # 90 (강화)
+  hour_11_min_confidence: 90  # 90 (강화)
+  hour_12_min_confidence: 95  # 95 (차단)
+  hour_14_min_confidence: 95  # 95 (차단)
+  hour_15_min_confidence: 95  # 95 (차단)
+
+  block_hours: [12, 13, 14, 15]
+
+# 가격 필터
+price_filter:
+  enable: true
+  min_gain_from_open_pct: 2.5  # 2.5% (강화)
+  max_gain_from_open_pct: 20.0  # 20% (강화)
+
+# 신뢰도 필터
+confidence_filter:
+  enable: true
+  max_confidence: 93  # 93 (강화)
+  min_confidence: 75  # 75 (강화)
+
+# 일봉 필터
+daily_filter:
+  enable: true  # 활성화
+  min_strength: 50  # 50 이상
+  require_ideal_pattern: false
+
+# 거래량 필터
+volume_filter:
+  enable: true
+  breakout_volume_multiplier: 1.2  # 1.2 (강화: 120% 이상)
+  support_volume_decline_threshold: -30  # -30% (강화)
+
+# 지지 패턴 필터
+support_pattern_filter:
+  enable: true
+  max_support_volatility_pct: 2.0  # 2.0% (강화)
+  weak_support_threshold: 1  # 1개만 있어도 차단 (강화)
+
+# 손절/익절 설정
+exit_rules:
+  stop_loss_pct: 2.5
+  take_profit_pct: 3.5
+
+# 백테스트 기간
+backtest_period:
+  start_date: "20250901"
+  end_date: "20251029"

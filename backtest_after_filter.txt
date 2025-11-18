@@ -1,0 +1,6 @@
+usage: signal_replay.py [-h] --date DATE [--codes CODES] [--times TIMES]
+                        [--export {csv,txt}] [--csv-path CSV_PATH]
+                        [--txt-path TXT_PATH] [--charts]
+signal_replay.py: error: the following arguments are required: --date
+[시뮬레이션 설정] 익절 +3.5000000000000004% / 손절 -2.5%
+============================================================
