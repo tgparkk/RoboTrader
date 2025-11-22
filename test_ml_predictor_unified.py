@@ -25,7 +25,7 @@ def test_debug_info_structure():
                 'avg_volume': 245000,
                 'max_volume_numeric': 350000,
                 'total_volume': 1470000,
-                'avg_body': 1.2,
+                'avg_body_pct': 1.2,  # 퍼센트 단위로 수정
                 'bar_count': 6
             },
             'decline': {
@@ -35,7 +35,7 @@ def test_debug_info_structure():
                 'avg_volume': 125000,
                 'max_volume': 180000,
                 'total_volume': 625000,
-                'avg_body': 0.8,
+                'avg_body_pct': 0.8,  # 퍼센트 단위로 수정
                 'bar_count': 5
             },
             'support': {
@@ -47,13 +47,13 @@ def test_debug_info_structure():
                 'avg_volume': 90000,
                 'max_volume': 120000,
                 'total_volume': 450000,
-                'avg_body': 0.5,
+                'avg_body_pct': 0.5,  # 퍼센트 단위로 수정
                 'bar_count': 5
             },
             'breakout': {
                 'idx': 16,
                 'volume': 280000,
-                'body': 1.5,
+                'body_pct': 1.5,  # 퍼센트 단위로 수정
                 'gain_pct': 2.1
             },
             'best_breakout': {

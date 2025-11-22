@@ -154,8 +154,8 @@ class MLPredictor:
             uptrend.get('max_volume_numeric', uptrend.get('max_volume', 0))
         )
 
-        # 평균 몸통 크기 (avg_body 우선, 없으면 계산)
-        uptrend_avg_body = uptrend.get('avg_body')
+        # 평균 몸통 크기 퍼센트 (avg_body_pct 우선, 없으면 계산)
+        uptrend_avg_body = uptrend.get('avg_body_pct')
         if uptrend_avg_body is None:
             uptrend_avg_body = self._calculate_avg_body_pct(uptrend_candles_list)
         else:
@@ -234,8 +234,8 @@ class MLPredictor:
         else:
             breakout_volume = self._safe_float(breakout_volume)
 
-        # 몸통 크기 (body 또는 body_size 우선, 없으면 계산)
-        breakout_body = breakout.get('body', breakout.get('body_size'))
+        # 몸통 크기 퍼센트 (body_pct, body_size 우선, 없으면 계산)
+        breakout_body = breakout.get('body_pct', breakout.get('body_size'))
         if breakout_body is None:
             breakout_candle = breakout.get('candle', best_breakout)
             open_p = breakout_candle.get('open', 0)

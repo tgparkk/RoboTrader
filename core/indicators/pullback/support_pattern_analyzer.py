@@ -734,7 +734,16 @@ class SupportPatternAnalyzer:
             uptrend_avg_volume = float(uptrend_slice['volume'].mean()) if len(uptrend_slice) > 0 else 0
             uptrend_max_volume = float(result.uptrend_phase.max_volume)
             uptrend_total_volume = float(uptrend_slice['volume'].sum()) if len(uptrend_slice) > 0 else 0
-            uptrend_avg_body = float((abs(uptrend_slice['close'] - uptrend_slice['open'])).mean()) if len(uptrend_slice) > 0 else 0
+
+            # ML용 몸통 크기 퍼센트 계산 (시뮬레이션과 동일한 방식)
+            uptrend_avg_body_pct = 0.0
+            if len(uptrend_slice) > 0:
+                body_pcts = []
+                for _, row in uptrend_slice.iterrows():
+                    if row['open'] > 0:
+                        body_pct = abs((row['close'] - row['open']) / row['open'] * 100)
+                        body_pcts.append(body_pct)
+                uptrend_avg_body_pct = sum(body_pcts) / len(body_pcts) if body_pcts else 0.0
 
             debug_info['uptrend'] = {
                 'start_idx': result.uptrend_phase.start_idx,
@@ -746,7 +755,7 @@ class SupportPatternAnalyzer:
                 'avg_volume': uptrend_avg_volume,
                 'max_volume_numeric': uptrend_max_volume,
                 'total_volume': uptrend_total_volume,
-                'avg_body': uptrend_avg_body,
+                'avg_body_pct': uptrend_avg_body_pct,  # ML용 몸통 크기 퍼센트
                 'bar_count': result.uptrend_phase.end_idx - result.uptrend_phase.start_idx + 1
             }
 
@@ -756,7 +765,16 @@ class SupportPatternAnalyzer:
             decline_avg_volume = float(decline_slice['volume'].mean()) if len(decline_slice) > 0 else 0
             decline_max_volume = float(decline_slice['volume'].max()) if len(decline_slice) > 0 else 0
             decline_total_volume = float(decline_slice['volume'].sum()) if len(decline_slice) > 0 else 0
-            decline_avg_body = float((abs(decline_slice['close'] - decline_slice['open'])).mean()) if len(decline_slice) > 0 else 0
+
+            # ML용 몸통 크기 퍼센트 계산 (시뮬레이션과 동일한 방식)
+            decline_avg_body_pct = 0.0
+            if len(decline_slice) > 0:
+                body_pcts = []
+                for _, row in decline_slice.iterrows():
+                    if row['open'] > 0:
+                        body_pct = abs((row['close'] - row['open']) / row['open'] * 100)
+                        body_pcts.append(body_pct)
+                decline_avg_body_pct = sum(body_pcts) / len(body_pcts) if body_pcts else 0.0
 
             debug_info['decline'] = {
                 'start_idx': result.decline_phase.start_idx,
@@ -768,7 +786,7 @@ class SupportPatternAnalyzer:
                 'avg_volume': decline_avg_volume,
                 'max_volume': decline_max_volume,
                 'total_volume': decline_total_volume,
-                'avg_body': decline_avg_body,
+                'avg_body_pct': decline_avg_body_pct,  # ML용 몸통 크기 퍼센트
                 'bar_count': result.decline_phase.candle_count
             }
 
@@ -778,7 +796,16 @@ class SupportPatternAnalyzer:
             support_avg_volume = float(support_slice['volume'].mean()) if len(support_slice) > 0 else 0
             support_max_volume = float(support_slice['volume'].max()) if len(support_slice) > 0 else 0
             support_total_volume = float(support_slice['volume'].sum()) if len(support_slice) > 0 else 0
-            support_avg_body = float((abs(support_slice['close'] - support_slice['open'])).mean()) if len(support_slice) > 0 else 0
+
+            # ML용 몸통 크기 퍼센트 계산 (시뮬레이션과 동일한 방식)
+            support_avg_body_pct = 0.0
+            if len(support_slice) > 0:
+                body_pcts = []
+                for _, row in support_slice.iterrows():
+                    if row['open'] > 0:
+                        body_pct = abs((row['close'] - row['open']) / row['open'] * 100)
+                        body_pcts.append(body_pct)
+                support_avg_body_pct = sum(body_pcts) / len(body_pcts) if body_pcts else 0.0
 
             debug_info['support'] = {
                 'start_idx': result.support_phase.start_idx,
@@ -790,7 +817,7 @@ class SupportPatternAnalyzer:
                 'avg_volume': support_avg_volume,
                 'max_volume': support_max_volume,
                 'total_volume': support_total_volume,
-                'avg_body': support_avg_body,
+                'avg_body_pct': support_avg_body_pct,  # ML용 몸통 크기 퍼센트
                 'bar_count': result.support_phase.candle_count
             }
         
@@ -800,8 +827,12 @@ class SupportPatternAnalyzer:
             if breakout_idx < len(data):
                 breakout_row = data.iloc[breakout_idx]
                 breakout_volume = float(breakout_row['volume'])
-                breakout_body = abs(float(breakout_row['close']) - float(breakout_row['open']))
-                breakout_gain_pct = ((float(breakout_row['close']) - float(breakout_row['open'])) / float(breakout_row['open']) * 100) if float(breakout_row['open']) > 0 else 0
+
+                # ML용 몸통 크기 퍼센트 계산 (시뮬레이션과 동일한 방식)
+                breakout_open = float(breakout_row['open'])
+                breakout_close = float(breakout_row['close'])
+                breakout_body_pct = abs((breakout_close - breakout_open) / breakout_open * 100) if breakout_open > 0 else 0
+                breakout_gain_pct = ((breakout_close - breakout_open) / breakout_open * 100) if breakout_open > 0 else 0
 
                 debug_info['breakout'] = {
                     'idx': result.breakout_candle.idx,
@@ -809,7 +840,7 @@ class SupportPatternAnalyzer:
                     'volume_increase': f"{result.breakout_candle.volume_ratio_vs_prev:.1%}",
                     # ML용 추가 통계
                     'volume': breakout_volume,
-                    'body': breakout_body,
+                    'body_pct': breakout_body_pct,  # ML용 몸통 크기 퍼센트
                     'gain_pct': breakout_gain_pct
                 }
 
