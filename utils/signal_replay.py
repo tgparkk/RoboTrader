@@ -249,9 +249,9 @@ def calculate_trading_signals_once(df_3min: pd.DataFrame, *, debug_logs: bool = 
     return signals, signals
 
 
-def list_all_buy_signals(df_3min: pd.DataFrame, *, logger: Optional[logging.Logger] = None, stock_code: str = "UNKNOWN", simulation_date: Optional[str] = None) -> List[Dict[str, object]]:
+def list_all_buy_signals(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = None, *, logger: Optional[logging.Logger] = None, stock_code: str = "UNKNOWN", simulation_date: Optional[str] = None) -> List[Dict[str, object]]:
     """전체 3분봉에서 매수 신호 전체 리스트를 반환 (실시간과 동일한 방식)"""
-    
+
     if df_3min is None or df_3min.empty:
         return []
     
@@ -317,12 +317,18 @@ def list_all_buy_signals(df_3min: pd.DataFrame, *, logger: Optional[logging.Logg
                             signal_type=signal_strength.signal_type.value,
                             confidence=signal_strength.confidence,
                             support_pattern_info=signal_strength.pattern_data,
-                            data_3min=current_data
+                            data_3min=current_data,
+                            data_1min=df_1min  # 🆕 1분봉 데이터 전달
                         )
                         # pattern_id를 나중에 사용하기 위해 저장
                         signal_strength._pattern_id = pattern_id
+                        print(f"📝 패턴 데이터 로깅 완료: {pattern_id}")
+                    else:
+                        print(f"⚠️ pattern_data가 없음: hasattr={hasattr(signal_strength, 'pattern_data')}, data={signal_strength.pattern_data if hasattr(signal_strength, 'pattern_data') else 'N/A'}")
                 except Exception as log_err:
                     print(f"⚠️ 패턴 데이터 로깅 실패: {log_err}")
+                    import traceback
+                    traceback.print_exc()
 
                 # 현재 3분봉 정보
                 current_row = df_3min.iloc[i]
@@ -375,9 +381,9 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
         return []
 
     try:
-        # 매수 신호 리스트 가져오기
-        buy_signals = list_all_buy_signals(df_3min, logger=logger, stock_code=stock_code, simulation_date=simulation_date)
-        
+        # 매수 신호 리스트 가져오기 (🆕 1분봉 데이터 전달)
+        buy_signals = list_all_buy_signals(df_3min, df_1min, logger=logger, stock_code=stock_code, simulation_date=simulation_date)
+
         if not buy_signals:
             if logger:
                 logger.info(f"매수 신호 없음 - 거래 시뮬레이션 불가 [{stock_code}]")
@@ -783,11 +789,24 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                     pattern_logger = PatternDataLogger(simulation_date=simulation_date)
 
                     if signal.get('pattern_id'):
+                        # 🆕 매수~매도 구간 상세 데이터 준비
+                        trade_data = {
+                            'buy_time': buy_time,
+                            'sell_time': sell_time,
+                            'buy_price': buy_price,
+                            'sell_price': sell_price,
+                            'max_profit_rate': max_profit_rate,
+                            'max_loss_rate': max_loss_rate,
+                            'duration_minutes': duration_minutes,
+                            'df_1min_during_trade': df_1min  # 전체 1분봉 데이터 전달
+                        }
+
                         pattern_logger.update_trade_result(
                             pattern_id=signal['pattern_id'],
                             trade_executed=True,
                             profit_rate=profit_rate,
-                            sell_reason=sell_reason
+                            sell_reason=sell_reason,
+                            trade_data=trade_data  # 🆕 상세 데이터 전달
                         )
                 except Exception as log_err:
                     if logger:

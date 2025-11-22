@@ -1,0 +1,476 @@
+#!/usr/bin/env python3
+"""
+🤖 백테스트 결과에 ML 필터 적용
+
+signal_replay 결과 파일을 읽어서 ML 모델로 승률을 예측하고,
+임계값 이하의 신호를 필터링합니다.
+"""
+
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
+
+import pickle
+import re
+import json
+from pathlib import Path
+from typing import Dict, List, Tuple, Optional
+from datetime import datetime
+import pandas as pd
+
+
+def load_ml_model(model_path: str = "ml_model_stratified.pkl"):
+    """ML 모델 로드"""
+    try:
+        with open(model_path, 'rb') as f:
+            model_data = pickle.load(f)
+
+        model = model_data['model']
+        feature_names = model_data['feature_names']
+
+        print(f"✅ ML 모델 로드 완료 ({len(feature_names)}개 특성)")
+        return model, feature_names
+
+    except Exception as e:
+        print(f"❌ ML 모델 로드 실패: {e}")
+        return None, None
+
+
+def parse_signal_from_log_line(line: str) -> Dict:
+    """
+    로그 라인에서 신호 정보 파싱
+
+    예시 라인:
+    "   🟢 174900 09:21 매수 → +3.50%"
+    """
+    # 신호 패턴 매칭
+    pattern = r'[🔴🟢]\s+(\d{6})\s+(\d{2}):(\d{2})\s+매수\s+→\s+([-+]\d+\.\d+)%'
+    match = re.search(pattern, line)
+
+    if not match:
+        return None
+
+    stock_code = match.group(1)
+    hour = int(match.group(2))
+    minute = int(match.group(3))
+    profit_rate = float(match.group(4))
+
+    return {
+        'stock_code': stock_code,
+        'hour': hour,
+        'minute': minute,
+        'time': f"{hour:02d}:{minute:02d}",
+        'profit_rate': profit_rate,
+        'is_win': profit_rate > 0
+    }
+
+
+def load_pattern_data_for_date(date_str: str) -> Dict[str, Dict]:
+    """
+    특정 날짜의 패턴 데이터 로드
+
+    Returns:
+        Dict[pattern_id, pattern_data]
+    """
+    pattern_log_file = Path('pattern_data_log') / f'pattern_data_{date_str}.jsonl'
+
+    if not pattern_log_file.exists():
+        print(f"   ⚠️  패턴 로그 없음: {pattern_log_file}")
+        return {}
+
+    patterns = {}
+    try:
+        with open(pattern_log_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                if line.strip():
+                    try:
+                        record = json.loads(line)
+                        pattern_id = record.get('pattern_id', '')
+                        if pattern_id:
+                            patterns[pattern_id] = record
+                    except:
+                        pass
+
+        print(f"   📊 패턴 데이터 로드: {len(patterns)}개")
+        return patterns
+
+    except Exception as e:
+        print(f"   ⚠️  패턴 데이터 로드 실패: {e}")
+        return {}
+
+
+def find_matching_pattern(patterns: Dict[str, Dict], signal: Dict) -> Optional[Dict]:
+    """
+    신호와 매칭되는 패턴 찾기 (±3분 범위)
+    """
+    stock_code = signal['stock_code']
+    hour = signal['hour']
+    minute = signal['minute']
+    signal_minutes = hour * 60 + minute
+
+    # ±3분 범위에서 검색
+    for offset in range(-3, 4):
+        check_minutes = signal_minutes + offset
+        check_hour = check_minutes // 60
+        check_minute = check_minutes % 60
+
+        # pattern_id 형식: {stock_code}_{YYYYMMDD}_{HHMMSS}
+        # 초는 00~59 사이 모두 가능하므로 부분 매칭
+        for pattern_id, pattern_data in patterns.items():
+            parts = pattern_id.split('_')
+            if len(parts) >= 3:
+                p_code = parts[0]
+                p_time_str = parts[2]  # HHMMSS
+
+                if p_code == stock_code:
+                    p_hour = int(p_time_str[:2])
+                    p_minute = int(p_time_str[2:4])
+
+                    if p_hour == check_hour and p_minute == check_minute:
+                        return pattern_data
+
+    return None
+
+
+def safe_float(value, default=0.0):
+    """안전하게 float로 변환"""
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        # "3.52%" -> 3.52
+        # "162,154" -> 162154
+        value = value.replace(',', '').replace('%', '').strip()
+        try:
+            return float(value)
+        except:
+            return default
+    return default
+
+
+def calculate_avg_volume_from_candles(candles: list) -> float:
+    """캔들 리스트에서 평균 거래량 계산"""
+    if not candles:
+        return 0.0
+    volumes = [c.get('volume', 0) for c in candles]
+    return sum(volumes) / len(volumes) if volumes else 0.0
+
+
+def calculate_avg_body_pct(candles: list) -> float:
+    """캔들 리스트에서 평균 몸통 비율 계산"""
+    if not candles:
+        return 0.0
+    body_pcts = []
+    for c in candles:
+        open_p = c.get('open', 0)
+        close_p = c.get('close', 0)
+        if open_p > 0:
+            body_pct = abs((close_p - open_p) / open_p * 100)
+            body_pcts.append(body_pct)
+    return sum(body_pcts) / len(body_pcts) if body_pcts else 0.0
+
+
+def extract_features_from_pattern(pattern_data: Dict) -> Dict:
+    """
+    패턴 데이터에서 ML 특성 추출 (실제 패턴 특성 사용)
+    """
+    # 신호 시간 정보
+    signal_time_str = pattern_data.get('signal_time', '')
+    if signal_time_str:
+        try:
+            signal_time = datetime.strptime(signal_time_str, '%Y-%m-%d %H:%M:%S')
+            hour = signal_time.hour
+            minute = signal_time.minute
+        except:
+            hour, minute = 0, 0
+    else:
+        hour, minute = 0, 0
+
+    # 신호 정보
+    signal_info = pattern_data.get('signal_info', {})
+    signal_type = signal_info.get('signal_type', '')
+    signal_type_encoded = 1 if signal_type == 'STRONG_BUY' else 0
+    confidence = safe_float(signal_info.get('confidence', 0.0))
+
+    # 패턴 구간 정보
+    pattern_stages = pattern_data.get('pattern_stages', {})
+
+    # 상승 구간
+    uptrend = pattern_stages.get('1_uptrend', {})
+    uptrend_candles = uptrend.get('candle_count', 0)
+    uptrend_gain = safe_float(uptrend.get('price_gain', 0.0))
+    uptrend_max_volume_str = uptrend.get('max_volume', '0')
+    uptrend_max_volume = safe_float(uptrend_max_volume_str)
+
+    # 상승 구간 캔들에서 평균 계산
+    uptrend_candles_list = uptrend.get('candles', [])
+    uptrend_avg_body = calculate_avg_body_pct(uptrend_candles_list)
+    uptrend_total_volume = sum(c.get('volume', 0) for c in uptrend_candles_list)
+
+    # 하락 구간
+    decline = pattern_stages.get('2_decline', {})
+    decline_candles = decline.get('candle_count', 0)
+    decline_pct = abs(safe_float(decline.get('decline_pct', 0.0)))
+    decline_candles_list = decline.get('candles', [])
+    decline_avg_volume = calculate_avg_volume_from_candles(decline_candles_list)
+
+    # 지지 구간
+    support = pattern_stages.get('3_support', {})
+    support_candles = support.get('candle_count', 0)
+    support_volatility = safe_float(support.get('price_volatility', 0.0))
+    support_avg_volume_ratio = safe_float(support.get('avg_volume_ratio', 1.0))
+    support_candles_list = support.get('candles', [])
+    support_avg_volume = calculate_avg_volume_from_candles(support_candles_list)
+
+    # 돌파 구간
+    breakout = pattern_stages.get('4_breakout', {})
+    if breakout and breakout.get('candle'):
+        breakout_candle = breakout.get('candle', {})
+        breakout_volume = breakout_candle.get('volume', 0)
+
+        # 몸통 크기 계산
+        open_p = breakout_candle.get('open', 0)
+        close_p = breakout_candle.get('close', 0)
+        if open_p > 0:
+            breakout_body = abs((close_p - open_p) / open_p * 100)
+        else:
+            breakout_body = 0.0
+
+        # 범위 크기 계산
+        high_p = breakout_candle.get('high', 0)
+        low_p = breakout_candle.get('low', 0)
+        if low_p > 0:
+            breakout_range = (high_p - low_p) / low_p * 100
+        else:
+            breakout_range = 0.0
+    else:
+        breakout_volume, breakout_body, breakout_range = 0, 0.0, 0.0
+
+    # 비율 특성 계산
+    volume_ratio_decline_to_uptrend = (
+        decline_avg_volume / uptrend_max_volume if uptrend_max_volume > 0 else 0
+    )
+    volume_ratio_support_to_uptrend = (
+        support_avg_volume / uptrend_max_volume if uptrend_max_volume > 0 else 0
+    )
+    volume_ratio_breakout_to_uptrend = (
+        breakout_volume / uptrend_max_volume if uptrend_max_volume > 0 else 0
+    )
+    price_gain_to_decline_ratio = (
+        uptrend_gain / decline_pct if decline_pct > 0 else 0
+    )
+    candle_ratio_support_to_decline = (
+        support_candles / decline_candles if decline_candles > 0 else 0
+    )
+
+    features = {
+        'hour': hour,
+        'minute': minute,
+        'time_in_minutes': hour * 60 + minute,
+        'is_morning': 1 if hour < 12 else 0,
+
+        'signal_type': signal_type_encoded,
+        'confidence': confidence,
+
+        'uptrend_candles': uptrend_candles,
+        'uptrend_gain': uptrend_gain,
+        'uptrend_max_volume': uptrend_max_volume,
+        'uptrend_avg_body': uptrend_avg_body,
+        'uptrend_total_volume': uptrend_total_volume,
+
+        'decline_candles': decline_candles,
+        'decline_pct': decline_pct,
+        'decline_avg_volume': decline_avg_volume,
+
+        'support_candles': support_candles,
+        'support_volatility': support_volatility,
+        'support_avg_volume_ratio': support_avg_volume_ratio,
+        'support_avg_volume': support_avg_volume,
+
+        'breakout_volume': breakout_volume,
+        'breakout_body': breakout_body,
+        'breakout_range': breakout_range,
+
+        'volume_ratio_decline_to_uptrend': volume_ratio_decline_to_uptrend,
+        'volume_ratio_support_to_uptrend': volume_ratio_support_to_uptrend,
+        'volume_ratio_breakout_to_uptrend': volume_ratio_breakout_to_uptrend,
+        'price_gain_to_decline_ratio': price_gain_to_decline_ratio,
+        'candle_ratio_support_to_decline': candle_ratio_support_to_decline,
+    }
+
+    return features
+
+
+def predict_win_probability(
+    model,
+    feature_names,
+    signal: Dict,
+    pattern_data: Optional[Dict] = None
+) -> Tuple[float, str]:
+    """
+    신호의 승률 예측
+
+    Returns:
+        (승률, 상태 메시지)
+    """
+    try:
+        if pattern_data is None:
+            return 0.5, "패턴없음"
+
+        # 패턴 데이터에서 특성 추출
+        features = extract_features_from_pattern(pattern_data)
+
+        # DataFrame으로 변환
+        feature_values = [features.get(fname, 0) for fname in feature_names]
+        X = pd.DataFrame([feature_values], columns=feature_names)
+
+        # 예측 - LightGBM은 predict_proba 대신 predict 사용
+        try:
+            # LightGBM Booster 객체인 경우
+            win_prob = model.predict(X.values)[0]
+        except AttributeError:
+            # sklearn wrapper인 경우
+            win_prob = model.predict_proba(X)[0][1]
+
+        return win_prob, "정상"
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return 0.5, f"오류:{str(e)[:20]}"
+
+
+def apply_ml_filter_to_file(
+    input_file: str,
+    output_file: str,
+    model,
+    feature_names,
+    threshold: float = 0.5
+) -> Tuple[int, int]:
+    """
+    백테스트 결과 파일에 ML 필터 적용
+
+    Returns:
+        (총 신호 수, 필터링된 신호 수)
+    """
+    print(f"\n📄 처리 중: {input_file}")
+
+    # 날짜 추출 (파일명에서)
+    # 예: signal_replay_log_ml/signal_replay_20251103_9_00_0_temp.txt
+    input_path = Path(input_file)
+    filename = input_path.stem  # signal_replay_20251103_9_00_0_temp
+
+    # 날짜 추출 (YYYYMMDD 형식)
+    date_match = re.search(r'(\d{8})', filename)
+    if date_match:
+        date_str = date_match.group(1)
+        patterns = load_pattern_data_for_date(date_str)
+    else:
+        print("   ⚠️  날짜를 추출할 수 없습니다. 패턴 데이터 없이 진행합니다.")
+        patterns = {}
+
+    with open(input_file, 'r', encoding='utf-8-sig') as f:
+        lines = f.readlines()
+
+    output_lines = []
+    total_signals = 0
+    filtered_signals = 0
+    no_pattern_count = 0
+
+    for line in lines:
+        # 신호 라인인지 확인
+        signal = parse_signal_from_log_line(line)
+
+        if signal:
+            total_signals += 1
+
+            # 패턴 데이터 찾기
+            pattern_data = find_matching_pattern(patterns, signal) if patterns else None
+
+            # ML 예측
+            win_prob, status = predict_win_probability(model, feature_names, signal, pattern_data)
+
+            if status == "패턴없음":
+                no_pattern_count += 1
+
+            # 임계값 이상만 통과
+            if win_prob >= threshold:
+                # 예측 승률을 라인에 추가
+                modified_line = line.rstrip() + f" [ML: {win_prob:.1%}]"
+                if status != "정상":
+                    modified_line += f" ({status})"
+                modified_line += "\n"
+                output_lines.append(modified_line)
+            else:
+                filtered_signals += 1
+                # 필터링된 신호는 주석 처리
+                comment = f"# [ML 필터링: {win_prob:.1%}"
+                if status != "정상":
+                    comment += f" ({status})"
+                comment += f"] {line}"
+                output_lines.append(comment)
+        else:
+            # 신호가 아닌 라인은 그대로 유지
+            output_lines.append(line)
+
+    # 필터링된 결과 저장
+    with open(output_file, 'w', encoding='utf-8-sig') as f:
+        f.writelines(output_lines)
+
+    print(f"   총 신호: {total_signals}개")
+    print(f"   통과: {total_signals - filtered_signals}개")
+    print(f"   차단: {filtered_signals}개 ({filtered_signals/total_signals*100 if total_signals > 0 else 0:.1f}%)")
+    if no_pattern_count > 0:
+        print(f"   패턴없음: {no_pattern_count}개 ({no_pattern_count/total_signals*100 if total_signals > 0 else 0:.1f}%)")
+
+    return total_signals, filtered_signals
+
+
+def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(description="백테스트 결과에 ML 필터 적용")
+    parser.add_argument('input_file', help="입력 파일 (signal_replay 결과)")
+    parser.add_argument('--output', '-o', help="출력 파일 (기본: 입력파일에 _ml_filtered 추가)")
+    parser.add_argument('--threshold', '-t', type=float, default=0.5, help="승률 임계값 (기본: 0.5)")
+    parser.add_argument('--model', '-m', default="ml_model.pkl", help="ML 모델 파일")
+
+    args = parser.parse_args()
+
+    # 출력 파일명 결정
+    if args.output:
+        output_file = args.output
+    else:
+        input_path = Path(args.input_file)
+        output_file = str(input_path.parent / f"{input_path.stem}_ml_filtered{input_path.suffix}")
+
+    print("=" * 70)
+    print("🤖 ML 필터 적용")
+    print("=" * 70)
+    print(f"입력: {args.input_file}")
+    print(f"출력: {output_file}")
+    print(f"임계값: {args.threshold:.1%}")
+
+    # ML 모델 로드
+    model, feature_names = load_ml_model(args.model)
+
+    if model is None:
+        print("\n❌ ML 모델을 로드할 수 없습니다.")
+        return
+
+    # 필터링 적용
+    total, filtered = apply_ml_filter_to_file(
+        args.input_file,
+        output_file,
+        model,
+        feature_names,
+        args.threshold
+    )
+
+    print("\n" + "=" * 70)
+    print(f"✅ 완료: {output_file}")
+    print("=" * 70)
+
+
+if __name__ == "__main__":
+    main()

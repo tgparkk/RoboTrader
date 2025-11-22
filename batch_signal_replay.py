@@ -24,6 +24,10 @@ import json
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocessing import cpu_count
 
+# UTF-8 인코딩 설정
+sys.stdout.reconfigure(encoding='utf-8')
+sys.stderr.reconfigure(encoding='utf-8')
+
 
 def parse_date(date_str):
     """날짜 문자열을 datetime 객체로 변환"""

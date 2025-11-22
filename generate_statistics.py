@@ -64,7 +64,10 @@ def parse_signal_replay_result(txt_filename):
 
     try:
         with open(txt_filename, 'r', encoding='utf-8', errors='ignore') as f:
-            content = f.read()
+            lines = f.readlines()
+
+        # 전체 파일 내용을 문자열로 결합 (메타데이터 파싱용)
+        content = ''.join(lines)
 
         # 최대 동시 보유 종목 수 파싱
         concurrent_pattern = r'=== 📊 최대 동시 보유 종목 수: (\d+)개 ==='
@@ -81,31 +84,56 @@ def parse_signal_replay_result(txt_filename):
             total_losses = int(overall_match.group(2))
             print(f"   전체 승패 정보 발견: {total_wins}승 {total_losses}패")
 
-        # 실제 거래 내역 파싱 - 여러 패턴 시도
-        patterns = [
-            # "09:36 매수[pullback_pattern] @66,240 → 15:00 매도[profit_1.1pct] @67,000 (+1.15%)"
-            r'(\d{1,2}:\d{2})\s+매수\[.*?\]\s+@[\d,]+\s+→\s+\d{1,2}:\d{2}\s+매도\[.*?\]\s+@[\d,]+\s+\(\+([0-9.]+)%\)',
-            r'(\d{1,2}:\d{2})\s+매수\[.*?\]\s+@[\d,]+\s+→\s+\d{1,2}:\d{2}\s+매도\[.*?\]\s+@[\d,]+\s+\(-([0-9.]+)%\)',
+        # 실제 거래 내역 파싱 - 요약 형식만 사용
+        # 요약 형식: "🔴 424760 09:33 매수 → -2.50% [ML: 67.9%]"
+        summary_patterns = [
+            (r'(\d{1,2}:\d{2})\s+매수\s+→\s+\+([0-9.]+)%', False),
+            (r'(\d{1,2}:\d{2})\s+매수\s+→\s+-([0-9.]+)%', True),
         ]
 
-        # 개별 거래 파싱
-        for pattern in patterns:
-            matches = re.findall(pattern, content)
-            for match in matches:
-                buy_time = match[0]
-                profit = float(match[1])
+        # 개별 거래 파싱 (ML 필터링된 신호 제외)
+        # 요약 섹션만 파싱하여 중복 방지
+        # 거래 목록은 "12시 이전 매수 종목" 섹션 이후부터 다음 주식 상세 섹션("=== 종목코드 -") 전까지
+        in_trade_list = False
+        for line in lines:
+            # 거래 목록 섹션 시작 감지 (12시 이전 매수 종목 섹션 이후)
+            if '12시 이전 매수 종목' in line or '🌅' in line:
+                in_trade_list = True
+                continue
 
-                # 손실 패턴인 경우 음수로 변환
-                if '(-' in pattern:
-                    profit = -profit
+            # 거래 목록 섹션 종료 감지 (주식 상세 섹션 시작: "=== 종목코드 - ")
+            if in_trade_list and line.strip().startswith('===') and ' - ' in line and '눌림목' in line:
+                in_trade_list = False
+                break  # 첫 번째 상세 섹션이 나오면 요약 섹션 끝
 
-                trades.append({
-                    'stock_code': 'PARSED',
-                    'profit': profit,
-                    'is_win': profit > 0,
-                    'buy_time': buy_time,
-                    'buy_hour': int(buy_time.split(':')[0])
-                })
+            # 거래 목록 섹션 내에서만 파싱
+            if not in_trade_list:
+                continue
+
+            # ML 필터로 차단된 신호 제외 (#으로 시작하는 줄)
+            if line.strip().startswith('#'):
+                continue
+
+            # 요약 패턴 파싱 ("🔴 424760 09:33 매수 → -2.50%" 형식)
+            matched = False
+            for pattern, is_loss in summary_patterns:
+                matches = re.findall(pattern, line)
+                for match in matches:
+                    buy_time = match[0]
+                    profit = float(match[1])
+                    if is_loss:
+                        profit = -profit
+
+                    trades.append({
+                        'stock_code': 'PARSED',
+                        'profit': profit,
+                        'is_win': profit > 0,
+                        'buy_time': buy_time,
+                        'buy_hour': int(buy_time.split(':')[0])
+                    })
+                    matched = True
+                if matched:
+                    break
 
         # 전체 승패 정보를 바탕으로 거래 생성 (상세 거래 정보가 부족한 경우)
         if not trades and overall_match:
@@ -372,7 +400,8 @@ def find_replay_files(input_dir, dates):
 
     # 디렉터리의 모든 파일을 확인
     for filename in os.listdir(input_dir):
-        if filename.endswith('.txt') and 'signal_new2_replay_' in filename:
+        # signal_new2_replay_ 또는 signal_ml_replay_ 패턴 지원
+        if filename.endswith('.txt') and ('signal_new2_replay_' in filename or 'signal_ml_replay_' in filename):
             # 파일명에서 날짜 추출
             for date in dates:
                 if date in filename:
