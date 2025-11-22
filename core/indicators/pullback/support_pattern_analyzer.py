@@ -729,56 +729,126 @@ class SupportPatternAnalyzer:
         }
         
         if result.uptrend_phase:
+            # 상승구간 상세 통계 (ML용)
+            uptrend_slice = data.iloc[result.uptrend_phase.start_idx:result.uptrend_phase.end_idx+1]
+            uptrend_avg_volume = float(uptrend_slice['volume'].mean()) if len(uptrend_slice) > 0 else 0
+            uptrend_max_volume = float(result.uptrend_phase.max_volume)
+            uptrend_total_volume = float(uptrend_slice['volume'].sum()) if len(uptrend_slice) > 0 else 0
+            uptrend_avg_body = float((abs(uptrend_slice['close'] - uptrend_slice['open'])).mean()) if len(uptrend_slice) > 0 else 0
+
             debug_info['uptrend'] = {
                 'start_idx': result.uptrend_phase.start_idx,
-                'end_idx': result.uptrend_phase.end_idx, 
+                'end_idx': result.uptrend_phase.end_idx,
                 'price_gain': f"{result.uptrend_phase.price_gain:.2%}",
-                'max_volume': f"{result.uptrend_phase.max_volume:,.0f}"
+                'max_volume': f"{result.uptrend_phase.max_volume:,.0f}",
+                # ML용 추가 통계 (수치형)
+                'gain_pct': result.uptrend_phase.price_gain,  # 수익률 (0~1)
+                'avg_volume': uptrend_avg_volume,
+                'max_volume_numeric': uptrend_max_volume,
+                'total_volume': uptrend_total_volume,
+                'avg_body': uptrend_avg_body,
+                'bar_count': result.uptrend_phase.end_idx - result.uptrend_phase.start_idx + 1
             }
-        
+
         if result.decline_phase:
+            # 하락구간 상세 통계 (ML용)
+            decline_slice = data.iloc[result.decline_phase.start_idx:result.decline_phase.end_idx+1]
+            decline_avg_volume = float(decline_slice['volume'].mean()) if len(decline_slice) > 0 else 0
+            decline_max_volume = float(decline_slice['volume'].max()) if len(decline_slice) > 0 else 0
+            decline_total_volume = float(decline_slice['volume'].sum()) if len(decline_slice) > 0 else 0
+            decline_avg_body = float((abs(decline_slice['close'] - decline_slice['open'])).mean()) if len(decline_slice) > 0 else 0
+
             debug_info['decline'] = {
                 'start_idx': result.decline_phase.start_idx,
                 'end_idx': result.decline_phase.end_idx,
                 'decline_pct': f"{result.decline_phase.decline_pct:.2%}",
                 'max_decline_price': f"{result.decline_phase.max_decline_price:,.0f}",
-                'candle_count': result.decline_phase.candle_count
+                'candle_count': result.decline_phase.candle_count,
+                # ML용 추가 통계
+                'avg_volume': decline_avg_volume,
+                'max_volume': decline_max_volume,
+                'total_volume': decline_total_volume,
+                'avg_body': decline_avg_body,
+                'bar_count': result.decline_phase.candle_count
             }
-        
+
         if result.support_phase:
+            # 지지구간 상세 통계 (ML용)
+            support_slice = data.iloc[result.support_phase.start_idx:result.support_phase.end_idx+1]
+            support_avg_volume = float(support_slice['volume'].mean()) if len(support_slice) > 0 else 0
+            support_max_volume = float(support_slice['volume'].max()) if len(support_slice) > 0 else 0
+            support_total_volume = float(support_slice['volume'].sum()) if len(support_slice) > 0 else 0
+            support_avg_body = float((abs(support_slice['close'] - support_slice['open'])).mean()) if len(support_slice) > 0 else 0
+
             debug_info['support'] = {
                 'start_idx': result.support_phase.start_idx,
                 'end_idx': result.support_phase.end_idx,
                 'candle_count': result.support_phase.candle_count,
                 'avg_volume_ratio': f"{result.support_phase.avg_volume_ratio:.1%}",
-                'price_volatility': f"{result.support_phase.price_volatility:.3%}"
+                'price_volatility': f"{result.support_phase.price_volatility:.3%}",
+                # ML용 추가 통계
+                'avg_volume': support_avg_volume,
+                'max_volume': support_max_volume,
+                'total_volume': support_total_volume,
+                'avg_body': support_avg_body,
+                'bar_count': result.support_phase.candle_count
             }
         
         if result.breakout_candle:
-            # 기존 breakout 정보 (로그용)
-            debug_info['breakout'] = {
-                'idx': result.breakout_candle.idx,
-                'body_increase': f"{result.breakout_candle.body_increase_vs_support:.1%}",
-                'volume_increase': f"{result.breakout_candle.volume_ratio_vs_prev:.1%}"
-            }
-
-            # 🆕 best_breakout: 필터링에 필요한 캔들 상세 정보
+            # 돌파 양봉 상세 정보 (ML용 포함)
             breakout_idx = result.breakout_candle.idx
             if breakout_idx < len(data):
                 breakout_row = data.iloc[breakout_idx]
+                breakout_volume = float(breakout_row['volume'])
+                breakout_body = abs(float(breakout_row['close']) - float(breakout_row['open']))
+                breakout_gain_pct = ((float(breakout_row['close']) - float(breakout_row['open'])) / float(breakout_row['open']) * 100) if float(breakout_row['open']) > 0 else 0
+
+                debug_info['breakout'] = {
+                    'idx': result.breakout_candle.idx,
+                    'body_increase': f"{result.breakout_candle.body_increase_vs_support:.1%}",
+                    'volume_increase': f"{result.breakout_candle.volume_ratio_vs_prev:.1%}",
+                    # ML용 추가 통계
+                    'volume': breakout_volume,
+                    'body': breakout_body,
+                    'gain_pct': breakout_gain_pct
+                }
+
+                # 🆕 best_breakout: 필터링에 필요한 캔들 상세 정보
                 debug_info['best_breakout'] = {
                     'high': float(breakout_row['high']),
                     'low': float(breakout_row['low']),
                     'close': float(breakout_row['close']),
                     'open': float(breakout_row['open']),
-                    'volume': float(breakout_row['volume']),
+                    'volume': breakout_volume,
                     'volume_ratio_vs_prev': result.breakout_candle.volume_ratio_vs_prev,
                     'body_increase_vs_support': result.breakout_candle.body_increase_vs_support
                 }
             
         if result.entry_price:
             debug_info['entry_price'] = f"{result.entry_price:,.0f}"
-        
+
+        # ML용 비율 특성 계산
+        if result.uptrend_phase and result.decline_phase and result.support_phase and result.breakout_candle:
+            decline_info = debug_info.get('decline', {})
+            support_info = debug_info.get('support', {})
+            breakout_info = debug_info.get('breakout', {})
+
+            uptrend_max_volume = float(result.uptrend_phase.max_volume) if result.uptrend_phase.max_volume > 0 else 1
+            uptrend_gain = result.uptrend_phase.price_gain
+            decline_pct = abs(result.decline_phase.decline_pct)
+
+            decline_avg_volume = decline_info.get('avg_volume', 0)
+            support_avg_volume = support_info.get('avg_volume', 0)
+            breakout_volume = breakout_info.get('volume', 0)
+
+            debug_info['ratios'] = {
+                'support_avg_volume_ratio': result.support_phase.avg_volume_ratio,  # 이미 계산됨
+                'volume_ratio_decline_to_uptrend': (decline_avg_volume / uptrend_max_volume) if uptrend_max_volume > 0 else 0,
+                'volume_ratio_support_to_uptrend': (support_avg_volume / uptrend_max_volume) if uptrend_max_volume > 0 else 0,
+                'volume_ratio_breakout_to_uptrend': (breakout_volume / uptrend_max_volume) if uptrend_max_volume > 0 else 0,
+                'price_gain_to_decline_ratio': (uptrend_gain / decline_pct) if decline_pct > 0 else 0
+            }
+
         return debug_info
 
 

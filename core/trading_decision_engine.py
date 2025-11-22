@@ -72,26 +72,24 @@ class TradingDecisionEngine:
             self.simple_pattern_filter = None
             self.use_simple_filter = False
         
-        # ML 설정 로드 (실시간에서는 비활성화)
+        # ML 설정 로드
         try:
             from config.ml_settings import MLSettings
-            self.use_ml_filter = False  # 실시간에서는 ML 필터 비활성화
-            self.use_hardcoded_ml = False  # 실시간에서는 하드코딩 ML 비활성화
+            self.use_ml_filter = True  # ML 필터 활성화
+            self.ml_threshold = 0.5  # 승률 임계값 (50%)
             self.ml_settings = MLSettings
+            self.logger.info("🤖 ML 필터 설정 로드 완료 (임계값: 50%)")
         except ImportError:
             self.use_ml_filter = False
-            self.use_hardcoded_ml = False
+            self.ml_threshold = 0.5
             self.ml_settings = None
-        
-        # ML 예측기 초기화 (비활성화)
+            self.logger.warning("⚠️ ML 설정 로드 실패 - ML 필터 비활성화")
+
+        # ML 예측기 초기화
         self.ml_predictor = None
-        self.hardcoded_ml_predictor = None
-        
-        # 실시간에서는 ML 사용하지 않음
-        # if self.use_hardcoded_ml:
-        #     self._initialize_hardcoded_ml()
-        # elif self.use_ml_filter:
-        #     self._initialize_ml_predictor()
+
+        if self.use_ml_filter:
+            self._initialize_ml_predictor()
 
         # 🆕 패턴 데이터 로거 초기화 (환경 변수로 제어)
         import os
@@ -129,10 +127,25 @@ class TradingDecisionEngine:
             self.use_hardcoded_ml = False
             self.hardcoded_ml_predictor = None
     
-    # 기존 ML 관련 메소드들 (현재 비활성화)
-    # def _initialize_ml_predictor(self):
-    #     """ML 예측기 초기화 (선택적) - 현재 비활성화"""  
-    #     pass
+    def _initialize_ml_predictor(self):
+        """ML 예측기 초기화"""
+        try:
+            from core.ml_predictor import get_ml_predictor
+
+            self.ml_predictor = get_ml_predictor(model_path="ml_model_stratified.pkl")
+
+            if self.ml_predictor and self.ml_predictor.is_loaded:
+                self.logger.info("🤖 ML 예측기 초기화 완료 (Stratified 모델)")
+                self.logger.info(f"   모델 버전: {self.ml_predictor.model_version}")
+                self.logger.info(f"   특성 수: {len(self.ml_predictor.feature_names)}개")
+            else:
+                self.logger.warning("⚠️ ML 예측기 로드 실패 - ML 필터 비활성화")
+                self.use_ml_filter = False
+
+        except Exception as e:
+            self.logger.error(f"❌ ML 예측기 초기화 실패: {e}")
+            self.use_ml_filter = False
+            self.ml_predictor = None
     
     def _safe_float_convert(self, value):
         """쉼표가 포함된 문자열을 안전하게 float로 변환"""
@@ -223,8 +236,31 @@ class TradingDecisionEngine:
                         else:
                             self.logger.debug(f"✅ {stock_code} 일봉 필터 통과: {filter_result.reason} (점수: {filter_result.score:.2f})")
 
-                    # 🆕 간단한 패턴 필터는 _check_pullback_candle_buy_signal 내부에서 이미 처리됨
-                    # 중복 제거: signal_strength는 해당 메소드 내부에서만 사용 가능
+                    # 🆕 ML 필터 적용
+                    ml_prob = 0.5  # 기본값
+                    if self.use_ml_filter and self.ml_predictor:
+                        try:
+                            # 패턴 특성 추출 (price_info에 패턴 데이터 포함되어 있어야 함)
+                            pattern_features = price_info.get('pattern_data', {})
+
+                            if pattern_features:
+                                should_trade, ml_prob = self.ml_predictor.should_trade(
+                                    pattern_features,
+                                    threshold=self.ml_threshold,
+                                    stock_code=stock_code
+                                )
+
+                                if not should_trade:
+                                    self.logger.info(f"🤖 {stock_code} ML 필터 차단: 승률 {ml_prob:.1%} < {self.ml_threshold:.1%}")
+                                    return False, f"눌림목캔들패턴: {reason} + ML필터차단 (승률: {ml_prob:.1%})", {'buy_price': 0, 'quantity': 0, 'max_buy_amount': 0}
+                                else:
+                                    self.logger.info(f"✅ {stock_code} ML 필터 통과: 승률 {ml_prob:.1%}")
+                            else:
+                                self.logger.warning(f"⚠️ {stock_code} 패턴 데이터 없음 - ML 필터 건너뜀")
+
+                        except Exception as e:
+                            self.logger.error(f"❌ {stock_code} ML 필터 오류: {e} - 신호 허용")
+                            # ML 오류 시 신호 허용
 
                     # 매수 정보 생성
                     buy_info = {
@@ -233,15 +269,15 @@ class TradingDecisionEngine:
                         'max_buy_amount': max_buy_amount,
                         'entry_low': price_info.get('entry_low', 0),  # 손절 기준
                         'target_profit': price_info.get('target_profit', 0.03),  # 목표 수익률
-                        #'ml_prediction': ml_result  # ML 예측 결과 추가
+                        'ml_prob': ml_prob  # ML 예측 승률 추가
                     }
-                    
+
                     # 🆕 목표 수익률 저장
                     if hasattr(trading_stock, 'target_profit_rate'):
                         trading_stock.target_profit_rate = price_info.get('target_profit', 0.03)
-                    
-                    # 매수 신호 승인 (시뮬레이션과 동일)
-                    final_reason = f"눌림목캔들패턴: {reason}"
+
+                    # 매수 신호 승인
+                    final_reason = f"눌림목캔들패턴: {reason} (ML: {ml_prob:.1%})"
 
                     return True, final_reason, buy_info
                 else:
@@ -907,11 +943,12 @@ class TradingDecisionEngine:
                 reasons = ' | '.join(signal_strength.reasons)
                 signal_desc = f"{signal_strength.signal_type.value} (신뢰도: {signal_strength.confidence:.0f}%)"
 
-                # 가격 정보 생성 (안전한 타입 변환)
+                # 가격 정보 생성 (안전한 타입 변환 + ML용 패턴 데이터 포함)
                 price_info = {
                     'buy_price': self._safe_float_convert(signal_strength.buy_price),
                     'entry_low': self._safe_float_convert(signal_strength.entry_low),
-                    'target_profit': self._safe_float_convert(signal_strength.target_profit)
+                    'target_profit': self._safe_float_convert(signal_strength.target_profit),
+                    'pattern_data': getattr(signal_strength, 'pattern_data', {})  # ML 필터용 패턴 데이터
                 }
                 
                 # 🆕 매수 신호 발생 상세 로깅 (데이터 정보 포함)
