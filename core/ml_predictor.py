@@ -142,14 +142,31 @@ class MLPredictor:
         # ===== 상승 구간 특성 =====
         uptrend = pattern_stages.get('1_uptrend', debug_info.get('uptrend', {}))
         uptrend_candles_list = uptrend.get('candles', [])
-        uptrend_candles = uptrend.get('candle_count', len(uptrend_candles_list))
-        uptrend_gain = self._safe_float(uptrend.get('price_gain', uptrend.get('gain_pct', 0.0)))
-        uptrend_max_volume_str = uptrend.get('max_volume', '0')
-        uptrend_max_volume = self._safe_float(uptrend_max_volume_str)
 
-        # 평균 계산
-        uptrend_avg_body = self._calculate_avg_body_pct(uptrend_candles_list)
-        uptrend_total_volume = sum(c.get('volume', 0) for c in uptrend_candles_list)
+        # 캔들 수 (bar_count 또는 candle_count 우선, 없으면 리스트 길이)
+        uptrend_candles = uptrend.get('bar_count', uptrend.get('candle_count', len(uptrend_candles_list)))
+
+        # 상승률 (gain_pct 우선, 없으면 price_gain)
+        uptrend_gain = self._safe_float(uptrend.get('gain_pct', uptrend.get('price_gain', 0.0)))
+
+        # 최대 거래량 (max_volume_numeric 우선, 없으면 max_volume)
+        uptrend_max_volume = self._safe_float(
+            uptrend.get('max_volume_numeric', uptrend.get('max_volume', 0))
+        )
+
+        # 평균 몸통 크기 (avg_body 우선, 없으면 계산)
+        uptrend_avg_body = uptrend.get('avg_body')
+        if uptrend_avg_body is None:
+            uptrend_avg_body = self._calculate_avg_body_pct(uptrend_candles_list)
+        else:
+            uptrend_avg_body = self._safe_float(uptrend_avg_body)
+
+        # 총 거래량 (total_volume 우선, 없으면 계산)
+        uptrend_total_volume = uptrend.get('total_volume')
+        if uptrend_total_volume is None:
+            uptrend_total_volume = sum(c.get('volume', 0) for c in uptrend_candles_list)
+        else:
+            uptrend_total_volume = self._safe_float(uptrend_total_volume)
 
         features['uptrend_candles'] = uptrend_candles
         features['uptrend_gain'] = uptrend_gain
@@ -160,9 +177,19 @@ class MLPredictor:
         # ===== 하락 구간 특성 =====
         decline = pattern_stages.get('2_decline', debug_info.get('decline', {}))
         decline_candles_list = decline.get('candles', [])
-        decline_candles = decline.get('candle_count', len(decline_candles_list))
+
+        # 캔들 수 (bar_count 또는 candle_count 우선)
+        decline_candles = decline.get('bar_count', decline.get('candle_count', len(decline_candles_list)))
+
+        # 하락률
         decline_pct = abs(self._safe_float(decline.get('decline_pct', 0.0)))
-        decline_avg_volume = self._calculate_avg_volume_from_candles(decline_candles_list)
+
+        # 평균 거래량 (avg_volume 우선, 없으면 계산)
+        decline_avg_volume = decline.get('avg_volume')
+        if decline_avg_volume is None:
+            decline_avg_volume = self._calculate_avg_volume_from_candles(decline_candles_list)
+        else:
+            decline_avg_volume = self._safe_float(decline_avg_volume)
 
         features['decline_candles'] = decline_candles
         features['decline_pct'] = decline_pct
@@ -171,10 +198,22 @@ class MLPredictor:
         # ===== 지지 구간 특성 =====
         support = pattern_stages.get('3_support', debug_info.get('support', {}))
         support_candles_list = support.get('candles', [])
-        support_candles = support.get('candle_count', len(support_candles_list))
+
+        # 캔들 수 (bar_count 또는 candle_count 우선)
+        support_candles = support.get('bar_count', support.get('candle_count', len(support_candles_list)))
+
+        # 변동성
         support_volatility = self._safe_float(support.get('price_volatility', 0.0))
+
+        # 평균 거래량 비율
         support_avg_volume_ratio = self._safe_float(support.get('avg_volume_ratio', 1.0))
-        support_avg_volume = self._calculate_avg_volume_from_candles(support_candles_list)
+
+        # 평균 거래량 (avg_volume 우선, 없으면 계산)
+        support_avg_volume = support.get('avg_volume')
+        if support_avg_volume is None:
+            support_avg_volume = self._calculate_avg_volume_from_candles(support_candles_list)
+        else:
+            support_avg_volume = self._safe_float(support_avg_volume)
 
         features['support_candles'] = support_candles
         features['support_volatility'] = support_volatility
@@ -183,20 +222,34 @@ class MLPredictor:
 
         # ===== 돌파 구간 특성 =====
         breakout = pattern_stages.get('4_breakout', debug_info.get('breakout', {}))
-        breakout_candle = breakout.get('candle', {})
 
-        if breakout_candle:
+        # best_breakout에 캔들 정보가 있으면 우선 사용 (debug_info 전용)
+        best_breakout = debug_info.get('best_breakout', {})
+
+        # 거래량 (volume 우선, 없으면 candle에서 추출)
+        breakout_volume = breakout.get('volume')
+        if breakout_volume is None:
+            breakout_candle = breakout.get('candle', best_breakout)
             breakout_volume = breakout_candle.get('volume', 0)
+        else:
+            breakout_volume = self._safe_float(breakout_volume)
 
-            # 몸통 크기 계산
+        # 몸통 크기 (body 또는 body_size 우선, 없으면 계산)
+        breakout_body = breakout.get('body', breakout.get('body_size'))
+        if breakout_body is None:
+            breakout_candle = breakout.get('candle', best_breakout)
             open_p = breakout_candle.get('open', 0)
             close_p = breakout_candle.get('close', 0)
             if open_p > 0:
                 breakout_body = abs((close_p - open_p) / open_p * 100)
             else:
                 breakout_body = 0.0
+        else:
+            breakout_body = self._safe_float(breakout_body)
 
-            # 범위 크기 계산
+        # 범위 크기 (candle 또는 best_breakout에서 계산)
+        breakout_candle = breakout.get('candle', best_breakout)
+        if breakout_candle:
             high_p = breakout_candle.get('high', 0)
             low_p = breakout_candle.get('low', 0)
             if low_p > 0:
@@ -204,7 +257,7 @@ class MLPredictor:
             else:
                 breakout_range = 0.0
         else:
-            breakout_volume, breakout_body, breakout_range = 0, 0.0, 0.0
+            breakout_range = 0.0
 
         features['breakout_volume'] = breakout_volume
         features['breakout_body'] = breakout_body
