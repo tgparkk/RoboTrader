@@ -1308,7 +1308,7 @@ def main():
             logger.warning(f"선택 날짜별 통계 계산 실패: {e}")
 
     # 파일 내보내기
-    if args.export and total_trades > 0:
+    if args.export:
         try:
             if args.export == "csv":
                 # CSV 형식으로 내보내기
