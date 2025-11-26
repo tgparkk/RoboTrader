@@ -669,15 +669,16 @@ class IntradayStockManager:
                                 str(int(t)).zfill(6)
                                 for t in updated_realtime['time'].tail(new_added).tolist()
                             ]
-                            self.logger.debug(
-                                f"✅ {stock_code} realtime_data 업데이트 (3단계 검증 완료): "
-                                f"{before_count} → {after_count} (+{new_added}개: {', '.join(recent_times)})"
-                            )
+                            #self.logger.debug(
+                            #    f"✅ {stock_code} realtime_data 업데이트 (3단계 검증 완료): "
+                            #    f"{before_count} → {after_count} (+{new_added}개: {', '.join(recent_times)})"
+                            #)
                         else:
-                            self.logger.debug(
-                                f"✅ {stock_code} realtime_data 업데이트 (3단계 검증 완료): "
-                                f"{before_count} → {after_count} (+{new_added}개)"
-                            )
+                            #self.logger.debug(
+                            #    f"✅ {stock_code} realtime_data 업데이트 (3단계 검증 완료): "
+                            #    f"{before_count} → {after_count} (+{new_added}개)"
+                            #)
+                            pass    # 너무 많은 로깅으로 인한 성능 저하 방지
 
             return True
 
@@ -1476,7 +1477,7 @@ class IntradayStockManager:
             
             if before_filter_count != len(all_data):
                 removed = before_filter_count - len(all_data)
-                self.logger.warning(f"⚠️ {stock_code} 품질검사 시 전날 데이터 {removed}건 제외: {before_filter_count} → {len(all_data)}건")
+                # self.logger.warning(f"⚠️ {stock_code} 품질검사 시 전날 데이터 {removed}건 제외: {before_filter_count} → {len(all_data)}건")
             
             if all_data.empty:
                 return {'has_issues': True, 'issues': ['당일 데이터 없음']}

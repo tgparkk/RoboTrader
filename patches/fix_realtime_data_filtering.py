@@ -336,15 +336,16 @@ async def update_realtime_data_patched(self, stock_code: str) -> bool:
                             str(int(t)).zfill(6)
                             for t in updated_realtime['time'].tail(new_added).tolist()
                         ]
-                        self.logger.debug(
-                            f"✅ {stock_code} realtime_data 업데이트 (3단계 검증 완료): "
-                            f"{before_count} → {after_count} (+{new_added}개: {', '.join(recent_times)})"
-                        )
+                        #self.logger.debug(
+                        #    f"✅ {stock_code} realtime_data 업데이트 (3단계 검증 완료): "
+                        #    f"{before_count} → {after_count} (+{new_added}개: {', '.join(recent_times)})"
+                        #)
                     else:
-                        self.logger.debug(
-                            f"✅ {stock_code} realtime_data 업데이트 (3단계 검증 완료): "
-                            f"{before_count} → {after_count} (+{new_added}개)"
-                        )
+                        #self.logger.debug(
+                        #    f"✅ {stock_code} realtime_data 업데이트 (3단계 검증 완료): "
+                        #    f"{before_count} → {after_count} (+{new_added}개)"
+                        #)
+                        pass    # 너무 많은 로깅으로 인한 성능 저하 방지
 
         return True
 
