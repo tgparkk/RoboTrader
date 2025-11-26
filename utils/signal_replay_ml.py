@@ -25,12 +25,12 @@ if project_root not in sys.path:
 # 기존 signal_replay 모듈 임포트
 from utils import signal_replay
 
-# ML 모델 로드
-ML_MODEL_PATH = Path("ml_model.pkl")
+# ML 모델 로드 (실시간 거래와 동일한 모델 사용)
+ML_MODEL_PATH = Path("ml_model_stratified.pkl")
 
 
 def load_ml_model():
-    """ML 모델 로드"""
+    """ML 모델 로드 (실시간 거래와 동일한 stratified 모델)"""
     if not ML_MODEL_PATH.exists():
         print(f"⚠️  ML 모델 파일을 찾을 수 없습니다: {ML_MODEL_PATH}")
         print(f"   ml_train_model.py를 먼저 실행하여 모델을 학습시켜주세요.")
@@ -43,7 +43,10 @@ def load_ml_model():
         model = model_data['model']
         feature_names = model_data['feature_names']
 
-        print(f"✅ ML 모델 로드 완료 ({len(feature_names)}개 특성)")
+        print(f"✅ ML 모델 로드 완료: {ML_MODEL_PATH.name}")
+        print(f"   - 특성 수: {len(feature_names)}개")
+        print(f"   - 버전: {model_data.get('version', 'N/A')}")
+        print(f"   - 설명: {model_data.get('description', 'N/A')}")
         return model, feature_names
 
     except Exception as e:
@@ -51,109 +54,199 @@ def load_ml_model():
         return None
 
 
+def safe_float(value, default=0.0):
+    """문자열을 float으로 안전하게 변환"""
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        # "3.52%" -> 3.52, "162,154" -> 162154
+        value = value.replace(',', '').replace('%', '').strip()
+        try:
+            return float(value)
+        except:
+            return default
+    return default
+
+
+def calculate_avg_volume_from_candles(candles: list) -> float:
+    """캔들 리스트에서 평균 거래량 계산"""
+    if not candles:
+        return 0.0
+    volumes = [c.get('volume', 0) for c in candles]
+    return sum(volumes) / len(volumes) if volumes else 0.0
+
+
+def calculate_avg_body_pct(candles: list) -> float:
+    """캔들 리스트에서 평균 몸통 비율 계산"""
+    if not candles:
+        return 0.0
+    body_pcts = []
+    for c in candles:
+        open_p = c.get('open', 0)
+        close_p = c.get('close', 0)
+        if open_p > 0:
+            body_pct = abs((close_p - open_p) / open_p * 100)
+            body_pcts.append(body_pct)
+    return sum(body_pcts) / len(body_pcts) if body_pcts else 0.0
+
+
 def extract_features_from_pattern(pattern_info: dict) -> dict:
     """
     패턴 정보에서 ML 모델 입력 특성 추출
+    (apply_ml_filter.py와 동일한 로직 사용 - pattern_stages 구조 기반)
 
     Args:
-        pattern_info: signal_replay에서 분석한 패턴 정보
+        pattern_info: 패턴 데이터 (pattern_stages 구조)
 
     Returns:
         특성 딕셔너리
     """
     try:
-        # signal_replay의 디버그 정보에서 특성 추출
-        debug_info = pattern_info.get('debug_info', {})
+        from datetime import datetime
 
-        # 시간 정보
-        signal_time = pattern_info.get('signal_time', '')  # "HH:MM:SS"
-        if signal_time:
-            hour, minute, _ = map(int, signal_time.split(':'))
-            time_in_minutes = hour * 60 + minute
-            is_morning = 1 if hour < 12 else 0
+        # 신호 시간 정보
+        signal_time_str = pattern_info.get('signal_time', '')
+        if signal_time_str:
+            try:
+                # "2025-11-26 09:30:00" 또는 "09:30:00" 형식 지원
+                if ' ' in signal_time_str:
+                    signal_time = datetime.strptime(signal_time_str, '%Y-%m-%d %H:%M:%S')
+                else:
+                    hour, minute, _ = map(int, signal_time_str.split(':'))
+                    signal_time = None
+
+                if signal_time:
+                    hour = signal_time.hour
+                    minute = signal_time.minute
+            except:
+                hour, minute = 0, 0
         else:
-            hour, minute, time_in_minutes, is_morning = 0, 0, 0, 0
+            hour, minute = 0, 0
 
         # 신호 정보
-        signal_type = pattern_info.get('signal_type', '')
+        signal_info = pattern_info.get('signal_info', {})
+        signal_type = signal_info.get('signal_type', pattern_info.get('signal_type', ''))
         signal_type_encoded = 1 if signal_type == 'STRONG_BUY' else 0
-        confidence = pattern_info.get('confidence', 0.0)
+        confidence = safe_float(signal_info.get('confidence', pattern_info.get('confidence', 0.0)))
 
-        # 4단계 패턴 정보
-        uptrend = debug_info.get('uptrend', {})
-        decline = debug_info.get('decline', {})
-        support = debug_info.get('support', {})
-        breakout = debug_info.get('breakout', {})
+        # 패턴 구간 정보 (pattern_stages 사용)
+        pattern_stages = pattern_info.get('pattern_stages', {})
+
+        # 상승 구간
+        uptrend = pattern_stages.get('1_uptrend', {})
+        uptrend_candles = uptrend.get('candle_count', 0)
+        uptrend_gain = safe_float(uptrend.get('price_gain', 0.0))
+        uptrend_max_volume_str = uptrend.get('max_volume', '0')
+        uptrend_max_volume = safe_float(uptrend_max_volume_str)
+
+        # 상승 구간 캔들에서 평균 계산
+        uptrend_candles_list = uptrend.get('candles', [])
+        uptrend_avg_body = calculate_avg_body_pct(uptrend_candles_list)
+        uptrend_total_volume = sum(c.get('volume', 0) for c in uptrend_candles_list)
+
+        # 하락 구간
+        decline = pattern_stages.get('2_decline', {})
+        decline_candles = decline.get('candle_count', 0)
+        decline_pct = abs(safe_float(decline.get('decline_pct', 0.0)))
+        decline_candles_list = decline.get('candles', [])
+        decline_avg_volume = calculate_avg_volume_from_candles(decline_candles_list)
+
+        # 지지 구간
+        support = pattern_stages.get('3_support', {})
+        support_candles = support.get('candle_count', 0)
+        support_volatility = safe_float(support.get('price_volatility', 0.0))
+        support_avg_volume_ratio = safe_float(support.get('avg_volume_ratio', 1.0))
+        support_candles_list = support.get('candles', [])
+        support_avg_volume = calculate_avg_volume_from_candles(support_candles_list)
+
+        # 돌파 구간
+        breakout = pattern_stages.get('4_breakout', {})
+        if breakout and breakout.get('candle'):
+            breakout_candle = breakout.get('candle', {})
+            breakout_volume = breakout_candle.get('volume', 0)
+
+            # 몸통 크기 계산
+            open_p = breakout_candle.get('open', 0)
+            close_p = breakout_candle.get('close', 0)
+            if open_p > 0:
+                breakout_body = abs((close_p - open_p) / open_p * 100)
+            else:
+                breakout_body = 0.0
+
+            # 범위 크기 계산
+            high_p = breakout_candle.get('high', 0)
+            low_p = breakout_candle.get('low', 0)
+            if low_p > 0:
+                breakout_range = (high_p - low_p) / low_p * 100
+            else:
+                breakout_range = 0.0
+        else:
+            breakout_volume, breakout_body, breakout_range = 0, 0.0, 0.0
+
+        # 비율 특성 계산
+        volume_ratio_decline_to_uptrend = (
+            decline_avg_volume / uptrend_max_volume if uptrend_max_volume > 0 else 0
+        )
+        volume_ratio_support_to_uptrend = (
+            support_avg_volume / uptrend_max_volume if uptrend_max_volume > 0 else 0
+        )
+        volume_ratio_breakout_to_uptrend = (
+            breakout_volume / uptrend_max_volume if uptrend_max_volume > 0 else 0
+        )
+        price_gain_to_decline_ratio = (
+            uptrend_gain / decline_pct if decline_pct > 0 else 0
+        )
+        candle_ratio_support_to_decline = (
+            support_candles / decline_candles if decline_candles > 0 else 0
+        )
 
         features = {
             'hour': hour,
             'minute': minute,
-            'time_in_minutes': time_in_minutes,
-            'is_morning': is_morning,
+            'time_in_minutes': hour * 60 + minute,
+            'is_morning': 1 if hour < 12 else 0,
 
             'signal_type': signal_type_encoded,
             'confidence': confidence,
 
-            # 상승 구간
-            'uptrend_candles': uptrend.get('candle_count', 0),
-            'uptrend_gain': uptrend.get('gain_pct', 0.0),
-            'uptrend_max_volume': uptrend.get('max_volume', 0),
-            'uptrend_avg_body': uptrend.get('avg_body_pct', 0.0),
-            'uptrend_total_volume': uptrend.get('volume_sum', 0),
+            'uptrend_candles': uptrend_candles,
+            'uptrend_gain': uptrend_gain,
+            'uptrend_max_volume': uptrend_max_volume,
+            'uptrend_avg_body': uptrend_avg_body,
+            'uptrend_total_volume': uptrend_total_volume,
 
-            # 하락 구간
-            'decline_candles': decline.get('candle_count', 0),
-            'decline_pct': abs(decline.get('decline_pct', 0.0)),
-            'decline_avg_volume': decline.get('avg_volume', 0),
+            'decline_candles': decline_candles,
+            'decline_pct': decline_pct,
+            'decline_avg_volume': decline_avg_volume,
 
-            # 지지 구간
-            'support_candles': support.get('candle_count', 0),
-            'support_volatility': support.get('volatility', 0.0),
-            'support_avg_volume_ratio': support.get('avg_volume_ratio_vs_uptrend', 1.0),
-            'support_avg_volume': support.get('avg_volume', 0),
+            'support_candles': support_candles,
+            'support_volatility': support_volatility,
+            'support_avg_volume_ratio': support_avg_volume_ratio,
+            'support_avg_volume': support_avg_volume,
 
-            # 돌파 구간
-            'breakout_volume': breakout.get('volume', 0),
-            'breakout_body': breakout.get('body_pct', 0.0),
-            'breakout_range': breakout.get('range_pct', 0.0),
+            'breakout_volume': breakout_volume,
+            'breakout_body': breakout_body,
+            'breakout_range': breakout_range,
+
+            'volume_ratio_decline_to_uptrend': volume_ratio_decline_to_uptrend,
+            'volume_ratio_support_to_uptrend': volume_ratio_support_to_uptrend,
+            'volume_ratio_breakout_to_uptrend': volume_ratio_breakout_to_uptrend,
+            'price_gain_to_decline_ratio': price_gain_to_decline_ratio,
+            'candle_ratio_support_to_decline': candle_ratio_support_to_decline,
         }
-
-        # 비율 특성 계산
-        uptrend_max_vol = features['uptrend_max_volume']
-        decline_avg_vol = features['decline_avg_volume']
-        support_avg_vol = features['support_avg_volume']
-        breakout_vol = features['breakout_volume']
-
-        features['volume_ratio_decline_to_uptrend'] = (
-            decline_avg_vol / uptrend_max_vol if uptrend_max_vol > 0 else 0
-        )
-        features['volume_ratio_support_to_uptrend'] = (
-            support_avg_vol / uptrend_max_vol if uptrend_max_vol > 0 else 0
-        )
-        features['volume_ratio_breakout_to_uptrend'] = (
-            breakout_vol / uptrend_max_vol if uptrend_max_vol > 0 else 0
-        )
-
-        decline_pct = features['decline_pct']
-        features['price_gain_to_decline_ratio'] = (
-            features['uptrend_gain'] / decline_pct if decline_pct > 0 else 0
-        )
-
-        decline_candles = features['decline_candles']
-        features['candle_ratio_support_to_decline'] = (
-            features['support_candles'] / decline_candles if decline_candles > 0 else 0
-        )
 
         return features
 
     except Exception as e:
         print(f"⚠️  특성 추출 실패: {e}")
+        import traceback
+        traceback.print_exc()
         return {}
 
 
 def predict_win_probability(model, feature_names, pattern_info: dict) -> float:
     """
-    패턴의 승률 예측
+    패턴의 승률 예측 (실시간 거래와 동일한 방식)
 
     Returns:
         승률 (0.0 ~ 1.0)
@@ -169,10 +262,11 @@ def predict_win_probability(model, feature_names, pattern_info: dict) -> float:
         feature_values = [features.get(fname, 0) for fname in feature_names]
         X = pd.DataFrame([feature_values], columns=feature_names)
 
-        # 예측 (승률)
-        win_prob = model.predict_proba(X)[0][1]  # 클래스 1 (승리)의 확률
+        # 예측 (실시간 거래와 동일: LightGBM의 predict 사용)
+        # ml_model_stratified.pkl은 LightGBM Booster이므로 predict() 사용
+        win_prob = model.predict(X, num_iteration=model.best_iteration)[0]
 
-        return win_prob
+        return float(win_prob)
 
     except Exception as e:
         print(f"⚠️  예측 실패: {e}")

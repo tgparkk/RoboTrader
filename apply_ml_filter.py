@@ -324,13 +324,19 @@ def predict_win_probability(
         feature_values = [features.get(fname, 0) for fname in feature_names]
         X = pd.DataFrame([feature_values], columns=feature_names)
 
-        # 예측 - LightGBM은 predict_proba 대신 predict 사용
+        # 예측 - 실시간 거래와 동일한 방식 (LightGBM predict with best_iteration)
         try:
-            # LightGBM Booster 객체인 경우
-            win_prob = model.predict(X.values)[0]
-        except AttributeError:
-            # sklearn wrapper인 경우
-            win_prob = model.predict_proba(X)[0][1]
+            # LightGBM Booster 객체인 경우 (ml_model_stratified.pkl)
+            win_prob = model.predict(
+                X.values,
+                num_iteration=model.best_iteration
+            )[0]
+        except (AttributeError, TypeError):
+            # sklearn wrapper인 경우 (하위 호환성)
+            try:
+                win_prob = model.predict_proba(X)[0][1]
+            except:
+                win_prob = model.predict(X.values)[0]
 
         return win_prob, "정상"
 
