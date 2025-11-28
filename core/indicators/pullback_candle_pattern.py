@@ -672,16 +672,26 @@ class PullbackCandlePattern:
                 support_end = support_info.get('end_idx', 0) if support_info else 0
 
                 # 매수 신호 발생
+                determined_signal_type = SignalType.STRONG_BUY if support_pattern_info['confidence'] >= 80 else SignalType.CAUTIOUS_BUY
+                determined_confidence = support_pattern_info['confidence']
+
+                # 🆕 ML 예측기를 위한 완전한 pattern_data 구조 생성
+                complete_pattern_data = support_pattern_info.copy()
+                complete_pattern_data['signal_info'] = {
+                    'signal_type': determined_signal_type.value,
+                    'confidence': determined_confidence
+                }
+
                 signal_strength = SignalStrength(
-                    signal_type=SignalType.STRONG_BUY if support_pattern_info['confidence'] >= 80 else SignalType.CAUTIOUS_BUY,
-                    confidence=support_pattern_info['confidence'],
+                    signal_type=determined_signal_type,
+                    confidence=determined_confidence,
                     target_profit=3.0,
                     reasons=support_pattern_info['reasons'] + ['기술필터통과'],
                     volume_ratio=volume_analysis.volume_ratio,
                     bisector_status=PullbackUtils.get_bisector_status(current['close'], bisector_line) if bisector_line else BisectorStatus.BROKEN,
                     buy_price=support_pattern_info.get('entry_price'),
                     entry_low=support_pattern_info.get('entry_price'),
-                    pattern_data=support_pattern_info  # 📊 4단계 패턴 구간 데이터
+                    pattern_data=complete_pattern_data  # 📊 4단계 패턴 구간 데이터 + signal_info
                 )
 
                 if debug and logger:

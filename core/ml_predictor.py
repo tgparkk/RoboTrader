@@ -79,6 +79,12 @@ class MLPredictor:
             # 특성 추출
             features_df = self.extract_features_from_pattern(pattern_features)
 
+            # 🔍 디버그: 특성 벡터 로깅 (440110 종목만)
+            if stock_code == '440110':
+                logger.info(f"[실시간ML] {stock_code} 특성 벡터:")
+                for col in features_df.columns:
+                    logger.info(f"  {col}: {features_df[col].iloc[0]}")
+
             # 예측
             win_prob = self.model.predict(
                 features_df,

@@ -141,19 +141,19 @@ async def _get_latest_minute_bar_patched(self, stock_code: str, current_time: da
 
             if not matched_data.empty:
                 latest_data = matched_data.copy()
-                collected_times = [str(int(t)).zfill(6) for t in latest_data['time'].tolist()]
-                self.logger.debug(
-                    f"✅ {stock_code} 분봉 수집: {', '.join(collected_times)} "
-                    f"({len(latest_data)}개, 요청: {target_hour}, 당일 검증 완료)"
-                )
+                #collected_times = [str(int(t)).zfill(6) for t in latest_data['time'].tolist()]
+                #self.logger.debug(
+                #    f"✅ {stock_code} 분봉 수집: {', '.join(collected_times)} "
+                #    f"({len(latest_data)}개, 요청: {target_hour}, 당일 검증 완료)"
+                #)
             else:
                 # 일치하는 데이터가 없으면 최신 2개 사용
                 latest_data = chart_df_sorted.tail(2).copy()
-                collected_times = [str(int(t)).zfill(6) for t in latest_data['time'].tolist()]
-                self.logger.debug(
-                    f"✅ {stock_code} 분봉 수집: {', '.join(collected_times)} "
-                    f"(요청: {target_hour}, 최신 {len(latest_data)}개, 당일 검증 완료)"
-                )
+                #collected_times = [str(int(t)).zfill(6) for t in latest_data['time'].tolist()]
+                #self.logger.debug(
+                #    f"✅ {stock_code} 분봉 수집: {', '.join(collected_times)} "
+                #    f"(요청: {target_hour}, 최신 {len(latest_data)}개, 당일 검증 완료)"
+                #)
         else:
             latest_data = chart_df.copy()
             if latest_data.empty:

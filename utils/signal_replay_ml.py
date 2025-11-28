@@ -262,6 +262,13 @@ def predict_win_probability(model, feature_names, pattern_info: dict) -> float:
         feature_values = [features.get(fname, 0) for fname in feature_names]
         X = pd.DataFrame([feature_values], columns=feature_names)
 
+        # 🔍 디버그: 특성 벡터 로깅 (440110 종목만)
+        stock_code = pattern_info.get('stock_code', '')
+        if stock_code == '440110':
+            print(f"[시뮬ML] {stock_code} 특성 벡터:")
+            for col in X.columns:
+                print(f"  {col}: {X[col].iloc[0]}")
+
         # 예측 (실시간 거래와 동일: LightGBM의 predict 사용)
         # ml_model_stratified.pkl은 LightGBM Booster이므로 predict() 사용
         win_prob = model.predict(X, num_iteration=model.best_iteration)[0]

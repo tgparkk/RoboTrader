@@ -347,9 +347,9 @@ class IntradayStockManager:
                 # 시간 범위 계산
                 time_range_minutes = calculate_time_range_minutes(start_time, end_time)
                 
-                self.logger.info(f"✅ {stock_code} 당일 전체 분봉 수집 성공! ({market_open.strftime('%H:%M')}~{selected_time.strftime('%H:%M')})")
-                self.logger.info(f"   총 데이터: {data_count}건")
-                self.logger.info(f"   시간 범위: {start_time} ~ {end_time} ({time_range_minutes}분)")
+                #self.logger.info(f"✅ {stock_code} 당일 전체 분봉 수집 성공! ({market_open.strftime('%H:%M')}~{selected_time.strftime('%H:%M')})")
+                #self.logger.info(f"   총 데이터: {data_count}건")
+                #self.logger.info(f"   시간 범위: {start_time} ~ {end_time} ({time_range_minutes}분)")
 
                 # 3분봉 변환 예상 개수 계산
                 expected_3min_count = data_count // 3
@@ -882,19 +882,19 @@ class IntradayStockManager:
 
                 if not matched_data.empty:
                     latest_data = matched_data.copy()
-                    collected_times = [str(int(t)).zfill(6) for t in latest_data['time'].tolist()]
-                    self.logger.debug(
-                        f"✅ {stock_code} 분봉 수집: {', '.join(collected_times)} "
-                        f"({len(latest_data)}개, 요청: {target_hour}, 당일 검증 완료)"
-                    )
+                    #collected_times = [str(int(t)).zfill(6) for t in latest_data['time'].tolist()]
+                    #self.logger.debug(
+                    #    f"✅ {stock_code} 분봉 수집: {', '.join(collected_times)} "
+                    #    f"({len(latest_data)}개, 요청: {target_hour}, 당일 검증 완료)"
+                    #)
                 else:
                     # 일치하는 데이터가 없으면 최신 2개 사용
                     latest_data = chart_df_sorted.tail(2).copy()
-                    collected_times = [str(int(t)).zfill(6) for t in latest_data['time'].tolist()]
-                    self.logger.debug(
-                        f"✅ {stock_code} 분봉 수집: {', '.join(collected_times)} "
-                        f"(요청: {target_hour}, 최신 {len(latest_data)}개, 당일 검증 완료)"
-                    )
+                    #collected_times = [str(int(t)).zfill(6) for t in latest_data['time'].tolist()]
+                    #self.logger.debug(
+                    #    f"✅ {stock_code} 분봉 수집: {', '.join(collected_times)} "
+                    #    f"(요청: {target_hour}, 최신 {len(latest_data)}개, 당일 검증 완료)"
+                    #)
             else:
                 latest_data = chart_df.copy()
                 if latest_data.empty:
@@ -1415,8 +1415,9 @@ class IntradayStockManager:
                 if len(quality_issues) > 5:
                     self.logger.warning(f"   (총 {len(quality_issues)}건 중 상위 5건만 표시)")
             else:
-                self.logger.debug(f"✅ 실시간 데이터 업데이트 완료: 분봉 {successful_minute_updates}/{total_stocks} ({minute_success_rate:.1f}%), "
-                                f"현재가 {successful_price_updates}/{total_stocks} ({price_success_rate:.1f}%)")
+                #self.logger.debug(f"✅ 실시간 데이터 업데이트 완료: 분봉 {successful_minute_updates}/{total_stocks} ({minute_success_rate:.1f}%), "
+                #                f"현재가 {successful_price_updates}/{total_stocks} ({price_success_rate:.1f}%)")
+                pass
             
         except Exception as e:
             self.logger.error(f"❌ 실시간 데이터 일괄 업데이트 오류: {e}")

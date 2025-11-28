@@ -29,6 +29,9 @@ class PatternDataLogger:
             today = datetime.now().strftime('%Y%m%d')
         self.log_file = self.log_dir / f"pattern_data_{today}.jsonl"
 
+        # 🆕 중복 방지를 위한 기존 패턴 ID 로드
+        self.existing_pattern_ids = self._load_existing_pattern_ids()
+
     def log_pattern_data(
         self,
         stock_code: str,
@@ -180,6 +183,11 @@ class PatternDataLogger:
             'trade_result': None  # 나중에 업데이트
         }
 
+        # 🆕 중복 체크
+        if pattern_id in self.existing_pattern_ids:
+            print(f"[스킵] 중복 패턴 ID: {pattern_id}")
+            return pattern_id
+
         # JSONL 형식으로 저장 (파일 잠금 및 예외 처리)
         try:
             with open(self.log_file, 'a', encoding='utf-8') as f:
@@ -188,6 +196,10 @@ class PatternDataLogger:
                 json.loads(json_str)  # 파싱 테스트
                 f.write(json_str + '\n')
                 f.flush()  # 즉시 디스크에 쓰기
+
+            # 🆕 저장 성공 시 메모리에 추가
+            self.existing_pattern_ids.add(pattern_id)
+
         except Exception as e:
             # 로깅 실패해도 패턴 ID는 반환 (시뮬레이션 계속 진행)
             print(f"[경고] 패턴 데이터 로깅 실패 ({pattern_id}): {e}")
@@ -593,3 +605,38 @@ class PatternDataLogger:
                     f.flush()
         except Exception as e:
             print(f"[경고] 패턴 업데이트 실패 ({pattern_id}): {e}")
+
+    def _load_existing_pattern_ids(self) -> set:
+        """
+        기존 패턴 파일에서 이미 저장된 패턴 ID 로드
+        중복 방지용
+
+        Returns:
+            set: 기존 패턴 ID 집합
+        """
+        existing_ids = set()
+
+        if not self.log_file.exists():
+            return existing_ids
+
+        try:
+            with open(self.log_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                        pattern_id = record.get('pattern_id')
+                        if pattern_id:
+                            existing_ids.add(pattern_id)
+                    except json.JSONDecodeError:
+                        # 손상된 라인은 무시
+                        continue
+
+            print(f"[패턴로거] 기존 패턴 ID {len(existing_ids)}개 로드 완료")
+
+        except Exception as e:
+            print(f"[경고] 기존 패턴 ID 로드 실패: {e}")
+
+        return existing_ids

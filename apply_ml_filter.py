@@ -346,6 +346,129 @@ def predict_win_probability(
         return 0.5, f"오류:{str(e)[:20]}"
 
 
+def recalculate_statistics(lines: List[str]) -> Dict:
+    """
+    필터링된 라인에서 통계 재계산 (주석 처리된 라인 제외)
+
+    Returns:
+        통계 딕셔너리 {total_trades, wins, losses, total_profit, win_profit, loss_amount}
+    """
+    wins = 0
+    losses = 0
+    total_profit = 0.0
+    win_profit = 0.0
+    loss_amount = 0.0
+
+    # 거래 목록 섹션 찾기 (12시 이전 매수 종목 섹션)
+    in_trade_list = False
+
+    for line in lines:
+        # 거래 목록 섹션 시작
+        if '12시 이전 매수 종목' in line or '🌅' in line:
+            in_trade_list = True
+            continue
+
+        # 거래 목록 섹션 종료 (상세 섹션 시작)
+        if in_trade_list and line.strip().startswith('===') and ' - ' in line:
+            break
+
+        if not in_trade_list:
+            continue
+
+        # 주석 처리된 라인은 제외
+        if line.strip().startswith('#'):
+            continue
+
+        # 승리/패배 파싱
+        win_match = re.search(r'매수\s+→\s+\+([0-9.]+)%', line)
+        loss_match = re.search(r'매수\s+→\s+-([0-9.]+)%', line)
+
+        if win_match:
+            wins += 1
+            profit_pct = float(win_match.group(1))
+            profit_amount = 1000000 * profit_pct / 100
+            win_profit += profit_amount
+            total_profit += profit_amount
+        elif loss_match:
+            losses += 1
+            loss_pct = float(loss_match.group(1))
+            loss_amt = 1000000 * loss_pct / 100
+            loss_amount += loss_amt
+            total_profit -= loss_amt
+
+    return {
+        'total_trades': wins + losses,
+        'wins': wins,
+        'losses': losses,
+        'total_profit': total_profit,
+        'win_profit': win_profit,
+        'loss_amount': loss_amount
+    }
+
+
+def update_statistics_section(lines: List[str], stats: Dict) -> List[str]:
+    """
+    파일 상단의 통계 섹션을 업데이트
+
+    Args:
+        lines: 원본 라인 리스트
+        stats: 재계산된 통계
+
+    Returns:
+        업데이트된 라인 리스트
+    """
+    updated_lines = []
+    in_morning_section = False  # 12시 이전 섹션 추적
+
+    for i, line in enumerate(lines):
+        # 12시 이전 매수 종목 섹션 시작
+        if '12시 이전 매수 종목:' in line:
+            in_morning_section = True
+            win_rate = (stats['wins'] / stats['total_trades'] * 100) if stats['total_trades'] > 0 else 0
+            updated_lines.append(
+                f"=== 🌅 12시 이전 매수 종목: {stats['wins']}승 {stats['losses']}패 (승률 {win_rate:.1f}%) ===\n"
+            )
+        # 12시 이전 섹션 종료 (거래 라인 시작)
+        elif in_morning_section and (line.strip().startswith('🔴') or line.strip().startswith('🟢') or line.strip().startswith('#')):
+            in_morning_section = False
+            updated_lines.append(line)
+        # 총 거래 라인 업데이트
+        elif line.startswith('총 거래:'):
+            updated_lines.append(
+                f"총 거래: {stats['total_trades']}건 ({stats['wins']}승 {stats['losses']}패)\n"
+            )
+        # 총 수익금 라인 업데이트 (상단 및 12시 이전 섹션)
+        elif line.startswith('총 수익금:'):
+            profit_rate = (stats['total_profit'] / (stats['total_trades'] * 1000000) * 100) if stats['total_trades'] > 0 else 0
+            updated_lines.append(
+                f"총 수익금: {stats['total_profit']:+,.0f}원 ({profit_rate:+.1f}%)\n"
+            )
+        # 승리 수익 라인 업데이트
+        elif '승리 수익:' in line:
+            updated_lines.append(
+                f"  ㄴ 승리 수익: {stats['win_profit']:+,.0f}원 (실제 수익률 합계)\n"
+            )
+        # 손실 금액 라인 업데이트
+        elif '손실 금액:' in line:
+            updated_lines.append(
+                f"  ㄴ 손실 금액: {-stats['loss_amount']:+,.0f}원 (실제 손실률 합계)\n"
+            )
+        # 총 승패 라인 업데이트
+        elif line.startswith('=== 총 승패:'):
+            updated_lines.append(
+                f"=== 총 승패: {stats['wins']}승 {stats['losses']}패 ===\n"
+            )
+        # selection_date 이후 승패 라인 업데이트
+        elif line.startswith('=== selection_date 이후 승패:'):
+            updated_lines.append(
+                f"=== selection_date 이후 승패: {stats['wins']}승 {stats['losses']}패 ===\n"
+            )
+        else:
+            updated_lines.append(line)
+
+    return updated_lines
+
+
 def apply_ml_filter_to_file(
     input_file: str,
     output_file: str,
@@ -419,15 +542,28 @@ def apply_ml_filter_to_file(
             # 신호가 아닌 라인은 그대로 유지
             output_lines.append(line)
 
+    # 통계 재계산
+    print(f"\n   📊 통계 재계산 중...")
+    recalc_stats = recalculate_statistics(output_lines)
+
+    # 통계 섹션 업데이트
+    output_lines = update_statistics_section(output_lines, recalc_stats)
+
     # 필터링된 결과 저장
     with open(output_file, 'w', encoding='utf-8-sig') as f:
         f.writelines(output_lines)
 
-    print(f"   총 신호: {total_signals}개")
-    print(f"   통과: {total_signals - filtered_signals}개")
+    print(f"\n   필터링 전 신호: {total_signals}개")
+    print(f"   필터링 후 신호: {total_signals - filtered_signals}개")
     print(f"   차단: {filtered_signals}개 ({filtered_signals/total_signals*100 if total_signals > 0 else 0:.1f}%)")
     if no_pattern_count > 0:
         print(f"   패턴없음: {no_pattern_count}개 ({no_pattern_count/total_signals*100 if total_signals > 0 else 0:.1f}%)")
+
+    print(f"\n   📈 필터링 후 통계:")
+    print(f"   총 거래: {recalc_stats['total_trades']}건 ({recalc_stats['wins']}승 {recalc_stats['losses']}패)")
+    win_rate = (recalc_stats['wins'] / recalc_stats['total_trades'] * 100) if recalc_stats['total_trades'] > 0 else 0
+    print(f"   승률: {win_rate:.1f}%")
+    print(f"   총 수익: {recalc_stats['total_profit']:+,.0f}원")
 
     return total_signals, filtered_signals
 

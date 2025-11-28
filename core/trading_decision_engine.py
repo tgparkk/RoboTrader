@@ -250,6 +250,28 @@ class TradingDecisionEngine:
                                     stock_code=stock_code
                                 )
 
+                                # 🆕 실시간 패턴 데이터 로깅 (시뮬과 비교용)
+                                try:
+                                    from core.pattern_data_logger import PatternDataLogger
+                                    from utils.korean_time import now_kst
+
+                                    pattern_logger = PatternDataLogger()  # 실시간 로깅
+
+                                    # signal_time 추가 (ML 예측에 필요)
+                                    if 'signal_time' not in pattern_features:
+                                        pattern_features['signal_time'] = now_kst().strftime('%Y-%m-%d %H:%M:%S')
+
+                                    pattern_logger.log_pattern_data(
+                                        stock_code=stock_code,
+                                        signal_type=pattern_features.get('signal_info', {}).get('signal_type', 'UNKNOWN'),
+                                        confidence=pattern_features.get('signal_info', {}).get('confidence', 0.0),
+                                        support_pattern_info=pattern_features,
+                                        data_3min=data_3min,
+                                        data_1min=None
+                                    )
+                                except Exception as log_err:
+                                    self.logger.debug(f"⚠️ {stock_code} 패턴 로깅 실패: {log_err}")
+
                                 if not should_trade:
                                     self.logger.info(f"🤖 {stock_code} ML 필터 차단: 승률 {ml_prob:.1%} < {self.ml_threshold:.1%}")
                                     return False, f"눌림목캔들패턴: {reason} + ML필터차단 (승률: {ml_prob:.1%})", {'buy_price': 0, 'quantity': 0, 'max_buy_amount': 0}
