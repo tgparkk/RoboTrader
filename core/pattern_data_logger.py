@@ -55,13 +55,15 @@ class PatternDataLogger:
         Returns:
             pattern_id: 패턴 고유 ID
         """
-        # 🆕 매수 시점 타임스탬프 (돌파양봉 완성 시점)
+        # 🆕 매수 시점 타임스탬프 (3분봉 완성 시점)
         debug_info = support_pattern_info.get('debug_info', {})
         breakout_info = debug_info.get('breakout', {})
         breakout_idx = breakout_info.get('idx')
 
         if breakout_idx is not None and breakout_idx < len(data_3min):
-            signal_time = data_3min.iloc[breakout_idx]['datetime']
+            # 3분봉 시작 시간에 3분을 더해 완성 시점 계산
+            candle_start_time = data_3min.iloc[breakout_idx]['datetime']
+            signal_time = candle_start_time + pd.Timedelta(minutes=3)
         else:
             signal_time = datetime.now()
 
@@ -146,37 +148,43 @@ class PatternDataLogger:
                     'start_idx': uptrend_info.get('start_idx'),
                     'end_idx': uptrend_info.get('end_idx'),
                     'candle_count': len(uptrend_candles),
-                    'max_volume': uptrend_info.get('max_volume'),
-                    'volume_avg': uptrend_info.get('volume_avg'),
-                    'max_volume_ratio_vs_avg': uptrend_info.get('max_volume_ratio_vs_avg'),
-                    'price_gain': uptrend_info.get('price_gain'),
-                    'high_price': uptrend_info.get('high_price'),
+                    # 🔄 숫자형 필드 우선 사용 (gain_pct, max_volume_numeric), 없으면 문자열 변환
+                    'max_volume': self._safe_float(uptrend_info.get('max_volume_numeric', uptrend_info.get('max_volume'))),
+                    'volume_avg': self._safe_float(uptrend_info.get('avg_volume', uptrend_info.get('volume_avg'))),
+                    'max_volume_ratio_vs_avg': self._safe_float(uptrend_info.get('max_volume_ratio_vs_avg')),
+                    'price_gain': self._safe_float(uptrend_info.get('gain_pct', uptrend_info.get('price_gain'))),
+                    'high_price': self._safe_float(uptrend_info.get('high_price')),
                     'candles': uptrend_candles
                 },
                 '2_decline': {
                     'start_idx': decline_info.get('start_idx'),
                     'end_idx': decline_info.get('end_idx'),
                     'candle_count': len(decline_candles),
-                    'decline_pct': decline_info.get('decline_pct'),
-                    'max_decline_price': decline_info.get('max_decline_price'),
-                    'avg_volume_ratio': decline_info.get('avg_volume_ratio'),
+                    # 🔄 decline_pct는 문자열로 올 수 있음 (예: "2.73%")
+                    'decline_pct': self._safe_float(decline_info.get('decline_pct')),
+                    'max_decline_price': self._safe_float(decline_info.get('max_decline_price')),
+                    'avg_volume_ratio': self._safe_float(decline_info.get('avg_volume_ratio')),
+                    # ML용 추가 통계
+                    'avg_volume': self._safe_float(decline_info.get('avg_volume')),
                     'candles': decline_candles
                 },
                 '3_support': {
                     'start_idx': support_info.get('start_idx'),
                     'end_idx': support_info.get('end_idx'),
                     'candle_count': len(support_candles),
-                    'support_price': support_info.get('support_price'),
-                    'price_volatility': support_info.get('price_volatility'),
-                    'avg_volume_ratio': support_info.get('avg_volume_ratio'),
+                    'support_price': self._safe_float(support_info.get('support_price')),
+                    'price_volatility': self._safe_float(support_info.get('price_volatility')),
+                    'avg_volume_ratio': self._safe_float(support_info.get('avg_volume_ratio')),
+                    # ML용 추가 통계
+                    'avg_volume': self._safe_float(support_info.get('avg_volume')),
                     'candles': support_candles
                 },
                 '4_breakout': {
                     'idx': breakout_info.get('idx'),
-                    'body_size': breakout_info.get('body_size'),
-                    'volume': breakout_info.get('volume'),
-                    'volume_ratio_vs_prev': breakout_info.get('volume_ratio_vs_prev'),
-                    'body_increase_vs_support': breakout_info.get('body_increase_vs_support'),
+                    'body_size': self._safe_float(breakout_info.get('body_size')),
+                    'volume': self._safe_float(breakout_info.get('volume')),
+                    'volume_ratio_vs_prev': self._safe_float(breakout_info.get('volume_ratio_vs_prev')),
+                    'body_increase_vs_support': self._safe_float(breakout_info.get('body_increase_vs_support')),
                     'candle': breakout_candle
                 }
             },
@@ -205,6 +213,21 @@ class PatternDataLogger:
             print(f"[경고] 패턴 데이터 로깅 실패 ({pattern_id}): {e}")
 
         return pattern_id
+
+    def _safe_float(self, value, default=0.0):
+        """문자열 또는 숫자를 안전하게 float로 변환"""
+        if value is None:
+            return default
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            # 쉼표와 퍼센트 기호 제거
+            value = value.replace(',', '').replace('%', '').strip()
+            try:
+                return float(value)
+            except:
+                return default
+        return default
 
     def _extract_candle_data(self, data: pd.DataFrame, start_idx: Optional[int], end_idx: Optional[int]) -> list:
         """구간의 캔들 데이터 추출"""

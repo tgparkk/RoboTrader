@@ -361,6 +361,14 @@ class MLPredictor:
             return True, 0.5
 
         try:
+            # 🆕 ML 입력 특성 디버그 로깅
+            features_df = self.extract_features_from_pattern(pattern_features)
+            if features_df is not None and not features_df.empty and stock_code:
+                logger.debug(f"[ML 특성] {stock_code}: uptrend_candles={features_df['uptrend_candles'].iloc[0]}, "
+                           f"uptrend_gain={features_df['uptrend_gain'].iloc[0]:.4f}, "
+                           f"decline_pct={features_df['decline_pct'].iloc[0]:.2f}, "
+                           f"hour={features_df['hour'].iloc[0]}, minute={features_df['minute'].iloc[0]}")
+
             win_prob = self.predict_win_probability(pattern_features, stock_code)
 
             should_trade = win_prob >= threshold
