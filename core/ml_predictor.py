@@ -19,7 +19,7 @@ logger = setup_logger(__name__)
 class MLPredictor:
     """ML 모델 기반 승률 예측기"""
 
-    def __init__(self, model_path: str = "ml_model_stratified.pkl"):
+    def __init__(self, model_path: str = "ml_model.pkl"):
         self.model = None
         self.label_encoder = None
         self.feature_names = None
@@ -388,7 +388,7 @@ class MLPredictor:
 _predictor_instance: Optional[MLPredictor] = None
 
 
-def get_ml_predictor(model_path: str = "ml_model_stratified.pkl") -> MLPredictor:
+def get_ml_predictor(model_path: str = "ml_model.pkl") -> MLPredictor:
     """ML 예측기 싱글톤 인스턴스 반환"""
     global _predictor_instance
 

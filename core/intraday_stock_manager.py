@@ -620,10 +620,10 @@ class IntradayStockManager:
                         after_merge_count = len(updated_realtime)
                         if before_merge_count != after_merge_count:
                             removed = before_merge_count - after_merge_count
-                            self.logger.debug(
-                                f"   {stock_code} 중복 제거: {before_merge_count} → "
-                                f"{after_merge_count} ({removed}개 중복)"
-                            )
+                            #self.logger.debug(
+                            #    f"   {stock_code} 중복 제거: {before_merge_count} → "
+                            #    f"{after_merge_count} ({removed}개 중복)"
+                            #)
 
                     # ========================================
                     # 🔥 3차 검증: 저장 직전 최종 당일 데이터 확인
@@ -1083,7 +1083,7 @@ class IntradayStockManager:
 
             if before_filter_count != len(combined_data):
                 removed = before_filter_count - len(combined_data)
-                self.logger.warning(f"⚠️ {stock_code} 당일 외 데이터 {removed}건 제거: {before_filter_count} → {len(combined_data)}건")
+                #self.logger.warning(f"⚠️ {stock_code} 당일 외 데이터 {removed}건 제거: {before_filter_count} → {len(combined_data)}건")
 
             if combined_data.empty:
                 self.logger.error(f"❌ {stock_code} 당일 데이터 없음 (전일 데이터만 존재)")

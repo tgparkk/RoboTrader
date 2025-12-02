@@ -132,10 +132,10 @@ class TradingDecisionEngine:
         try:
             from core.ml_predictor import get_ml_predictor
 
-            self.ml_predictor = get_ml_predictor(model_path="ml_model_stratified.pkl")
+            self.ml_predictor = get_ml_predictor(model_path="ml_model.pkl")
 
             if self.ml_predictor and self.ml_predictor.is_loaded:
-                self.logger.info("🤖 ML 예측기 초기화 완료 (Stratified 모델)")
+                self.logger.info("🤖 ML 예측기 초기화 완료")
                 self.logger.info(f"   모델 버전: {self.ml_predictor.model_version}")
                 self.logger.info(f"   특성 수: {len(self.ml_predictor.feature_names)}개")
             else:

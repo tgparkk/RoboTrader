@@ -151,7 +151,7 @@ def save_minute_data_to_cache(stock_code: str, date_str: str, data: pd.DataFrame
         
         if before_count != len(filtered_data):
             removed = before_count - len(filtered_data)
-            logger.warning(f"⚠️ {stock_code} 당일 외 데이터 {removed}건 제외: {before_count} → {len(filtered_data)}건")
+            #logger.warning(f"⚠️ {stock_code} 당일 외 데이터 {removed}건 제외: {before_count} → {len(filtered_data)}건")
         
         if filtered_data.empty:
             logger.error(f"❌ {stock_code} 당일 데이터 없음 (캐시 저장 중단)")

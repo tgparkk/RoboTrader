@@ -12,13 +12,31 @@ sys.stdout.reconfigure(encoding='utf-8')
 import pickle
 import re
 import json
+import sqlite3
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 from datetime import datetime
 import pandas as pd
 
 
-def load_ml_model(model_path: str = "ml_model_stratified.pkl"):
+def load_stock_names() -> Dict[str, str]:
+    """DB에서 종목 코드-종목명 매핑 로드"""
+    try:
+        conn = sqlite3.connect('data/robotrader.db')
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT DISTINCT stock_code, stock_name FROM candidate_stocks WHERE stock_name IS NOT NULL")
+        stock_map = {code: name for code, name in cursor.fetchall()}
+
+        conn.close()
+        print(f"✅ 종목명 로드 완료: {len(stock_map)}개")
+        return stock_map
+    except Exception as e:
+        print(f"⚠️  종목명 로드 실패: {e}")
+        return {}
+
+
+def load_ml_model(model_path: str = "ml_model.pkl"):
     """ML 모델 로드"""
     try:
         with open(model_path, 'rb') as f:
@@ -484,6 +502,9 @@ def apply_ml_filter_to_file(
     """
     print(f"\n📄 처리 중: {input_file}")
 
+    # 종목명 매핑 로드
+    stock_names = load_stock_names()
+
     # 날짜 추출 (파일명에서)
     # 예: signal_replay_log_ml/signal_replay_20251103_9_00_0_temp.txt
     input_path = Path(input_file)
@@ -512,6 +533,8 @@ def apply_ml_filter_to_file(
 
         if signal:
             total_signals += 1
+            stock_code = signal['stock_code']
+            stock_name = stock_names.get(stock_code, '???')
 
             # 패턴 데이터 찾기
             pattern_data = find_matching_pattern(patterns, signal) if patterns else None
@@ -522,10 +545,19 @@ def apply_ml_filter_to_file(
             if status == "패턴없음":
                 no_pattern_count += 1
 
+            # 기존 라인에서 종목 코드 부분을 "코드(종목명)" 형식으로 교체
+            # 예: "   🟢 174900 09:21 매수 → +3.50%" -> "   🟢 174900(코스맥스) 09:21 매수 → +3.50%"
+            # 정규식 그룹 참조 문제를 피하기 위해 replace 사용
+            pattern = re.search(r'([🔴🟢]\s+)' + stock_code + r'(\s+)', line)
+            if pattern:
+                modified_line = line[:pattern.start()] + pattern.group(1) + f"{stock_code}({stock_name})" + pattern.group(2) + line[pattern.end():].rstrip()
+            else:
+                modified_line = line.rstrip()
+
             # 임계값 이상만 통과
             if win_prob >= threshold:
-                # 예측 승률을 라인에 추가
-                modified_line = line.rstrip() + f" [ML: {win_prob:.1%}]"
+                # 예측 승률 추가
+                modified_line += f" [ML: {win_prob:.1%}]"
                 if status != "정상":
                     modified_line += f" ({status})"
                 modified_line += "\n"
@@ -536,7 +568,7 @@ def apply_ml_filter_to_file(
                 comment = f"# [ML 필터링: {win_prob:.1%}"
                 if status != "정상":
                     comment += f" ({status})"
-                comment += f"] {line}"
+                comment += f"]    {modified_line}\n"
                 output_lines.append(comment)
         else:
             # 신호가 아닌 라인은 그대로 유지

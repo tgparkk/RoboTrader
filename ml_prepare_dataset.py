@@ -14,6 +14,27 @@ from typing import List, Dict, Optional
 import numpy as np
 
 
+def safe_float_from_percent(value, default=0.0):
+    """퍼센트 문자열 또는 숫자를 float로 안전하게 변환"""
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        return float(value.replace('%', ''))
+    return default
+
+
+def safe_int_from_str(value, default=0):
+    """문자열이나 숫자를 int로 안전하게 변환"""
+    if value is None:
+        return default
+    try:
+        return int(float(str(value).replace(',', '')))
+    except:
+        return default
+
+
 def extract_features_from_pattern(pattern_data: Dict) -> Optional[Dict]:
     """패턴 데이터에서 ML 특징(feature) 추출
 
@@ -53,8 +74,8 @@ def extract_features_from_pattern(pattern_data: Dict) -> Optional[Dict]:
     # 1단계: 상승구간
     uptrend = pattern_stages.get('1_uptrend', {})
     uptrend_candles = uptrend.get('candle_count', 0)
-    uptrend_gain = float(uptrend.get('price_gain', '0%').replace('%', ''))
-    uptrend_max_volume = int(str(uptrend.get('max_volume', '0')).replace(',', ''))
+    uptrend_gain = safe_float_from_percent(uptrend.get('price_gain', '0%'))
+    uptrend_max_volume = safe_int_from_str(uptrend.get('max_volume', '0'))
 
     # 상승구간 캔들 데이터에서 추가 특징
     uptrend_candles_data = uptrend.get('candles', [])
@@ -68,7 +89,7 @@ def extract_features_from_pattern(pattern_data: Dict) -> Optional[Dict]:
     # 2단계: 하락구간
     decline = pattern_stages.get('2_decline', {})
     decline_candles = decline.get('candle_count', 0)
-    decline_pct = float(decline.get('decline_pct', '0%').replace('%', ''))
+    decline_pct = safe_float_from_percent(decline.get('decline_pct', '0%'))
 
     decline_candles_data = decline.get('candles', [])
     if decline_candles_data:
@@ -79,9 +100,8 @@ def extract_features_from_pattern(pattern_data: Dict) -> Optional[Dict]:
     # 3단계: 지지구간
     support = pattern_stages.get('3_support', {})
     support_candles = support.get('candle_count', 0)
-    support_volatility = float(support.get('price_volatility', '0%').replace('%', ''))
-    support_avg_volume_ratio_str = support.get('avg_volume_ratio', '0%')
-    support_avg_volume_ratio = float(support_avg_volume_ratio_str.replace('%', ''))
+    support_volatility = safe_float_from_percent(support.get('price_volatility', '0%'))
+    support_avg_volume_ratio = safe_float_from_percent(support.get('avg_volume_ratio', '0%'))
 
     support_candles_data = support.get('candles', [])
     if support_candles_data:
