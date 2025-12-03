@@ -309,8 +309,18 @@ def apply_ml_filter(original_results: dict, model_tuple, threshold: float = 0.5)
         for signal in signals:
             total_signals += 1
 
-            # ML 예측
-            win_prob = predict_win_probability(model, feature_names, signal)
+            # ML 예측 (패턴 로그에 저장된 값이 있으면 우선 사용)
+            # signal_info 안에 ml_prob가 있는지 확인
+            signal_info = signal.get('signal_info', {})
+            if signal_info.get('ml_prob') is not None:
+                win_prob = float(signal_info['ml_prob'])
+                print(f"   ✅ 로그의 ML 값 사용: {stock_code} {signal.get('signal_time', 'N/A')} (승률 {win_prob:.1%})")
+            elif 'ml_prob' in signal:  # 하위 호환성
+                win_prob = float(signal['ml_prob'])
+                print(f"   ✅ 로그의 ML 값 사용: {stock_code} {signal.get('signal_time', 'N/A')} (승률 {win_prob:.1%})")
+            else:
+                win_prob = predict_win_probability(model, feature_names, signal)
+                print(f"   🔄 새로 계산: {stock_code} {signal.get('signal_time', 'N/A')} (승률 {win_prob:.1%})")
 
             # 임계값 이상만 통과
             if win_prob >= threshold:

@@ -91,9 +91,15 @@ class TradingDecisionEngine:
         if self.use_ml_filter:
             self._initialize_ml_predictor()
 
-        # 🆕 패턴 데이터 로거 초기화 (환경 변수로 제어)
+        # 🆕 패턴 데이터 로거 초기화 (설정 파일 또는 환경 변수로 제어)
         import os
-        enable_pattern_logging = os.getenv('ENABLE_PATTERN_LOGGING', 'false').lower() == 'true'
+        # 우선순위: 1) 환경 변수, 2) 설정 파일
+        enable_from_env = os.getenv('ENABLE_PATTERN_LOGGING', '').lower()
+        if enable_from_env in ['true', 'false']:
+            enable_pattern_logging = enable_from_env == 'true'
+        else:
+            # 설정 파일에서 읽기
+            enable_pattern_logging = self.config.get('logging', {}).get('enable_pattern_logging', False)
 
         if enable_pattern_logging:
             try:
@@ -261,12 +267,16 @@ class TradingDecisionEngine:
                                     if 'signal_time' not in pattern_features:
                                         pattern_features['signal_time'] = now_kst().strftime('%Y-%m-%d %H:%M:%S')
 
+                                    # ML 예측값 추가 (시뮬과 비교용)
+                                    if 'ml_prob' not in pattern_features:
+                                        pattern_features['ml_prob'] = ml_prob
+
                                     pattern_logger.log_pattern_data(
                                         stock_code=stock_code,
                                         signal_type=pattern_features.get('signal_info', {}).get('signal_type', 'UNKNOWN'),
                                         confidence=pattern_features.get('signal_info', {}).get('confidence', 0.0),
                                         support_pattern_info=pattern_features,
-                                        data_3min=data_3min,
+                                        data_3min=combined_data,  # 수정: data_3min → combined_data
                                         data_1min=None
                                     )
                                 except Exception as log_err:

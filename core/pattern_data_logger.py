@@ -55,17 +55,22 @@ class PatternDataLogger:
         Returns:
             pattern_id: 패턴 고유 ID
         """
-        # 🆕 매수 시점 타임스탬프 (3분봉 완성 시점)
-        debug_info = support_pattern_info.get('debug_info', {})
-        breakout_info = debug_info.get('breakout', {})
-        breakout_idx = breakout_info.get('idx')
-
-        if breakout_idx is not None and breakout_idx < len(data_3min):
-            # 3분봉 시작 시간에 3분을 더해 완성 시점 계산
-            candle_start_time = data_3min.iloc[breakout_idx]['datetime']
-            signal_time = candle_start_time + pd.Timedelta(minutes=3)
+        # 🆕 매수 시점 타임스탬프 (실제 신호 발생 시점)
+        # support_pattern_info에 signal_time이 있으면 사용 (실시간에서 전달됨)
+        if 'signal_time' in support_pattern_info:
+            signal_time_str = support_pattern_info['signal_time']
+            try:
+                signal_time = pd.to_datetime(signal_time_str)
+            except:
+                signal_time = datetime.now()
         else:
-            signal_time = datetime.now()
+            # 시뮬레이션: 마지막 3분봉의 완성 시점 사용
+            if data_3min is not None and len(data_3min) > 0:
+                last_candle_time = data_3min.iloc[-1]['datetime']
+                # 3분봉 시작 시간에 3분을 더해 완성 시점 계산
+                signal_time = last_candle_time + pd.Timedelta(minutes=3)
+            else:
+                signal_time = datetime.now()
 
         # 패턴 고유 ID 생성 (매수 시점 기준)
         pattern_id = f"{stock_code}_{signal_time.strftime('%Y%m%d_%H%M%S')}"
@@ -103,6 +108,9 @@ class PatternDataLogger:
             breakout_info.get('idx')
         ) if breakout_info else None
 
+        # breakout_idx 추출 (기술적 지표 계산용)
+        breakout_idx = breakout_info.get('idx') if breakout_info else None
+
         # 🆕 매수 시점의 기술적 지표 계산 (3분봉 기준)
         technical_indicators_3min = {}
         if breakout_idx is not None:
@@ -135,7 +143,8 @@ class PatternDataLogger:
                 'signal_type': signal_type,
                 'confidence': float(confidence) if confidence is not None else 0.0,
                 'has_pattern': support_pattern_info.get('has_support_pattern', False),
-                'reasons': support_pattern_info.get('reasons', [])
+                'reasons': support_pattern_info.get('reasons', []),
+                'ml_prob': support_pattern_info.get('ml_prob', None)  # 🆕 ML 예측값 추가
             },
             # 🆕 매수 시점 스냅샷
             'signal_snapshot': {
