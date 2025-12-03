@@ -26,7 +26,7 @@ class TradingDecisionEngine:
     def __init__(self, db_manager=None, telegram_integration=None, trading_manager=None, api_manager=None, intraday_manager=None):
         """
         초기화
-        
+
         Args:
             db_manager: 데이터베이스 관리자
             telegram_integration: 텔레그램 연동
@@ -40,6 +40,17 @@ class TradingDecisionEngine:
         self.trading_manager = trading_manager
         self.api_manager = api_manager
         self.intraday_manager = intraday_manager
+
+        # 설정 파일 로드
+        import json
+        import os
+        config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config', 'trading_config.json')
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                self.config = json.load(f)
+        except Exception as e:
+            self.logger.warning(f"⚠️ 설정 파일 로드 실패: {e}")
+            self.config = {}
         
         # 가상 매매 설정
         self.is_virtual_mode = False  # 🆕 가상매매 모드 여부 (False: 실제매매, True: 가상매매)
