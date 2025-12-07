@@ -138,6 +138,23 @@ print(f"[시뮬레이션 설정] 익절 +{PROFIT_TAKE_RATE}% / 손절 -{STOP_LOS
 print("=" * 60)
 
 
+def load_stock_names() -> Dict[str, str]:
+    """DB에서 종목 코드-종목명 매핑 로드"""
+    try:
+        conn = sqlite3.connect('data/robotrader.db')
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT DISTINCT stock_code, stock_name FROM candidate_stocks WHERE stock_name IS NOT NULL")
+        stock_map = {code: name for code, name in cursor.fetchall()}
+
+        conn.close()
+        print(f"✅ 종목명 로드 완료: {len(stock_map)}개")
+        return stock_map
+    except Exception as e:
+        print(f"⚠️  종목명 로드 실패: {e}")
+        return {}
+
+
 def calculate_max_concurrent_holdings(all_trades: Dict[str, List[Dict[str, object]]]) -> int:
     """최대 동시 보유 종목 수를 계산
 
@@ -420,7 +437,11 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
             signal_datetime = signal['datetime']  # 라벨 시간 (09:42)
             signal_completion_time = signal['signal_time']  # 실제 신호 발생 시간 (09:45:00)
             signal_index = signal['index']
-            
+
+            # 🔍 디버그: 308080 종목 신호 처리 추적
+            if stock_code == "308080" and logger:
+                logger.info(f"🔍 [308080] 신호 처리 시작: {signal_completion_time.strftime('%H:%M')} (라벨: {signal_datetime.strftime('%H:%M')})")
+
             # ==================== selection_date 필터링 ====================
             if selection_date:
                 try:
@@ -436,6 +457,8 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                     if signal_completion_time < selection_dt:
                         if logger:
                             logger.debug(f"⚠️ [{signal_completion_time.strftime('%H:%M')}] selection_date({selection_dt.strftime('%H:%M')}) 이전 신호로 건너뜀")
+                        if stock_code == "308080" and logger:
+                            logger.info(f"🚫 [308080] 차단: selection_date 이전 신호")
                         continue  # selection_date 이전 신호는 무시
                 except Exception as e:
                     if logger:
@@ -449,6 +472,8 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
             if last_signal_candle_time and last_signal_candle_time == normalized_signal_time:
                 if logger:
                     logger.debug(f"⚠️ [{signal_completion_time.strftime('%H:%M')}] 동일 캔들 중복신호 차단 ({normalized_signal_time.strftime('%H:%M')})")
+                if stock_code == "308080" and logger:
+                    logger.info(f"🚫 [308080] 차단: 동일 캔들 중복신호 (last={last_signal_candle_time.strftime('%H:%M') if last_signal_candle_time else 'None'})")
                 continue  # 동일한 캔들에서 발생한 신호는 무시
             
             # ==================== 🆕 25분 매수 쿨다운 체크 ====================
@@ -457,6 +482,8 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                     remaining_minutes = (stock_cooldown_end[stock_code] - signal_completion_time).total_seconds() / 60
                     if logger:
                         logger.info(f"⚠️ [{signal_completion_time.strftime('%H:%M')}] 매수 쿨다운 활성화 (남은 시간: {remaining_minutes:.0f}분)")
+                    if stock_code == "308080" and logger:
+                        logger.info(f"🚫 [308080] 차단: 쿨다운 (종료시간: {stock_cooldown_end[stock_code].strftime('%H:%M')}, 남은시간: {remaining_minutes:.0f}분)")
                     continue
 
             # ==================== 실시간과 동일: 포지션 보유 중이면 매수 금지 ====================
@@ -465,6 +492,8 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                 if signal_completion_time < current_position['sell_time']:
                     if logger:
                         logger.debug(f"⚠️ [{signal_completion_time.strftime('%H:%M')}] 포지션 보유 중(매도예정: {current_position['sell_time'].strftime('%H:%M')})으로 매수 건너뜀")
+                    if stock_code == "308080" and logger:
+                        logger.info(f"🚫 [308080] 차단: 포지션 보유 중 (매도예정: {current_position['sell_time'].strftime('%H:%M')})")
                     continue  # 포지션 보유 중이므로 매수 불가
                 else:
                     # 매도 완료 후 새로운 매수 가능 (쿨다운 제거)
@@ -493,6 +522,8 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
             if signal_hour >= buy_cutoff_hour:
                 if logger:
                     logger.debug(f"[{signal_completion_time.strftime('%H:%M')}] {buy_cutoff_hour}시 이후 매수금지")
+                if stock_code == "308080" and logger:
+                    logger.info(f"🚫 [308080] 차단: 매수 중단 시간 이후 ({buy_cutoff_hour}시)")
                 continue  # 매수 중단 시간 이후 매수 신호 건너뜀
             
             # ==================== 실시간과 완전 동일한 매수 로직 ====================
@@ -508,6 +539,8 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
             if three_fifths_price <= 0:
                 if logger:
                     logger.warning(f"⚠️ [{stock_code}] 3/5가 정보 없음, 거래 건너뜀")
+                if stock_code == "308080" and logger:
+                    logger.info(f"🚫 [308080] 차단: 3/5가 정보 없음")
                 continue
             
             # ==================== 🆕 일봉 기반 패턴 필터 적용 (시뮬레이션) ====================
@@ -523,6 +556,8 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                     if not filter_result.passed:
                         if logger:
                             logger.debug(f"🚫 [{signal_completion_time.strftime('%H:%M')}] {stock_code} 일봉 필터 차단: {filter_result.reason}")
+                        if stock_code == "308080" and logger:
+                            logger.info(f"🚫 [308080] 차단: 일봉 필터 ({filter_result.reason})")
                         continue  # 일봉 필터에 걸리면 거래 건너뜀
                     else:
                         if logger:
@@ -607,6 +642,8 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
             if check_candles.empty:
                 if logger:
                     logger.debug(f"⚠️ [{stock_code}] 체결 검증용 1분봉 데이터 없음, 거래 건너뜀")
+                if stock_code == "308080" and logger:
+                    logger.info(f"🚫 [308080] 차단: 체결 검증용 1분봉 데이터 없음")
                 continue
             
             # 5분 내에 3/5가 이하로 떨어지는 시점 찾기 (체결 가능성만 확인)
@@ -623,7 +660,9 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                 # 5분 내에 3/5가 이하로 떨어지지 않음 → 매수 미체결
                 if logger:
                     logger.debug(f"💸 [{stock_code}] 매수 미체결: 5분 내 3/5가({three_fifths_price:,.0f}원) 도달 실패")
-                
+                if stock_code == "308080" and logger:
+                    logger.info(f"❌ [308080] 미체결: 5분 내 3/5가({three_fifths_price:,.0f}원) 도달 실패")
+
                 # 미체결 신호도 기록에 추가
                 trades.append({
                     'buy_time': signal_completion_time.strftime('%H:%M'),
@@ -647,7 +686,9 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
             buy_price = buy_executed_price
             if logger:
                 logger.debug(f"💰 [{stock_code}] 매수 체결: {buy_price:,.0f}원 @ {buy_time.strftime('%H:%M:%S')} (실제 체결: {actual_execution_time.strftime('%H:%M:%S')})")
-            
+            if stock_code == "308080" and logger:
+                logger.info(f"✅ [308080] 매수 체결 성공: {buy_price:,.0f}원 @ {buy_time.strftime('%H:%M:%S')}")
+
             # 🆕 쿨다운 설정 (매수 성공 시)
             cooldown_end_time = actual_execution_time + timedelta(minutes=buy_cooldown_minutes)
             stock_cooldown_end[stock_code] = cooldown_end_time
@@ -1089,10 +1130,13 @@ def main():
     logger.info(f"대상 날짜: {date_str}")
     logger.info(f"처리할 종목 수: {len(codes_union)}개")
     logger.info(f"손익 설정: 익절 +{PROFIT_TAKE_RATE}% / 손절 -{STOP_LOSS_RATE}%")
-    
+
     if times_map:
         specified_count = sum(1 for times_list in times_map.values() if times_list)
         logger.info(f"특정 시각 지정된 종목: {specified_count}개")
+
+    # 종목명 매핑 로드
+    stock_names = load_stock_names()
 
     # API 매니저 초기화
     try:
@@ -1512,7 +1556,9 @@ def main():
 
                         # 개별 거래 상세 표시
                         for detail in sorted(morning_trades_details, key=lambda x: x['buy_time']):
-                            lines.append(f"   {detail['status_icon']} {detail['stock_code']} {detail['buy_time']} 매수 → {detail['profit_rate']:+.2f}%")
+                            stock_code = detail['stock_code']
+                            stock_name = stock_names.get(stock_code, '???')
+                            lines.append(f"   {detail['status_icon']} {stock_code}({stock_name}) {detail['buy_time']} 매수 → {detail['profit_rate']:+.2f}%")
 
                     lines.append("")
                     
