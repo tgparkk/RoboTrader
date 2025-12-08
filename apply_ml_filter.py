@@ -167,7 +167,19 @@ def find_matching_pattern(patterns: Dict[str, Dict], signal: Dict) -> Optional[D
 
     # 1순위: 시간 차이가 가장 작은 것 (오름차순)
     # 2순위: 동일 시간 차이면 가장 최근 로그 (내림차순)
-    matched_patterns.sort(key=lambda x: (x['time_diff'], -ord(x['log_timestamp'][0])))
+    # 타임스탬프를 datetime으로 변환하여 정확한 시간 비교
+    def sort_key(x):
+        time_diff = x['time_diff']
+        try:
+            # log_timestamp를 datetime으로 변환하여 비교
+            log_dt = datetime.strptime(x['log_timestamp'], '%Y-%m-%d %H:%M:%S')
+            # 내림차순 정렬을 위해 음수 타임스탬프 사용
+            return (time_diff, -log_dt.timestamp())
+        except:
+            # 파싱 실패 시 문자열 비교로 대체 (내림차순)
+            return (time_diff, -ord(x['log_timestamp'][0]) if x['log_timestamp'] else 0)
+    
+    matched_patterns.sort(key=sort_key)
 
     return matched_patterns[0]['pattern_data']
 
