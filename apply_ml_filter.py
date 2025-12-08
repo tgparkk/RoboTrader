@@ -59,9 +59,10 @@ def parse_signal_from_log_line(line: str) -> Dict:
 
     예시 라인:
     "   🟢 174900 09:21 매수 → +3.50%"
+    "   🟢 174900(종목명) 09:21 매수 → +3.50%"
     """
-    # 신호 패턴 매칭
-    pattern = r'[🔴🟢]\s+(\d{6})\s+(\d{2}):(\d{2})\s+매수\s+→\s+([-+]\d+\.\d+)%'
+    # 신호 패턴 매칭 (종목명 있을 수도, 없을 수도)
+    pattern = r'[🔴🟢]\s+(\d{6})(?:\([^)]+\))?\s+(\d{2}):(\d{2})\s+매수\s+→\s+([-+]\d+\.\d+)%'
     match = re.search(pattern, line)
 
     if not match:
@@ -118,35 +119,57 @@ def load_pattern_data_for_date(date_str: str) -> Dict[str, Dict]:
 
 def find_matching_pattern(patterns: Dict[str, Dict], signal: Dict) -> Optional[Dict]:
     """
-    신호와 매칭되는 패턴 찾기 (±3분 범위)
+    신호와 매칭되는 패턴 찾기 (±5분 범위에서 가장 가까운 시간 선택)
+
+    시뮬레이션 로그의 매수 시간 ±5분 범위 내에서 패턴을 찾고,
+    그 중 시간 차이가 가장 작은 패턴을 선택합니다.
     """
     stock_code = signal['stock_code']
     hour = signal['hour']
     minute = signal['minute']
-    signal_minutes = hour * 60 + minute
 
-    # ±3분 범위에서 검색
-    for offset in range(-3, 4):
-        check_minutes = signal_minutes + offset
-        check_hour = check_minutes // 60
-        check_minute = check_minutes % 60
+    # 대상 시간 (분 단위로 변환)
+    target_minutes = hour * 60 + minute
 
-        # pattern_id 형식: {stock_code}_{YYYYMMDD}_{HHMMSS}
-        # 초는 00~59 사이 모두 가능하므로 부분 매칭
-        for pattern_id, pattern_data in patterns.items():
-            parts = pattern_id.split('_')
-            if len(parts) >= 3:
-                p_code = parts[0]
-                p_time_str = parts[2]  # HHMMSS
+    matched_patterns = []
 
-                if p_code == stock_code:
-                    p_hour = int(p_time_str[:2])
-                    p_minute = int(p_time_str[2:4])
+    for pattern_id, pattern_data in patterns.items():
+        parts = pattern_id.split('_')
+        if len(parts) >= 3:
+            p_code = parts[0]
 
-                    if p_hour == check_hour and p_minute == check_minute:
-                        return pattern_data
+            if p_code == stock_code:
+                # signal_time으로 매칭
+                signal_time_str = pattern_data.get('signal_time', '')
+                if signal_time_str:
+                    try:
+                        # "2025-12-08 10:12:00" -> datetime
+                        st = datetime.strptime(signal_time_str, '%Y-%m-%d %H:%M:%S')
+                        pattern_minutes = st.hour * 60 + st.minute
 
-    return None
+                        # 시간 차이 계산 (절대값)
+                        time_diff = abs(pattern_minutes - target_minutes)
+
+                        # ±5분 범위 내에 있으면 후보에 추가
+                        if time_diff <= 5:
+                            log_timestamp = pattern_data.get('log_timestamp', signal_time_str)
+                            matched_patterns.append({
+                                'pattern_data': pattern_data,
+                                'log_timestamp': log_timestamp,
+                                'pattern_id': pattern_id,
+                                'time_diff': time_diff
+                            })
+                    except:
+                        pass
+
+    if not matched_patterns:
+        return None
+
+    # 1순위: 시간 차이가 가장 작은 것 (오름차순)
+    # 2순위: 동일 시간 차이면 가장 최근 로그 (내림차순)
+    matched_patterns.sort(key=lambda x: (x['time_diff'], -ord(x['log_timestamp'][0])))
+
+    return matched_patterns[0]['pattern_data']
 
 
 def safe_float(value, default=0.0):
