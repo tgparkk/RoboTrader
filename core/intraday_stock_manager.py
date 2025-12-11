@@ -1348,6 +1348,17 @@ class IntradayStockManager:
                                 if '분봉 누락' in issue:
                                     self.logger.warning(f"⚠️ {stock_code} 분봉 누락 감지, 전체 재수집 시도: {issue}")
                                     try:
+                                        # 🔥 핵심: selected_time을 현재 시간으로 업데이트하여 재수집 시 현재까지 데이터 수집
+                                        with self._lock:
+                                            if stock_code in self.selected_stocks:
+                                                current_time = now_kst()
+                                                old_time = self.selected_stocks[stock_code].selected_time
+                                                self.selected_stocks[stock_code].selected_time = current_time
+                                                self.logger.info(
+                                                    f"⏰ {stock_code} selected_time 업데이트: "
+                                                    f"{old_time.strftime('%H:%M:%S')} → {current_time.strftime('%H:%M:%S')}"
+                                                )
+
                                         # 비동기 재수집 스케줄링 (현재 루프 블로킹 방지)
                                         asyncio.create_task(self._collect_historical_data(stock_code))
                                     except Exception as retry_err:
