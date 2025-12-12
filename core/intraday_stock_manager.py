@@ -526,6 +526,21 @@ class IntradayStockManager:
 
             # 2. 08-09시부터 데이터가 충분한지 체크
             if not self._check_sufficient_base_data(combined_data, stock_code):
+                # 🔥 재수집 전에 selected_time을 현재 시간으로 업데이트 (5분 경과 후)
+                with self._lock:
+                    if stock_code in self.selected_stocks:
+                        current_time = now_kst()
+                        old_time = self.selected_stocks[stock_code].selected_time
+
+                        # 선정 후 5분 이상 경과했는데 데이터 부족이면 selected_time 업데이트
+                        elapsed_minutes = (current_time - old_time).total_seconds() / 60
+                        if elapsed_minutes >= 5:
+                            self.selected_stocks[stock_code].selected_time = current_time
+                            self.logger.info(
+                                f"⏰ {stock_code} 데이터 부족 지속 (선정 후 {elapsed_minutes:.0f}분), "
+                                f"selected_time 업데이트: {old_time.strftime('%H:%M:%S')} → {current_time.strftime('%H:%M:%S')}"
+                            )
+
                 # 기본 데이터가 부족하면 전체 재수집
                 self.logger.warning(f"⚠️ {stock_code} 기본 데이터 부족, 전체 재수집 시도")
                 return await self._collect_historical_data(stock_code)
