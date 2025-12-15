@@ -31,7 +31,8 @@
       "Bash(findstr:*)",
       "Bash(cp:*)",
       "Bash(tee:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(cat:*)"
     ],
     "deny": [],
     "ask": []

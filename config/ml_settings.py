@@ -1,24 +1,23 @@
 """
 ML 시스템 설정
+
+현재 사용 중인 ML 모델: ml_model.pkl (26개 패턴 특성)
+- 학습 데이터: 11월 패턴 데이터
+- 성능: 승률 52.1%, 거래당 평균 +7,238원
+- 다음 재학습 예정: 2025년 1월 초 (12월 데이터 포함)
 """
 
 class MLSettings:
     """ML 관련 설정"""
-    
-    # 🎯 실시간 ML 필터 사용 여부
-    USE_ML_FILTER = False  # 기존 ML 끄기 (성능 문제)
-    
-    # 🚀 하드코딩된 경량 ML 사용 여부 
-    USE_HARDCODED_ML = True  # 경량화된 빠른 ML 사용
-    
-    # ML 필터링 임계값
-    STRONG_BUY_THRESHOLD = 0.80  # 80% 이상 승률
-    BUY_THRESHOLD = 0.65         # 65% 이상 승률  
-    WEAK_BUY_THRESHOLD = 0.55    # 55% 이상 승률
-    
-    # ML 모델 관련
-    MODEL_DIR = "trade_analysis/ml_models"
-    REQUIRED_DAYS = 60  # 일봉 데이터 필요 일수
-    
+
+    # ML 필터 사용 여부
+    USE_ML_FILTER = True  # ML 필터 활성화
+
+    # ML 모델 파일
+    MODEL_PATH = "ml_model.pkl"  # 현재 사용 중인 모델
+
+    # ML 필터링 임계값 (승률 예측값 기준)
+    ML_THRESHOLD = 0.5  # 50% 이상 승률 예측 시 매수 허용
+
     # 에러 발생 시 동작
     ON_ML_ERROR_PASS_SIGNAL = True  # True: 신호 통과, False: 신호 차단
