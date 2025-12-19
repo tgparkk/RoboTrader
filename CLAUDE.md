@@ -26,3 +26,38 @@
 
 통상적으로 기준 거래량의 1/4 수준으로 거래돼야 상대적으로 매물부담이 덜함.
 
+---
+
+# RoboTrader 시스템 분석 방법
+
+## 실시간 거래 분석
+- **로그 파일**: `logs/trading_YYYYMMDD.log`
+- **종목 선정 시점**: `grep "종목코드" logs/trading_YYYYMMDD.log | grep "선정 완료"`
+- **매수 신호**: `grep "종목코드" logs/trading_YYYYMMDD.log | grep "매수 신호 발생"`
+- **ML 필터 결과**: `grep "종목코드" logs/trading_YYYYMMDD.log | grep "ML 필터"`
+- **패턴 상세 정보**: `pattern_data_log/pattern_data_YYYYMMDD.jsonl`
+
+## 시뮬레이션 분석
+- **순수 패턴 신호**: `signal_replay_log/signal_new2_replay_YYYYMMDD_9_00_0.txt`
+- **ML 필터 적용**: `signal_replay_log_ml/signal_ml_replay_YYYYMMDD_9_00_0.txt`
+- **데이터 소스**: `cache/minute_data/종목코드_YYYYMMDD.pkl` (확정된 캐시 데이터)
+- **주의**: selection_date 필터링 적용됨 (선정 시점 이전 신호는 차단)
+
+## 실시간 vs 시뮬 차이 분석 3단계
+1. **신호 시점 비교**: 실시간과 시뮬에서 같은 시간에 신호가 발생했는가?
+2. **selection_date 확인**: 시뮬에서 필터링되었는가? (completion_time < selection_date 체크)
+3. **데이터 일치 확인**: 캐시 데이터 vs 실시간 패턴 로그 데이터 비교
+
+## 핵심 개념
+- **3분봉 completion_time**: 라벨 시간 + 3분 (예: 10:42 캔들 → 10:45:00 완성)
+- **ML 임계값**: 50% (config/ml_settings.py의 ML_THRESHOLD)
+- **selection_date 필터링**: 시뮬레이션에서만 적용 (실시간은 없음)
+- **데이터 차이**: 실시간은 지속 업데이트, 캐시는 확정값 → 같은 시간대 캔들도 값이 다를 수 있음
+
+## 주요 차이 원인
+1. **selection_date 필터링**: 시뮬에서 선정 시점 이전 신호 차단
+2. **데이터 불일치**: 실시간 업데이트 데이터 vs 확정 캐시 데이터
+3. **ML 확률 차이**: 패턴 구조가 미묘하게 다를 경우
+
+상세 가이드: `ROBOTRADER_ANALYSIS_GUIDE.md` 참조
+
