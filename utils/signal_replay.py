@@ -134,7 +134,13 @@ _trading_config = load_trading_config()
 PROFIT_TAKE_RATE = _trading_config.risk_management.take_profit_ratio * 100  # 0.035 -> 3.5%
 STOP_LOSS_RATE = _trading_config.risk_management.stop_loss_ratio * 100      # 0.025 -> 2.5%
 
-print(f"[시뮬레이션 설정] 익절 +{PROFIT_TAKE_RATE}% / 손절 -{STOP_LOSS_RATE}%")
+# 🔧 동적 손익비 플래그 확인
+USE_DYNAMIC_PROFIT_LOSS = hasattr(_trading_config.risk_management, 'use_dynamic_profit_loss') and _trading_config.risk_management.use_dynamic_profit_loss
+
+if USE_DYNAMIC_PROFIT_LOSS:
+    print(f"[시뮬레이션 설정] 🔧 동적 손익비 활성화 (패턴별 최적화)")
+else:
+    print(f"[시뮬레이션 설정] 익절 +{PROFIT_TAKE_RATE}% / 손절 -{STOP_LOSS_RATE}% (고정)")
 print("=" * 60)
 
 
@@ -357,6 +363,11 @@ def list_all_buy_signals(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] 
                 # 3분봉 완성 시점 (실제 신호 발생 시점)
                 signal_completion_time = datetime_val + pd.Timedelta(minutes=3) if datetime_val else datetime_val
                 
+                # 🔧 동적 손익비용 debug_info 추출
+                debug_info = None
+                if hasattr(signal_strength, 'pattern_data') and signal_strength.pattern_data:
+                    debug_info = signal_strength.pattern_data.get('debug_info')
+
                 signal_info = {
                     'index': i,
                     'datetime': datetime_val,  # 원본 라벨 시간 (내부 처리용)
@@ -371,7 +382,8 @@ def list_all_buy_signals(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] 
                     'entry_low': signal_strength.entry_low,  # 실시간과 동일한 진입저가
                     'low': low_val,
                     'reasons': ' | '.join(signal_strength.reasons),  # 신호 사유
-                    'pattern_id': getattr(signal_strength, '_pattern_id', None)  # 📊 패턴 ID 저장
+                    'pattern_id': getattr(signal_strength, '_pattern_id', None),  # 📊 패턴 ID 저장
+                    'debug_info': debug_info
                 }
                 buy_signals.append(signal_info)
         
@@ -528,9 +540,40 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
             
             # ==================== 실시간과 완전 동일한 매수 로직 ====================
             
-            # 상단에서 설정된 손절/익절 비율 사용
-            target_profit_rate = PROFIT_TAKE_RATE / 100.0  # % -> 소수점 변환
-            stop_loss_rate = STOP_LOSS_RATE / 100.0        # % -> 소수점 변환
+            # 🔧 동적 손익비 체크 (플래그가 true이고 패턴 정보가 있으면 동적 손익비 사용)
+            if hasattr(_trading_config.risk_management, 'use_dynamic_profit_loss') and _trading_config.risk_management.use_dynamic_profit_loss:
+                # debug_info에서 패턴 추출 시도
+                from config.dynamic_profit_loss_config import DynamicProfitLossConfig
+
+                debug_info = signal.get('debug_info')
+                if debug_info:
+                    # debug_info에서 패턴 분류 추출
+                    support_volume, decline_volume = DynamicProfitLossConfig.extract_pattern_from_debug_info(debug_info)
+
+                    if support_volume and decline_volume:
+                        # 패턴 기반 동적 손익비 적용
+                        ratio = DynamicProfitLossConfig.get_ratio_by_pattern(support_volume, decline_volume)
+                        target_profit_rate = ratio['take_profit'] / 100.0
+                        stop_loss_rate = abs(ratio['stop_loss']) / 100.0
+
+                        if logger:
+                            logger.info(f"🔧 [{stock_code}] 동적 손익비: {support_volume}+{decline_volume}, "
+                                       f"손절 {ratio['stop_loss']:.1f}% / 익절 {ratio['take_profit']:.1f}%")
+                        else:
+                            print(f"🔧 [{stock_code}] 동적 손익비: {support_volume}+{decline_volume}, "
+                                f"손절 {ratio['stop_loss']:.1f}% / 익절 {ratio['take_profit']:.1f}%")
+                    else:
+                        # 패턴 정보 없으면 기본값
+                        target_profit_rate = PROFIT_TAKE_RATE / 100.0
+                        stop_loss_rate = STOP_LOSS_RATE / 100.0
+                else:
+                    # debug_info 없으면 기본값
+                    target_profit_rate = PROFIT_TAKE_RATE / 100.0
+                    stop_loss_rate = STOP_LOSS_RATE / 100.0
+            else:
+                # 플래그가 false이거나 없으면 기본값 사용
+                target_profit_rate = PROFIT_TAKE_RATE / 100.0  # % -> 소수점 변환
+                stop_loss_rate = STOP_LOSS_RATE / 100.0        # % -> 소수점 변환
             
             # 실시간과 동일한 3/5가 및 진입저가 사용
             three_fifths_price = float(str(signal.get('buy_price', 0)).replace(',', ''))  # 이미 계산된 3/5가 사용 (float 변환, 천단위구분자 제거)

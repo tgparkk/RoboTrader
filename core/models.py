@@ -284,6 +284,7 @@ class RiskManagementConfig:
     stop_loss_ratio: float = 0.025
     take_profit_ratio: float = 0.035
     max_daily_loss: float = 0.1
+    use_dynamic_profit_loss: bool = False  # 동적 손익비 활성화 플래그
 
 
 @dataclass
@@ -331,7 +332,8 @@ class TradingConfig:
                 max_position_ratio=json_data.get('risk_management', {}).get('max_position_ratio', 0.3),
                 stop_loss_ratio=json_data.get('risk_management', {}).get('stop_loss_ratio', 0.03),
                 take_profit_ratio=json_data.get('risk_management', {}).get('take_profit_ratio', 0.05),
-                max_daily_loss=json_data.get('risk_management', {}).get('max_daily_loss', 0.1)
+                max_daily_loss=json_data.get('risk_management', {}).get('max_daily_loss', 0.1),
+                use_dynamic_profit_loss=json_data.get('risk_management', {}).get('use_dynamic_profit_loss', False)
             ),
             strategy=StrategyConfig(
                 name=json_data.get('strategy', {}).get('name', 'simple_momentum'),

@@ -51,10 +51,10 @@ def generate_date_range(start_date, end_date):
     return dates
 
 
-def run_signal_replay(date, time_range="9:00-16:00"):
+def run_signal_replay(date, time_range="9:00-16:00", output_dir="signal_replay_log"):
     """지정된 날짜에 대해 signal_replay 실행"""
-    # signal_replay_log 폴더 생성
-    log_dir = "signal_replay_log"
+    # 출력 폴더 생성
+    log_dir = output_dir
     os.makedirs(log_dir, exist_ok=True)
 
     # 시간 범위를 파일명 형식으로 변환 (9:00-16:00 -> 9_9_0)
@@ -334,6 +334,9 @@ def main():
 
   # 시간 범위 지정
   python batch_signal_replay.py -s 20250826 -e 20250828 -t 9:00-15:30
+
+  # 출력 디렉토리 지정
+  python batch_signal_replay.py -s 20251223 -e 20251223 -o custom_output_dir
         """
     )
     
@@ -375,6 +378,13 @@ def main():
         '--serial',
         action='store_true',
         help='순차 실행 (병렬 처리 비활성화)'
+    )
+
+    parser.add_argument(
+        '--output-dir', '-o',
+        type=str,
+        default='signal_replay_log',
+        help='출력 디렉토리 경로 (기본값: signal_replay_log)'
     )
 
     args = parser.parse_args()
@@ -426,7 +436,7 @@ def main():
             print(f"\n[{i}/{len(dates)}] {date} 처리 중...")
 
             try:
-                success, _ = run_signal_replay(date, args.time_range)
+                success, _ = run_signal_replay(date, args.time_range, args.output_dir)
                 if success:
                     success_count += 1
                 else:
@@ -445,7 +455,7 @@ def main():
             with ProcessPoolExecutor(max_workers=max_workers) as executor:
                 # 모든 작업 제출
                 future_to_date = {
-                    executor.submit(run_signal_replay, date, args.time_range): date
+                    executor.submit(run_signal_replay, date, args.time_range, args.output_dir): date
                     for date in dates
                 }
 
@@ -494,7 +504,7 @@ def main():
 
     # 통계 분석 및 로그 생성
     print("\n통계 분석 시작...")
-    log_dir = "signal_replay_log"
+    log_dir = args.output_dir
     all_trades = []
 
     # 시간 범위를 파일명 형식으로 변환

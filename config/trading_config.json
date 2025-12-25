@@ -17,7 +17,8 @@
     "max_position_ratio": 0.3,
     "stop_loss_ratio": 0.025,
     "take_profit_ratio": 0.035,
-    "max_daily_loss": 0.1
+    "max_daily_loss": 0.1,
+    "use_dynamic_profit_loss": false
   },
   "strategy": {
     "name": "simple_momentum",

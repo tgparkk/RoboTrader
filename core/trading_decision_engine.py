@@ -755,12 +755,45 @@ class TradingDecisionEngine:
             
             # 수익률 계산 (HTS 방식과 동일: 백분율로 계산)
             profit_rate_percent = (current_price - buy_price) / buy_price * 100
-            
+
             # 🆕 trading_config.json에서 손익비 설정 가져오기
             from config.settings import load_trading_config
             config = load_trading_config()
-            take_profit_percent = config.risk_management.take_profit_ratio * 100  # 0.035 -> 3.5%
-            stop_loss_percent = config.risk_management.stop_loss_ratio * 100      # 0.025 -> 2.5%
+
+            # 🔧 동적 손익비 체크 (플래그가 true이고 패턴 정보가 있으면 동적 손익비 사용)
+            if hasattr(config.risk_management, 'use_dynamic_profit_loss') and config.risk_management.use_dynamic_profit_loss:
+                # debug_info에서 패턴 추출 시도
+                from config.dynamic_profit_loss_config import DynamicProfitLossConfig
+
+                # pattern_data 또는 debug_info 추출 시도 (여러 경로 시도)
+                debug_info = None
+                if hasattr(trading_stock, 'pattern_data') and trading_stock.pattern_data:
+                    debug_info = trading_stock.pattern_data.get('debug_info')
+
+                if debug_info:
+                    # debug_info에서 패턴 분류 추출
+                    support_volume, decline_volume = DynamicProfitLossConfig.extract_pattern_from_debug_info(debug_info)
+
+                    if support_volume and decline_volume:
+                        # 패턴 기반 동적 손익비 적용
+                        ratio = DynamicProfitLossConfig.get_ratio_by_pattern(support_volume, decline_volume)
+                        take_profit_percent = ratio['take_profit']
+                        stop_loss_percent = abs(ratio['stop_loss'])
+
+                        self.logger.debug(f"🔧 [동적 손익비] 패턴: {support_volume}+{decline_volume}, "
+                                        f"손절 {stop_loss_percent:.1f}% / 익절 {take_profit_percent:.1f}%")
+                    else:
+                        # 패턴 정보 없으면 기본값
+                        take_profit_percent = config.risk_management.take_profit_ratio * 100
+                        stop_loss_percent = config.risk_management.stop_loss_ratio * 100
+                else:
+                    # debug_info 없으면 기본값
+                    take_profit_percent = config.risk_management.take_profit_ratio * 100
+                    stop_loss_percent = config.risk_management.stop_loss_ratio * 100
+            else:
+                # 플래그가 false이거나 없으면 기본값 사용
+                take_profit_percent = config.risk_management.take_profit_ratio * 100  # 0.035 -> 3.5%
+                stop_loss_percent = config.risk_management.stop_loss_ratio * 100      # 0.025 -> 2.5%
             
             # 익절 조건: config에서 설정한 % 이상
             if profit_rate_percent >= take_profit_percent:
@@ -1026,7 +1059,7 @@ class TradingDecisionEngine:
                 self.logger.info(f"  - 진입 저가: {entry_low:,.0f}원")
                 self.logger.info(f"  - 목표수익률: {signal_strength.target_profit:.1f}%")
 
-                # 📊 4단계 패턴 구간 데이터 로깅
+                # 📊 4단계 패턴 구간 데이터 로깅 및 동적 손익비용 데이터 저장
                 if self.pattern_logger and hasattr(signal_strength, 'pattern_data') and signal_strength.pattern_data:
                     try:
                         pattern_id = self.pattern_logger.log_pattern_data(
@@ -1039,6 +1072,11 @@ class TradingDecisionEngine:
                         # pattern_id를 나중에 매매 결과 업데이트에 사용
                         trading_stock.last_pattern_id = pattern_id
                         self.logger.debug(f"📝 패턴 데이터 로깅 완료: {pattern_id}")
+
+                        # 🔧 동적 손익비를 위한 패턴 데이터 저장 (기존 코드 흐름 방해 안 함)
+                        if not hasattr(trading_stock, 'pattern_data'):
+                            trading_stock.pattern_data = signal_strength.pattern_data
+                            self.logger.debug(f"🔧 패턴 데이터 저장 완료 (동적 손익비용)")
                     except Exception as log_err:
                         self.logger.warning(f"⚠️ 패턴 데이터 로깅 실패: {log_err}")
 
