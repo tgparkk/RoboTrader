@@ -35,7 +35,14 @@
       "Bash(cat:*)",
       "Bash(rm:*)",
       "Bash(mkdir:*)",
-      "Bash(mv analyze_simul_pattern.py analyze_win_loss_pattern.py apply_ml_filter.py auto_verify_consistency.py batch_apply_ml_filter.py batch_signal_replay.py batch_signal_replay_ml.py check_cache_file.py check_daily_data.py check_trade_results.py collect_minute_data.py collect_specific_times.py compare_before_after.py compare_filter_vs_analysis.py compare_memory_vs_cache.py compare_realtime_vs_simulation_data.py compare_signal_replay_logs.py compare_win_loss_signals.py daily_filter_updater.py deep_dive_losses.py diagnose_filter_activation.py enhanced_daily_analyzer.py extract_pattern_features.py final_analysis_report.py final_verification.py find_optimal_close_position_threshold.py full_comparison.py generate_statistics.py improve_pattern_combination_filter.py improve_pattern_combination_filter_v2.py integrate_realtime_logging.py merge_trade_results.py ml_prepare_dataset.py monthly_and_trade_analysis.py morning_trade_analysis.py optimize_strategy.py parse_memory_data.py performance_insights.py quick_compare.py quick_db_check.py realtime_signal_logger.py repair_jsonl_files.py run_backtest_simple.py save_candidate_data.py show_trade_details.py signal_analysis_report.py signal_log_analyzer.py simple_pattern_test.py update_filter_combinations.py update_pattern_filter_from_replay.py upgrade_pattern_logs.py validate_pattern_logs.py win_loss_analysis.py scripts/)"
+      "Bash(mv analyze_simul_pattern.py analyze_win_loss_pattern.py apply_ml_filter.py auto_verify_consistency.py batch_apply_ml_filter.py batch_signal_replay.py batch_signal_replay_ml.py check_cache_file.py check_daily_data.py check_trade_results.py collect_minute_data.py collect_specific_times.py compare_before_after.py compare_filter_vs_analysis.py compare_memory_vs_cache.py compare_realtime_vs_simulation_data.py compare_signal_replay_logs.py compare_win_loss_signals.py daily_filter_updater.py deep_dive_losses.py diagnose_filter_activation.py enhanced_daily_analyzer.py extract_pattern_features.py final_analysis_report.py final_verification.py find_optimal_close_position_threshold.py full_comparison.py generate_statistics.py improve_pattern_combination_filter.py improve_pattern_combination_filter_v2.py integrate_realtime_logging.py merge_trade_results.py ml_prepare_dataset.py monthly_and_trade_analysis.py morning_trade_analysis.py optimize_strategy.py parse_memory_data.py performance_insights.py quick_compare.py quick_db_check.py realtime_signal_logger.py repair_jsonl_files.py run_backtest_simple.py save_candidate_data.py show_trade_details.py signal_analysis_report.py signal_log_analyzer.py simple_pattern_test.py update_filter_combinations.py update_pattern_filter_from_replay.py upgrade_pattern_logs.py validate_pattern_logs.py win_loss_analysis.py scripts/)",
+      "Bash(mv:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git checkout:*)",
+      "Bash(find:*)",
+      "Bash(timeout 180 python:*)"
     ],
     "deny": [],
     "ask": []
