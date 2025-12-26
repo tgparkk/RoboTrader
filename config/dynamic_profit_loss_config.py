@@ -11,6 +11,7 @@
 import pandas as pd
 import os
 import json
+import threading
 from datetime import datetime
 
 class DynamicProfitLossConfig:
@@ -23,6 +24,7 @@ class DynamicProfitLossConfig:
     # 플래그 캐싱 (파일 읽기 최소화)
     _use_dynamic_cache = None
     _last_check_time = None
+    _cache_lock = threading.Lock()  # 스레드 안전성 보장
 
     # 분석 기반 최적 손익비 (analysis_results/optimal_profit_loss_ratio_*.csv 기반)
     # 거래량 패턴별 손익비
@@ -116,28 +118,30 @@ class DynamicProfitLossConfig:
         import time
         current_time = time.time()
 
-        # 10초마다만 파일 체크 (성능 최적화)
-        if cls._use_dynamic_cache is not None and cls._last_check_time is not None:
-            if current_time - cls._last_check_time < 10:
-                return cls._use_dynamic_cache
+        # 스레드 안전성 보장
+        with cls._cache_lock:
+            # 10초마다만 파일 체크 (성능 최적화)
+            if cls._use_dynamic_cache is not None and cls._last_check_time is not None:
+                if current_time - cls._last_check_time < 10:
+                    return cls._use_dynamic_cache
 
-        # config 파일 읽기
-        try:
-            config_path = os.path.join(os.path.dirname(__file__), 'trading_config.json')
-            if os.path.exists(config_path):
-                with open(config_path, 'r', encoding='utf-8') as f:
-                    config = json.load(f)
-                    enabled = config.get('risk_management', {}).get('use_dynamic_profit_loss', False)
-                    cls._use_dynamic_cache = enabled
-                    cls._last_check_time = current_time
-                    return enabled
-        except Exception as e:
-            print(f"동적 손익비 설정 로드 실패: {e}")
+            # config 파일 읽기
+            try:
+                config_path = os.path.join(os.path.dirname(__file__), 'trading_config.json')
+                if os.path.exists(config_path):
+                    with open(config_path, 'r', encoding='utf-8') as f:
+                        config = json.load(f)
+                        enabled = config.get('risk_management', {}).get('use_dynamic_profit_loss', False)
+                        cls._use_dynamic_cache = enabled
+                        cls._last_check_time = current_time
+                        return enabled
+            except Exception as e:
+                print(f"동적 손익비 설정 로드 실패: {e}")
 
-        # 기본값: False (동적 손익비 비활성화)
-        cls._use_dynamic_cache = False
-        cls._last_check_time = current_time
-        return False
+            # 기본값: False (동적 손익비 비활성화)
+            cls._use_dynamic_cache = False
+            cls._last_check_time = current_time
+            return False
 
     @classmethod
     def get_profit_loss_ratio(cls, current_volume=None, reference_volume=None, current_time=None):
@@ -212,8 +216,9 @@ class DynamicProfitLossConfig:
                     return float(val)
                 if isinstance(val, str):
                     try:
-                        # 콤마 제거 후 변환
-                        return float(val.replace(',', ''))
+                        # 콤마와 퍼센트 기호 제거 후 변환
+                        cleaned = val.replace(',', '').replace('%', '').strip()
+                        return float(cleaned)
                     except (ValueError, AttributeError):
                         return 0.0
                 return 0.0
@@ -265,17 +270,17 @@ class DynamicProfitLossConfig:
         if not cls.is_dynamic_enabled():
             return {'stop_loss': cls.DEFAULT_STOP_LOSS, 'take_profit': cls.DEFAULT_TAKE_PROFIT}
 
-        # ✅ 패턴 조합 테이블 (백테스트 2,362건 결과 기반)
+        # ✅ 패턴 조합 테이블 (최신 분석 결과 기반 - 20251227_002926)
         PATTERN_COMBINATION_RATIOS = {
-            ('very_low', 'weak_decrease'): {'stop_loss': -4.5, 'take_profit': 7.0},   # 평균 +2.73%, 승률 72.2%
-            ('very_low', 'normal_decrease'): {'stop_loss': -5.0, 'take_profit': 7.0}, # 평균 +2.65%, 승률 72.5%
-            ('very_low', 'strong_decrease'): {'stop_loss': -4.0, 'take_profit': 7.0}, # 평균 +2.37%, 승률 64.3%
-            ('low', 'weak_decrease'): {'stop_loss': -5.0, 'take_profit': 7.5},        # 평균 +1.92%, 승률 59.5%
-            ('low', 'normal_decrease'): {'stop_loss': -1.5, 'take_profit': 7.5},      # 평균 +1.61%, 승률 48.0%
-            ('low', 'strong_decrease'): {'stop_loss': -5.0, 'take_profit': 7.5},      # 평균 +3.50%, 승률 78.6% (최고)
-            ('normal', 'weak_decrease'): {'stop_loss': -5.0, 'take_profit': 7.5},     # 평균 +1.61%, 승률 61.4%
-            ('normal', 'normal_decrease'): {'stop_loss': -5.0, 'take_profit': 5.0},   # 평균 +2.28%, 승률 76.3%
-            ('normal', 'strong_decrease'): {'stop_loss': -5.0, 'take_profit': 4.0},   # 평균 +0.81%, 승률 66.7%
+            ('very_low', 'weak_decrease'): {'stop_loss': -4.5, 'take_profit': 7.0},   # 평균 +0.75%, 승률 48.2%, 191건
+            ('very_low', 'normal_decrease'): {'stop_loss': -5.0, 'take_profit': 7.0}, # 평균 +0.63%, 승률 50.4%, 139건
+            ('very_low', 'strong_decrease'): {'stop_loss': -4.0, 'take_profit': 7.0}, # 평균 -0.17%, 승률 36.4%, 22건
+            ('low', 'weak_decrease'): {'stop_loss': -5.0, 'take_profit': 7.5},        # 평균 +0.71%, 승률 45.9%, 183건
+            ('low', 'normal_decrease'): {'stop_loss': -2.0, 'take_profit': 7.5},      # 평균 +0.49%, 승률 35.8%, 106건
+            ('low', 'strong_decrease'): {'stop_loss': -1.0, 'take_profit': 7.5},      # 평균 +4.60%, 승률 80.0%, 10건 ⭐최고
+            ('normal', 'weak_decrease'): {'stop_loss': -5.0, 'take_profit': 7.5},     # 평균 +0.45%, 승률 50.8%, 120건
+            ('normal', 'normal_decrease'): {'stop_loss': -5.0, 'take_profit': 5.0},   # 평균 +0.29%, 승률 53.7%, 54건
+            ('high', 'weak_decrease'): {'stop_loss': -2.0, 'take_profit': 7.5},       # 평균 +0.95%, 승률 39.1%, 23건
         }
 
         key = (support_volume_class, decline_volume_class)

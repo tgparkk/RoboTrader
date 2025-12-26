@@ -1484,35 +1484,36 @@ def main():
                     morning_losses = 0
                     morning_trades_details = []
 
-                    for stock_code, trades in all_trades.items():
-                        for trade in trades:
-                            if trade.get('sell_time'):  # 완료된 거래만
-                                buy_time_str = trade.get('buy_time', '')
-                                if buy_time_str:
-                                    try:
-                                        # 동적 매수 중단 시간 적용
-                                        from config.market_hours import MarketHours
-                                        market_hours = MarketHours.get_market_hours('KRX', datetime.strptime(date_str, '%Y%m%d'))
-                                        buy_cutoff_hour = market_hours.get('buy_cutoff_hour', 12)
+                    # 동적 매수 중단 시간 적용
+                    from config.market_hours import MarketHours
+                    market_hours = MarketHours.get_market_hours('KRX', datetime.strptime(date_str, '%Y%m%d'))
+                    buy_cutoff_hour = market_hours.get('buy_cutoff_hour', 12)
 
-                                        buy_hour = int(buy_time_str.split(':')[0])
-                                        if buy_hour < buy_cutoff_hour:  # 매수 중단 시간 이전 매수
-                                            profit_rate = trade.get('profit_rate', 0)
-                                            if profit_rate > 0:
-                                                morning_wins += 1
-                                                status_icon = "🟢"
-                                            else:
-                                                morning_losses += 1
-                                                status_icon = "🔴"
+                    # ✅ all_completed_trades 사용으로 변경 (all_trades 대신)
+                    for trade in all_completed_trades:
+                        if trade.get('sell_time'):  # 완료된 거래만
+                            buy_time_str = trade.get('buy_time', '')
+                            stock_code = trade.get('stock_code', '')
+                            if buy_time_str and stock_code:
+                                try:
+                                    buy_hour = int(buy_time_str.split(':')[0])
+                                    if buy_hour < buy_cutoff_hour:  # 매수 중단 시간 이전 매수
+                                        profit_rate = trade.get('profit_rate', 0)
+                                        if profit_rate > 0:
+                                            morning_wins += 1
+                                            status_icon = "🟢"
+                                        else:
+                                            morning_losses += 1
+                                            status_icon = "🔴"
 
-                                            morning_trades_details.append({
-                                                'stock_code': stock_code,
-                                                'buy_time': buy_time_str,
-                                                'profit_rate': profit_rate,
-                                                'status_icon': status_icon
-                                            })
-                                    except (ValueError, IndexError):
-                                        continue
+                                        morning_trades_details.append({
+                                            'stock_code': stock_code,
+                                            'buy_time': buy_time_str,
+                                            'profit_rate': profit_rate,
+                                            'status_icon': status_icon
+                                        })
+                                except (ValueError, IndexError):
+                                    continue
 
                     # 💰 수익 요약 정보 추가
                     total_trades = total_wins + total_losses
@@ -1535,7 +1536,10 @@ def main():
                         net_profit_rate = (net_profit / investment_per_trade) * 100
 
                         lines.append(f"=== 📊 거래 설정 ===")
-                        lines.append(f"손익비: {profit_loss_ratio:.1f}:1 (익절 +{PROFIT_TAKE_RATE:.1f}% / 손절 -{STOP_LOSS_RATE:.1f}%)")
+                        if USE_DYNAMIC_PROFIT_LOSS:
+                            lines.append(f"🔧 동적 손익비: 패턴별 최적화 적용 (손절 -1.0% ~ -5.0% / 익절 +5.0% ~ +7.5%)")
+                        else:
+                            lines.append(f"손익비: {profit_loss_ratio:.1f}:1 (익절 +{PROFIT_TAKE_RATE:.1f}% / 손절 -{STOP_LOSS_RATE:.1f}%)")
                         lines.append(f"거래당 투자금: {investment_per_trade:,}원")
                         lines.append("")
                         lines.append(f"=== 💰 당일 수익 요약 ===")
