@@ -124,6 +124,7 @@ dmypy.json
 
 # 로그 파일
 logs/
+!logs/memory_data/
 *.log
 
 # 데이터 파일
