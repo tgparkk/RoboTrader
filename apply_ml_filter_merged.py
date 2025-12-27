@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-🤖 백테스트 결과에 ML 필터 적용
+병합 ML 모델 (ml_model_merged.pkl)로 백테스트 결과 필터링
 
-signal_replay 결과 파일을 읽어서 ML 모델로 승률을 예측하고,
-임계값 이하의 신호를 필터링합니다.
+기존 apply_ml_filter.py와 동일하지만 ml_model_merged.pkl 사용
+- AUC 0.7508
+- 최적 threshold 0.6 (77.4% 승률)
 """
 
 import sys
@@ -36,8 +37,8 @@ def load_stock_names() -> Dict[str, str]:
         return {}
 
 
-def load_ml_model(model_path: str = "ml_model.pkl"):
-    """ML 모델 로드"""
+def load_ml_model(model_path: str = "ml_model_merged.pkl"):
+    """병합 ML 모델 로드"""
     try:
         with open(model_path, 'rb') as f:
             model_data = pickle.load(f)
@@ -45,7 +46,7 @@ def load_ml_model(model_path: str = "ml_model.pkl"):
         model = model_data['model']
         feature_names = model_data['feature_names']
 
-        print(f"✅ ML 모델 로드 완료 ({len(feature_names)}개 특성)")
+        print(f"✅ ML 모델 로드 완료: {model_path} ({len(feature_names)}개 특성)")
         return model, feature_names
 
     except Exception as e:
@@ -379,7 +380,7 @@ def predict_win_probability(
 
         # 예측 - 실시간 거래와 동일한 방식 (LightGBM predict with best_iteration)
         try:
-            # LightGBM Booster 객체인 경우 (ml_model.pkl)
+            # LightGBM Booster 객체인 경우 (ml_model.pkl 또는 ml_model_merged.pkl)
             win_prob = model.predict(
                 X.values,
                 num_iteration=model.best_iteration
@@ -638,11 +639,11 @@ def apply_ml_filter_to_file(
 def main():
     import argparse
 
-    parser = argparse.ArgumentParser(description="백테스트 결과에 ML 필터 적용")
+    parser = argparse.ArgumentParser(description="병합 ML 모델로 백테스트 결과 필터링")
     parser.add_argument('input_file', help="입력 파일 (signal_replay 결과)")
     parser.add_argument('--output', '-o', help="출력 파일 (기본: 입력파일에 _ml_filtered 추가)")
-    parser.add_argument('--threshold', '-t', type=float, default=0.5, help="승률 임계값 (기본: 0.5)")
-    parser.add_argument('--model', '-m', default="ml_model.pkl", help="ML 모델 파일")
+    parser.add_argument('--threshold', '-t', type=float, default=0.6, help="승률 임계값 (기본: 0.6, 병합 모델 최적값)")
+    parser.add_argument('--model', '-m', default="ml_model_merged.pkl", help="ML 모델 파일")
 
     args = parser.parse_args()
 

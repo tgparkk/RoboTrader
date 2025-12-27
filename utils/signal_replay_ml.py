@@ -26,11 +26,11 @@ if project_root not in sys.path:
 from utils import signal_replay
 
 # ML 모델 로드 (실시간 거래와 동일한 모델 사용)
-ML_MODEL_PATH = Path("ml_model_stratified.pkl")
+ML_MODEL_PATH = Path("ml_model.pkl")
 
 
 def load_ml_model():
-    """ML 모델 로드 (실시간 거래와 동일한 stratified 모델)"""
+    """ML 모델 로드 (실시간 거래와 동일한 모델)"""
     if not ML_MODEL_PATH.exists():
         print(f"⚠️  ML 모델 파일을 찾을 수 없습니다: {ML_MODEL_PATH}")
         print(f"   ml_train_model.py를 먼저 실행하여 모델을 학습시켜주세요.")
@@ -270,7 +270,7 @@ def predict_win_probability(model, feature_names, pattern_info: dict) -> float:
                 print(f"  {col}: {X[col].iloc[0]}")
 
         # 예측 (실시간 거래와 동일: LightGBM의 predict 사용)
-        # ml_model_stratified.pkl은 LightGBM Booster이므로 predict() 사용
+        # ml_model.pkl은 LightGBM Booster이므로 predict() 사용
         win_prob = model.predict(X, num_iteration=model.best_iteration)[0]
 
         return float(win_prob)
