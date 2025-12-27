@@ -83,14 +83,20 @@ def parse_signal_from_log_line(line: str) -> Dict:
     }
 
 
-def load_pattern_data_for_date(date_str: str) -> Dict[str, Dict]:
+def load_pattern_data_for_date(date_str: str, use_dynamic: bool = False) -> Dict[str, Dict]:
     """
     특정 날짜의 패턴 데이터 로드
+
+    Args:
+        date_str: 날짜 (YYYYMMDD)
+        use_dynamic: 동적 손익비 모델 사용 여부
 
     Returns:
         Dict[pattern_id, pattern_data]
     """
-    pattern_log_file = Path('pattern_data_log') / f'pattern_data_{date_str}.jsonl'
+    # ⭐ 동적 손익비 모델 사용 시 별도 폴더에서 로드
+    log_dir = 'pattern_data_log_dynamic' if use_dynamic else 'pattern_data_log'
+    pattern_log_file = Path(log_dir) / f'pattern_data_{date_str}.jsonl'
 
     if not pattern_log_file.exists():
         print(f"   ⚠️  패턴 로그 없음: {pattern_log_file}")
@@ -316,15 +322,34 @@ def extract_features_from_pattern(pattern_data: Dict) -> Dict:
         support_candles / decline_candles if decline_candles > 0 else 0
     )
 
+    # ⭐ 동적 손익비 목표값 계산 (ML 모델 예측에 필요)
+    from config.dynamic_profit_loss_config import DynamicProfitLossConfig
+
+    # 패턴 로그 형식 → extract_pattern_from_debug_info 형식으로 변환
+    uptrend_avg_volume = uptrend.get('volume_avg', 0)  # volume_avg 키 사용
+
+    debug_info = {
+        'uptrend': {
+            'max_volume': uptrend_max_volume,
+            'avg_volume': uptrend_avg_volume
+        },
+        'decline': {
+            'avg_volume': decline_avg_volume
+        },
+        'support': {
+            'avg_volume': support_avg_volume
+        }
+    }
+
+    support_vol_class, decline_vol_class = DynamicProfitLossConfig.extract_pattern_from_debug_info(debug_info)
+
+    if support_vol_class and decline_vol_class:
+        ratios = DynamicProfitLossConfig.get_ratio_by_pattern(support_vol_class, decline_vol_class)
+    else:
+        # 패턴 분류 실패 시 기본값
+        ratios = {'stop_loss': -2.5, 'take_profit': 3.5}
+
     features = {
-        'hour': hour,
-        'minute': minute,
-        'time_in_minutes': hour * 60 + minute,
-        'is_morning': 1 if hour < 12 else 0,
-
-        'signal_type': signal_type_encoded,
-        'confidence': confidence,
-
         'uptrend_candles': uptrend_candles,
         'uptrend_gain': uptrend_gain,
         'uptrend_max_volume': uptrend_max_volume,
@@ -349,6 +374,17 @@ def extract_features_from_pattern(pattern_data: Dict) -> Dict:
         'volume_ratio_breakout_to_uptrend': volume_ratio_breakout_to_uptrend,
         'price_gain_to_decline_ratio': price_gain_to_decline_ratio,
         'candle_ratio_support_to_decline': candle_ratio_support_to_decline,
+
+        'signal_type': signal_type_encoded,
+        'confidence': confidence,
+
+        'target_stop_loss': ratios['stop_loss'],
+        'target_take_profit': ratios['take_profit'],
+
+        'hour': hour,
+        'minute': minute,
+        'time_in_minutes': hour * 60 + minute,
+        'is_morning': 1 if hour < 12 else 0,
     }
 
     return features
@@ -527,7 +563,8 @@ def apply_ml_filter_to_file(
     output_file: str,
     model,
     feature_names,
-    threshold: float = 0.5
+    threshold: float = 0.5,
+    use_dynamic: bool = False
 ) -> Tuple[int, int]:
     """
     백테스트 결과 파일에 ML 필터 적용
@@ -549,7 +586,7 @@ def apply_ml_filter_to_file(
     date_match = re.search(r'(\d{8})', filename)
     if date_match:
         date_str = date_match.group(1)
-        patterns = load_pattern_data_for_date(date_str)
+        patterns = load_pattern_data_for_date(date_str, use_dynamic=use_dynamic)
     else:
         print("   ⚠️  날짜를 추출할 수 없습니다. 패턴 데이터 없이 진행합니다.")
         patterns = {}
@@ -659,6 +696,7 @@ def main():
     print(f"입력: {args.input_file}")
     print(f"출력: {output_file}")
     print(f"임계값: {args.threshold:.1%}")
+    print(f"모델: {args.model}")
 
     # ML 모델 로드
     model, feature_names = load_ml_model(args.model)
@@ -667,13 +705,19 @@ def main():
         print("\n❌ ML 모델을 로드할 수 없습니다.")
         return
 
+    # 동적 손익비 모델 여부 감지 (파일명으로 판단)
+    use_dynamic = 'dynamic' in args.model.lower()
+    if use_dynamic:
+        print(f"   📊 동적 손익비 모델 감지 → pattern_data_log_dynamic 폴더 사용")
+
     # 필터링 적용
     total, filtered = apply_ml_filter_to_file(
         args.input_file,
         output_file,
         model,
         feature_names,
-        args.threshold
+        args.threshold,
+        use_dynamic=use_dynamic
     )
 
     print("\n" + "=" * 70)

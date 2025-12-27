@@ -19,6 +19,14 @@ class PatternDataLogger:
             log_dir: 로그 디렉토리 경로
             simulation_date: 시뮬레이션 날짜 (YYYYMMDD 형식, None이면 실시간 날짜 사용)
         """
+        # ⭐ 동적 손익비 설정에 따라 다른 폴더 사용
+        from config.dynamic_profit_loss_config import DynamicProfitLossConfig
+
+        if DynamicProfitLossConfig.is_dynamic_enabled():
+            # 동적 손익비 사용 시 별도 폴더
+            if log_dir == "pattern_data_log":
+                log_dir = "pattern_data_log_dynamic"
+
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(exist_ok=True)
 

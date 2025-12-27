@@ -35,7 +35,7 @@ OUTPUT_REPORT = 'ml_training_report_dynamic_pl.txt'
 
 
 def load_and_prepare_data():
-    """데이터 로드 및 전처리"""
+    """데이터 로드 및 전처리 (기존 ml_model.pkl과 동일한 방식)"""
     print("=" * 70)
     print("데이터 로드 중...")
     print("=" * 70)
@@ -43,37 +43,23 @@ def load_and_prepare_data():
     df = pd.read_csv(INPUT_FILE, encoding='utf-8-sig')
     print(f"데이터 로드 완료: {len(df)}행")
 
-    # 메타데이터 및 라벨 컬럼
+    # 메타데이터 컬럼 제거 (기존 모델과 동일)
     meta_cols = ['stock_code', 'stock_name', 'date', 'buy_time', 'profit_rate']
-    label_col = 'label'
-
-    # 범주형 컬럼 (LabelEncoding 필요)
-    categorical_cols = ['support_volume_class', 'decline_volume_class']
-
-    # 피처 컬럼 선택
-    feature_cols = [col for col in df.columns
-                   if col not in meta_cols + [label_col]]
+    # ⭐ target_stop_loss, target_take_profit는 학습에 사용 (메타데이터 아님)
+    feature_cols = [col for col in df.columns if col not in meta_cols + ['label']]
 
     X = df[feature_cols].copy()
-    y = df[label_col].copy()
+    y = df['label'].copy()
 
-    # 범주형 변수 인코딩
-    label_encoders = {}
-    for col in categorical_cols:
-        if col in X.columns:
-            le = LabelEncoder()
-            X[col] = le.fit_transform(X[col].astype(str))
-            label_encoders[col] = le
+    # 범주형 변수 인코딩 (signal_type만)
+    le = LabelEncoder()
+    if 'signal_type' in X.columns:
+        X['signal_type'] = le.fit_transform(X['signal_type'])
 
     print(f"\n특징(feature) 수: {len(feature_cols)}")
-    print(f"  - 숫자형: {len([c for c in feature_cols if c not in categorical_cols])}")
-    print(f"  - 범주형: {len(categorical_cols)}")
+    print(f"라벨 분포: 승리={y.sum()} ({y.mean()*100:.1f}%), 패배={len(y)-y.sum()} ({(1-y.mean())*100:.1f}%)")
 
-    print(f"\n라벨 분포:")
-    print(f"  - 승리: {y.sum()}건 ({y.mean()*100:.1f}%)")
-    print(f"  - 패배: {len(y)-y.sum()}건 ({(1-y.mean())*100:.1f}%)")
-
-    return X, y, feature_cols, label_encoders
+    return X, y, feature_cols, le
 
 
 def train_lightgbm_model(X_train, y_train, X_val, y_val, feature_names):
@@ -212,14 +198,15 @@ def evaluate_model(model, X_test, y_test, feature_names):
     return auc, results, feature_importance
 
 
-def save_model(model, feature_names, label_encoders, auc_score):
-    """모델 저장"""
+def save_model(model, feature_names, label_encoder, auc_score):
+    """모델 저장 (기존 모델 형식과 동일)"""
     model_data = {
         'model': model,
         'feature_names': feature_names,
-        'label_encoders': label_encoders,
+        'label_encoder': label_encoder,
         'auc_score': auc_score,
-        'threshold_recommended': 0.5,  # 기본값
+        'threshold_recommended': 0.5,
+        'version': f'dynamic_pl_{pd.Timestamp.now().strftime("%Y%m%d")}',
         'trained_at': pd.Timestamp.now().isoformat(),
         'data_source': INPUT_FILE,
         'n_features': len(feature_names)
@@ -240,7 +227,7 @@ def main():
     print("=" * 70)
 
     # 1. 데이터 로드
-    X, y, feature_names, label_encoders = load_and_prepare_data()
+    X, y, feature_names, label_encoder = load_and_prepare_data()
 
     # 2. 데이터 분할 (70% train, 15% val, 15% test)
     print("\n데이터 분할 중...")
@@ -264,7 +251,7 @@ def main():
     )
 
     # 5. 모델 저장
-    save_model(model, feature_names, label_encoders, auc_score)
+    save_model(model, feature_names, label_encoder, auc_score)
 
     # 6. 리포트 저장
     with open(OUTPUT_REPORT, 'w', encoding='utf-8') as f:

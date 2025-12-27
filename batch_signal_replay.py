@@ -51,7 +51,7 @@ def generate_date_range(start_date, end_date):
     return dates
 
 
-def run_signal_replay(date, time_range="9:00-16:00", output_dir="signal_replay_log"):
+def run_signal_replay(date, time_range="9:00-16:00", output_dir="signal_replay_log", save_pattern_log=False, use_dynamic=False):
     """지정된 날짜에 대해 signal_replay 실행"""
     # 출력 폴더 생성
     log_dir = output_dir
@@ -73,12 +73,23 @@ def run_signal_replay(date, time_range="9:00-16:00", output_dir="signal_replay_l
         '--txt-path', txt_filename
     ]
 
+    # 동적 손익비 옵션 추가
+    if use_dynamic:
+        cmd.extend(['--use-dynamic-profit-loss'])
+
     print(f"실행 중: {date}")
 
     try:
-        # 환경 변수 복사 및 패턴 로깅 활성화
+        # 환경 변수 복사
         env = os.environ.copy()
-        env['ENABLE_PATTERN_LOGGING'] = 'true'
+
+        # 패턴 로깅 활성화 여부
+        if save_pattern_log:
+            env['ENABLE_PATTERN_LOGGING'] = 'true'
+
+            # 동적 손익비 모드 전달
+            if use_dynamic:
+                env['USE_DYNAMIC_PROFIT_LOSS'] = 'true'
 
         # subprocess로 명령 실행 (인코딩 문제 해결)
         result = subprocess.run(
@@ -387,6 +398,18 @@ def main():
         help='출력 디렉토리 경로 (기본값: signal_replay_log)'
     )
 
+    parser.add_argument(
+        '--save-pattern-log',
+        action='store_true',
+        help='패턴 데이터 로그 저장 (ML 학습용)'
+    )
+
+    parser.add_argument(
+        '--use-dynamic',
+        action='store_true',
+        help='동적 손익비 모드 사용 (pattern_data_log_dynamic 폴더에 저장)'
+    )
+
     args = parser.parse_args()
     
     # 날짜 범위 검증
@@ -423,6 +446,12 @@ def main():
     print(f"처리할 날짜: {len(dates)}개")
     print(f"   범위: {dates[0]} ~ {dates[-1]}")
     print(f"   시간: {args.time_range}")
+    print(f"   출력 디렉토리: {args.output_dir}")
+    if args.save_pattern_log:
+        pattern_log_dir = "pattern_data_log_dynamic" if args.use_dynamic else "pattern_data_log"
+        print(f"   📊 패턴 로그 저장: {pattern_log_dir}/")
+    if args.use_dynamic:
+        print(f"   💰 동적 손익비 모드: 활성화")
     print(f"   CPU 코어: {cpu_count()}개")
     print("=" * 70)
 
@@ -436,7 +465,13 @@ def main():
             print(f"\n[{i}/{len(dates)}] {date} 처리 중...")
 
             try:
-                success, _ = run_signal_replay(date, args.time_range, args.output_dir)
+                success, _ = run_signal_replay(
+                    date,
+                    args.time_range,
+                    args.output_dir,
+                    save_pattern_log=args.save_pattern_log,
+                    use_dynamic=args.use_dynamic
+                )
                 if success:
                     success_count += 1
                 else:
@@ -455,7 +490,14 @@ def main():
             with ProcessPoolExecutor(max_workers=max_workers) as executor:
                 # 모든 작업 제출
                 future_to_date = {
-                    executor.submit(run_signal_replay, date, args.time_range, args.output_dir): date
+                    executor.submit(
+                        run_signal_replay,
+                        date,
+                        args.time_range,
+                        args.output_dir,
+                        args.save_pattern_log,
+                        args.use_dynamic
+                    ): date
                     for date in dates
                 }
 

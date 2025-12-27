@@ -99,12 +99,13 @@ def run_signal_replay_ml_dynamic(date, output_dir, time_range="9:00-16:00", ml_t
 
         # 2단계: 동적 손익비 ML 필터 적용
         abs_final_filename = os.path.abspath(final_filename)
-        apply_ml_filter_path = os.path.join(original_cwd, 'apply_ml_filter_dynamic.py')
+        apply_ml_filter_path = os.path.join(original_cwd, 'apply_ml_filter.py')
 
         ml_cmd = [
             sys.executable, apply_ml_filter_path,
             abs_temp_filename,
             '--output', abs_final_filename,
+            '--model', 'ml_model_dynamic_pl.pkl',
             '--threshold', str(ml_threshold)
         ]
 

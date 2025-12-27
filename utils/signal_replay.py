@@ -330,28 +330,33 @@ def list_all_buy_signals(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] 
                     # 필터 오류 시에도 매수 신호 진행 (안전장치)
 
                 # 📊 4단계 패턴 구간 데이터 로깅 (시뮬레이션)
-                try:
-                    from core.pattern_data_logger import PatternDataLogger
-                    pattern_logger = PatternDataLogger(simulation_date=simulation_date)
+                # ENABLE_PATTERN_LOGGING 환경 변수가 설정된 경우에만 로깅
+                if os.environ.get('ENABLE_PATTERN_LOGGING') == 'true':
+                    try:
+                        from core.pattern_data_logger import PatternDataLogger
 
-                    if hasattr(signal_strength, 'pattern_data') and signal_strength.pattern_data:
-                        pattern_id = pattern_logger.log_pattern_data(
-                            stock_code=stock_code,
-                            signal_type=signal_strength.signal_type.value,
-                            confidence=signal_strength.confidence,
-                            support_pattern_info=signal_strength.pattern_data,
-                            data_3min=current_data,
-                            data_1min=df_1min  # 🆕 1분봉 데이터 전달
-                        )
-                        # pattern_id를 나중에 사용하기 위해 저장
-                        signal_strength._pattern_id = pattern_id
-                        print(f"📝 패턴 데이터 로깅 완료: {pattern_id}")
-                    else:
-                        print(f"⚠️ pattern_data가 없음: hasattr={hasattr(signal_strength, 'pattern_data')}, data={signal_strength.pattern_data if hasattr(signal_strength, 'pattern_data') else 'N/A'}")
-                except Exception as log_err:
-                    print(f"⚠️ 패턴 데이터 로깅 실패: {log_err}")
-                    import traceback
-                    traceback.print_exc()
+                        # USE_DYNAMIC_PROFIT_LOSS 환경 변수 확인하여 폴더 선택
+                        # (PatternDataLogger 내부에서 자동 처리됨)
+                        pattern_logger = PatternDataLogger(simulation_date=simulation_date)
+
+                        if hasattr(signal_strength, 'pattern_data') and signal_strength.pattern_data:
+                            pattern_id = pattern_logger.log_pattern_data(
+                                stock_code=stock_code,
+                                signal_type=signal_strength.signal_type.value,
+                                confidence=signal_strength.confidence,
+                                support_pattern_info=signal_strength.pattern_data,
+                                data_3min=current_data,
+                                data_1min=df_1min  # 🆕 1분봉 데이터 전달
+                            )
+                            # pattern_id를 나중에 사용하기 위해 저장
+                            signal_strength._pattern_id = pattern_id
+                            print(f"📝 패턴 데이터 로깅 완료: {pattern_id}")
+                        else:
+                            print(f"⚠️ pattern_data가 없음: hasattr={hasattr(signal_strength, 'pattern_data')}, data={signal_strength.pattern_data if hasattr(signal_strength, 'pattern_data') else 'N/A'}")
+                    except Exception as log_err:
+                        print(f"⚠️ 패턴 데이터 로깅 실패: {log_err}")
+                        import traceback
+                        traceback.print_exc()
 
                 # 현재 3분봉 정보
                 current_row = df_3min.iloc[i]
@@ -868,33 +873,35 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                 profit_rate = ((sell_price - buy_price) / buy_price) * 100
 
                 # 📊 패턴 데이터 매매 결과 업데이트 (시뮬레이션)
-                try:
-                    from core.pattern_data_logger import PatternDataLogger
-                    pattern_logger = PatternDataLogger(simulation_date=simulation_date)
+                # ENABLE_PATTERN_LOGGING 환경 변수가 설정된 경우에만 업데이트
+                if os.environ.get('ENABLE_PATTERN_LOGGING') == 'true':
+                    try:
+                        from core.pattern_data_logger import PatternDataLogger
+                        pattern_logger = PatternDataLogger(simulation_date=simulation_date)
 
-                    if signal.get('pattern_id'):
-                        # 🆕 매수~매도 구간 상세 데이터 준비
-                        trade_data = {
-                            'buy_time': buy_time,
-                            'sell_time': sell_time,
-                            'buy_price': buy_price,
-                            'sell_price': sell_price,
-                            'max_profit_rate': max_profit_rate,
-                            'max_loss_rate': max_loss_rate,
-                            'duration_minutes': duration_minutes,
-                            'df_1min_during_trade': df_1min  # 전체 1분봉 데이터 전달
-                        }
+                        if signal.get('pattern_id'):
+                            # 🆕 매수~매도 구간 상세 데이터 준비
+                            trade_data = {
+                                'buy_time': buy_time,
+                                'sell_time': sell_time,
+                                'buy_price': buy_price,
+                                'sell_price': sell_price,
+                                'max_profit_rate': max_profit_rate,
+                                'max_loss_rate': max_loss_rate,
+                                'duration_minutes': duration_minutes,
+                                'df_1min_during_trade': df_1min  # 전체 1분봉 데이터 전달
+                            }
 
-                        pattern_logger.update_trade_result(
-                            pattern_id=signal['pattern_id'],
-                            trade_executed=True,
-                            profit_rate=profit_rate,
-                            sell_reason=sell_reason,
-                            trade_data=trade_data  # 🆕 상세 데이터 전달
-                        )
-                except Exception as log_err:
-                    if logger:
-                        logger.debug(f"⚠️ 패턴 매매 결과 업데이트 실패: {log_err}")
+                            pattern_logger.update_trade_result(
+                                pattern_id=signal['pattern_id'],
+                                trade_executed=True,
+                                profit_rate=profit_rate,
+                                sell_reason=sell_reason,
+                                trade_data=trade_data  # 🆕 상세 데이터 전달
+                            )
+                    except Exception as log_err:
+                        if logger:
+                            logger.debug(f"⚠️ 패턴 매매 결과 업데이트 실패: {log_err}")
 
                 # ==================== 포지션 업데이트: 매도 완료 ====================
                 current_position = {
@@ -913,6 +920,7 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                     logger.info(f"🕰️ [{stock_code}] 매수 쿨다운 설정: {buy_time.strftime('%H:%M')} + {buy_cooldown_minutes}분 = {stock_cooldown_end[stock_code].strftime('%H:%M')}")
                 
                 trades.append({
+                    'stock_code': stock_code,
                     'buy_time': buy_time.strftime('%H:%M'),
                     'buy_price': buy_price,
                     'sell_time': sell_time.strftime('%H:%M'),
@@ -1125,8 +1133,13 @@ def main():
     parser.add_argument("--csv-path", default="signal_replay.csv", help="CSV 저장 경로 (기본: signal_replay.csv)")
     parser.add_argument("--txt-path", default="signal_replay.txt", help="TXT 저장 경로 (기본: signal_replay.txt)")
     parser.add_argument("--charts", action="store_true", help="3분봉 차트 생성 (거래량, 이등분선, 매수/매도 포인트 포함)")
+    parser.add_argument("--use-dynamic-profit-loss", action="store_true", help="동적 손익비 모드 사용 (환경 변수 설정용)")
 
     args = parser.parse_args()
+
+    # --use-dynamic-profit-loss 옵션이 있으면 환경 변수로 설정
+    if args.use_dynamic_profit_loss:
+        os.environ['USE_DYNAMIC_PROFIT_LOSS'] = 'true'
 
     def normalize_code(code: str) -> str:
         return str(code).strip().zfill(6)

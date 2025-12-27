@@ -118,6 +118,13 @@ class DynamicProfitLossConfig:
         import time
         current_time = time.time()
 
+        # 🆕 환경 변수 우선 확인 (시뮬레이션용)
+        env_value = os.environ.get('USE_DYNAMIC_PROFIT_LOSS')
+        if env_value == 'true':
+            return True
+        elif env_value == 'false':
+            return False
+
         # 스레드 안전성 보장
         with cls._cache_lock:
             # 10초마다만 파일 체크 (성능 최적화)
