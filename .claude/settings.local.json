@@ -42,7 +42,19 @@
       "Bash(git push:*)",
       "Bash(git checkout:*)",
       "Bash(find:*)",
-      "Bash(timeout 180 python:*)"
+      "Bash(timeout 180 python:*)",
+      "Bash(taskkill:*)",
+      "Bash(grep:*)",
+      "Bash(du:*)",
+      "Bash(del:*)",
+      "Bash(wc:*)",
+      "Bash(xargs du:*)",
+      "Bash(xargs rm:*)",
+      "Bash(git rm:*)",
+      "Bash(timeout 60 python:*)",
+      "Bash(timeout 120 python:*)",
+      "Bash(git reset:*)",
+      "Bash(iconv:*)"
     ],
     "deny": [],
     "ask": []

@@ -11,7 +11,7 @@ class MLSettings:
     """ML 관련 설정"""
 
     # ML 필터 사용 여부
-    USE_ML_FILTER = True  # ML 필터 활성화
+    USE_ML_FILTER = True  # ML 필터 활성화 (리스크 관리 목적)
 
     # ML 모델 파일
     MODEL_PATH = "ml_model.pkl"  # 현재 사용 중인 모델
