@@ -61,3 +61,8 @@
 
 상세 가이드: `ROBOTRADER_ANALYSIS_GUIDE.md` 참조
 
+## ML 모델 관련
+
+- 현재 사용 중: ml_model.pkl (config/ml_settings.py)
+- ml_model_merged.pkl은 AUC 0.75로 높지만, 실전에서는 ml_model.pkl이 더 우수
+- 실제 성능: 승률 52.1%, 거래당 평균 +7,238원

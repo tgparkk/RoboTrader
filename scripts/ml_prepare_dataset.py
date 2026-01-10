@@ -82,9 +82,18 @@ def extract_features_from_pattern(pattern_data: Dict) -> Optional[Dict]:
     if uptrend_candles_data:
         uptrend_avg_body = np.mean([abs(c['close'] - c['open']) for c in uptrend_candles_data])
         uptrend_total_volume = sum([c['volume'] for c in uptrend_candles_data])
+        # 🆕 거래량 변동성
+        uptrend_volume_std = np.std([c['volume'] for c in uptrend_candles_data])
+        # 🆕 양봉 비율
+        uptrend_bullish_ratio = sum([1 for c in uptrend_candles_data if c['close'] > c['open']]) / len(uptrend_candles_data)
+        # 🆕 가격 정보 (하락 깊이 계산용)
+        uptrend_max_price = max([c['high'] for c in uptrend_candles_data])
     else:
         uptrend_avg_body = 0
         uptrend_total_volume = 0
+        uptrend_volume_std = 0
+        uptrend_bullish_ratio = 0
+        uptrend_max_price = 0
 
     # 2단계: 하락구간
     decline = pattern_stages.get('2_decline', {})
@@ -94,8 +103,14 @@ def extract_features_from_pattern(pattern_data: Dict) -> Optional[Dict]:
     decline_candles_data = decline.get('candles', [])
     if decline_candles_data:
         decline_avg_volume = np.mean([c['volume'] for c in decline_candles_data])
+        # 🆕 거래량 변동성
+        decline_volume_std = np.std([c['volume'] for c in decline_candles_data])
+        # 🆕 가격 정보 (하락 깊이 계산용)
+        decline_min_price = min([c['low'] for c in decline_candles_data])
     else:
         decline_avg_volume = 0
+        decline_volume_std = 0
+        decline_min_price = 0
 
     # 3단계: 지지구간
     support = pattern_stages.get('3_support', {})
@@ -106,8 +121,14 @@ def extract_features_from_pattern(pattern_data: Dict) -> Optional[Dict]:
     support_candles_data = support.get('candles', [])
     if support_candles_data:
         support_avg_volume = np.mean([c['volume'] for c in support_candles_data])
+        # 🆕 거래량 변동성
+        support_volume_std = np.std([c['volume'] for c in support_candles_data])
+        # 🆕 가격 정보 (회복률 계산용)
+        support_min_price = min([c['low'] for c in support_candles_data])
     else:
         support_avg_volume = 0
+        support_volume_std = 0
+        support_min_price = 0
 
     # 4단계: 돌파양봉
     breakout = pattern_stages.get('4_breakout', {})
@@ -134,6 +155,37 @@ def extract_features_from_pattern(pattern_data: Dict) -> Optional[Dict]:
 
     # 캔들 개수 비율
     candle_ratio_support_to_decline = (support_candles / decline_candles) if decline_candles > 0 else 0
+
+    # === 🆕 새로운 파생 특징 ===
+    # 하락 깊이 (최고점 대비 하락률)
+    decline_depth = 0
+    if uptrend_max_price > 0 and decline_min_price > 0:
+        decline_depth = (uptrend_max_price - decline_min_price) / uptrend_max_price
+
+    # 회복률 (지지구간 최저 → 돌파양봉 종가)
+    recovery_rate = 0
+    if support_min_price > 0 and breakout_candle:
+        breakout_close = breakout_candle.get('close', 0)
+        if breakout_close > 0:
+            recovery_rate = (breakout_close - support_min_price) / support_min_price
+
+    # 돌파양봉 몸통 비율 (body / range)
+    breakout_body_ratio = breakout_body / breakout_range if breakout_range > 0 else 0
+
+    # 상승 속도 (캔들당 상승률)
+    uptrend_gain_per_candle = uptrend_gain / uptrend_candles if uptrend_candles > 0 else 0
+
+    # 하락 속도 (캔들당 하락률)
+    decline_loss_per_candle = abs(decline_pct) / decline_candles if decline_candles > 0 else 0
+
+    # 전체 패턴 길이
+    total_pattern_candles = uptrend_candles + decline_candles + support_candles + 1
+
+    # 거래량 집중도 (상승구간 최대/평균)
+    volume_concentration = 0
+    if uptrend_candles_data:
+        uptrend_volume_avg = np.mean([c['volume'] for c in uptrend_candles_data])
+        volume_concentration = uptrend_max_volume / uptrend_volume_avg if uptrend_volume_avg > 0 else 0
 
     features = {
         # 라벨
@@ -180,6 +232,23 @@ def extract_features_from_pattern(pattern_data: Dict) -> Optional[Dict]:
         'volume_ratio_breakout_to_uptrend': volume_ratio_breakout_to_uptrend,
         'price_gain_to_decline_ratio': price_gain_to_decline_ratio,
         'candle_ratio_support_to_decline': candle_ratio_support_to_decline,
+
+        # 🆕 새로운 특징 (10개)
+        # 거래량 변동성
+        'uptrend_volume_std': uptrend_volume_std,
+        'decline_volume_std': decline_volume_std,
+        'support_volume_std': support_volume_std,
+        # 패턴 특성
+        'uptrend_bullish_ratio': uptrend_bullish_ratio,
+        'decline_depth': decline_depth,
+        'recovery_rate': recovery_rate,
+        'breakout_body_ratio': breakout_body_ratio,
+        # 속도/효율
+        'uptrend_gain_per_candle': uptrend_gain_per_candle,
+        'decline_loss_per_candle': decline_loss_per_candle,
+        # 전체 특성
+        'total_pattern_candles': total_pattern_candles,
+        'volume_concentration': volume_concentration,
 
         # 메타데이터
         'stock_code': pattern_data.get('stock_code', ''),
