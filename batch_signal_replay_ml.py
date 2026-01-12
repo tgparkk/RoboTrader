@@ -17,6 +17,9 @@ import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocessing import cpu_count
 
+# ML 설정 불러오기
+from config.ml_settings import MLSettings
+
 
 def parse_date(date_str):
     """날짜 문자열을 datetime 객체로 변환"""
@@ -212,8 +215,8 @@ def main():
     parser.add_argument(
         "--threshold", "-t",
         type=float,
-        default=0.5,
-        help="ML 승률 임계값 (기본: 0.5 = 50%%)"
+        default=None,
+        help=f"ML 승률 임계값 (기본: config/ml_settings.py의 ML_THRESHOLD = {MLSettings.ML_THRESHOLD})"
     )
 
     parser.add_argument(
@@ -230,6 +233,11 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # threshold가 지정되지 않으면 설정 파일에서 가져오기
+    if args.threshold is None:
+        args.threshold = MLSettings.ML_THRESHOLD
+        print(f"ℹ️  ML 임계값을 config/ml_settings.py에서 로드: {args.threshold}")
 
     if args.start > args.end:
         print("❌ 시작 날짜가 종료 날짜보다 늦습니다.")

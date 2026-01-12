@@ -674,14 +674,19 @@ def apply_ml_filter_to_file(
 
 def main():
     import argparse
+    from config.ml_settings import MLSettings
 
     parser = argparse.ArgumentParser(description="백테스트 결과에 ML 필터 적용")
     parser.add_argument('input_file', help="입력 파일 (signal_replay 결과)")
     parser.add_argument('--output', '-o', help="출력 파일 (기본: 입력파일에 _ml_filtered 추가)")
-    parser.add_argument('--threshold', '-t', type=float, default=0.5, help="승률 임계값 (기본: 0.5)")
+    parser.add_argument('--threshold', '-t', type=float, default=None, help=f"승률 임계값 (기본: config/ml_settings.py의 ML_THRESHOLD = {MLSettings.ML_THRESHOLD})")
     parser.add_argument('--model', '-m', default="ml_model.pkl", help="ML 모델 파일")
 
     args = parser.parse_args()
+
+    # threshold가 지정되지 않으면 설정 파일에서 가져오기
+    if args.threshold is None:
+        args.threshold = MLSettings.ML_THRESHOLD
 
     # 출력 파일명 결정
     if args.output:
