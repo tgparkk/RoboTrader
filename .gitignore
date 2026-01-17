@@ -133,6 +133,11 @@ data/
 *.xlsx
 *.json.bak
 
+# 캐시 데이터 (DuckDB 및 pkl)
+cache/daily/
+cache/minute_data/
+cache/*.duckdb
+
 # IDE 설정
 .vscode/
 .idea/
@@ -151,3 +156,7 @@ Thumbs.db
 
 # Filter reports
 filter_reports/
+
+# Signal replay logs
+signal_replay_log/
+signal_replay_log_ml/
