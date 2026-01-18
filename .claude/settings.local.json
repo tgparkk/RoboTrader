@@ -54,7 +54,18 @@
       "Bash(timeout 60 python:*)",
       "Bash(timeout 120 python:*)",
       "Bash(git reset:*)",
-      "Bash(iconv:*)"
+      "Bash(iconv:*)",
+      "Bash(copy ml_model.pkl archiveml_modelsml_model_v1.pkl)",
+      "Bash(copy:*)",
+      "Bash(cmd /c copy:*)",
+      "Bash(cmd /c dir \"d:\\\\GIT\\\\RoboTrader\\\\ml_model_backup_20260116.pkl\")",
+      "Bash(more:*)",
+      "Bash(powershell -Command:*)",
+      "Bash(timeout:*)",
+      "Bash(git diff:*)",
+      "Bash(git status:*)",
+      "Bash(pip show:*)",
+      "Bash(pip install:*)"
     ],
     "deny": [],
     "ask": []

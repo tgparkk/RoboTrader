@@ -160,3 +160,6 @@ filter_reports/
 # Signal replay logs
 signal_replay_log/
 signal_replay_log_ml/
+
+# Pattern data logs
+pattern_data_log/

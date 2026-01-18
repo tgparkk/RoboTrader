@@ -139,8 +139,6 @@ class MLPredictor:
             hour, minute = datetime.now().hour, datetime.now().minute
 
         features['hour'] = hour
-        features['minute'] = minute
-        features['time_in_minutes'] = hour * 60 + minute
         features['is_morning'] = 1 if hour < 12 else 0
         features['signal_type'] = signal_type_encoded
         features['confidence'] = confidence
@@ -291,6 +289,130 @@ class MLPredictor:
         features['volume_ratio_breakout_to_uptrend'] = volume_ratio_breakout_to_uptrend
         features['price_gain_to_decline_ratio'] = price_gain_to_decline_ratio
         features['candle_ratio_support_to_decline'] = candle_ratio_support_to_decline
+
+        # ===== 추가 파생 특성 (기존 누락분) =====
+        # 거래량 변동성
+        uptrend_volume_std = 0
+        if uptrend_candles_list and len(uptrend_candles_list) > 1:
+            volumes = [c.get('volume', 0) for c in uptrend_candles_list]
+            uptrend_volume_std = float(np.std(volumes))
+
+        decline_volume_std = 0
+        if decline_candles_list and len(decline_candles_list) > 1:
+            volumes = [c.get('volume', 0) for c in decline_candles_list]
+            decline_volume_std = float(np.std(volumes))
+
+        support_volume_std = 0
+        if support_candles_list and len(support_candles_list) > 1:
+            volumes = [c.get('volume', 0) for c in support_candles_list]
+            support_volume_std = float(np.std(volumes))
+
+        # 상승구간 양봉 비율
+        uptrend_bullish_ratio = 0
+        if uptrend_candles_list:
+            bullish_count = sum(1 for c in uptrend_candles_list if c.get('close', 0) > c.get('open', 0))
+            uptrend_bullish_ratio = bullish_count / len(uptrend_candles_list)
+
+        # 하락 깊이
+        decline_depth = 0
+        if uptrend_candles_list and decline_candles_list:
+            uptrend_max_price = max(c.get('high', 0) for c in uptrend_candles_list)
+            decline_min_price = min(c.get('low', float('inf')) for c in decline_candles_list)
+            if uptrend_max_price > 0 and decline_min_price < float('inf'):
+                decline_depth = (uptrend_max_price - decline_min_price) / uptrend_max_price
+
+        # 회복률
+        recovery_rate = 0
+        if support_candles_list and breakout_candle:
+            support_min_price = min(c.get('low', float('inf')) for c in support_candles_list)
+            breakout_close = breakout_candle.get('close', 0)
+            if support_min_price > 0 and support_min_price < float('inf') and breakout_close > 0:
+                recovery_rate = (breakout_close - support_min_price) / support_min_price
+
+        # 돌파양봉 몸통 비율
+        breakout_body_ratio = 0
+        if breakout_range > 0:
+            breakout_body_ratio = breakout_body / breakout_range
+
+        # 상승/하락 속도
+        uptrend_gain_per_candle = uptrend_gain / uptrend_candles if uptrend_candles > 0 else 0
+        decline_loss_per_candle = decline_pct / decline_candles if decline_candles > 0 else 0
+
+        # 전체 패턴 길이
+        total_pattern_candles = uptrend_candles + decline_candles + support_candles + 1
+
+        # 거래량 집중도
+        volume_concentration = 0
+        if uptrend_candles_list:
+            uptrend_volume_avg = sum(c.get('volume', 0) for c in uptrend_candles_list) / len(uptrend_candles_list)
+            if uptrend_volume_avg > 0:
+                volume_concentration = uptrend_max_volume / uptrend_volume_avg
+
+        features['uptrend_volume_std'] = uptrend_volume_std
+        features['decline_volume_std'] = decline_volume_std
+        features['support_volume_std'] = support_volume_std
+        features['uptrend_bullish_ratio'] = uptrend_bullish_ratio
+        features['decline_depth'] = decline_depth
+        features['recovery_rate'] = recovery_rate
+        features['breakout_body_ratio'] = breakout_body_ratio
+        features['uptrend_gain_per_candle'] = uptrend_gain_per_candle
+        features['decline_loss_per_candle'] = decline_loss_per_candle
+        features['total_pattern_candles'] = total_pattern_candles
+        features['volume_concentration'] = volume_concentration
+
+        # ===== 패턴 품질 피처 (신규 6개) =====
+        # 1. 돌파양봉 직전 캔들과의 거래량 비교
+        breakout_vol_vs_prev_candle = 0
+        if support_candles_list and breakout_volume > 0:
+            prev_candle_volume = support_candles_list[-1].get('volume', 0)
+            if prev_candle_volume > 0:
+                breakout_vol_vs_prev_candle = breakout_volume / prev_candle_volume
+
+        # 2. 지지구간 저점 일관성 (낮을수록 견고한 지지)
+        support_low_consistency = 0
+        if support_candles_list and len(support_candles_list) > 1:
+            support_lows = [c.get('low', 0) for c in support_candles_list]
+            avg_low = np.mean(support_lows)
+            if avg_low > 0:
+                support_low_consistency = float(np.std(support_lows) / avg_low)
+
+        # 3. 상승구간 연속 양봉 최대 개수
+        uptrend_consecutive_bullish = 0
+        if uptrend_candles_list:
+            current_streak = 0
+            max_streak = 0
+            for c in uptrend_candles_list:
+                if c.get('close', 0) > c.get('open', 0):
+                    current_streak += 1
+                    max_streak = max(max_streak, current_streak)
+                else:
+                    current_streak = 0
+            uptrend_consecutive_bullish = max_streak
+
+        # 4. 하락구간 음봉 비율
+        decline_bearish_ratio = 0
+        if decline_candles_list:
+            bearish_count = sum(1 for c in decline_candles_list if c.get('close', 0) < c.get('open', 0))
+            decline_bearish_ratio = bearish_count / len(decline_candles_list)
+
+        # 5. 지지구간 거래량이 기준거래량(상승구간 최대)의 1/4 이하인지
+        support_vol_below_quarter = 0
+        if uptrend_max_volume > 0 and support_avg_volume > 0:
+            support_vol_below_quarter = 1 if support_avg_volume <= (uptrend_max_volume / 4) else 0
+
+        # 6. 돌파봉 몸통이 지지구간 평균 몸통보다 큰지
+        breakout_body_vs_support_avg = 0
+        if support_candles_list and breakout_body > 0:
+            support_avg_body = np.mean([abs(c.get('close', 0) - c.get('open', 0)) for c in support_candles_list])
+            if support_avg_body > 0:
+                breakout_body_vs_support_avg = breakout_body / support_avg_body
+
+        features['breakout_vol_vs_prev_candle'] = breakout_vol_vs_prev_candle
+        features['support_low_consistency'] = support_low_consistency
+        features['uptrend_consecutive_bullish'] = uptrend_consecutive_bullish
+        features['decline_bearish_ratio'] = decline_bearish_ratio
+        features['support_vol_below_quarter'] = support_vol_below_quarter
+        features['breakout_body_vs_support_avg'] = breakout_body_vs_support_avg
 
         # DataFrame으로 변환 (모델 입력 형식)
         try:

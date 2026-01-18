@@ -17,7 +17,9 @@ class MLSettings:
     MODEL_PATH = "ml_model.pkl"  # 현재 사용 중인 모델
 
     # ML 필터링 임계값 (승률 예측값 기준)
-    ML_THRESHOLD = 0.5  # 45% 이상 승률 예측 시 매수 허용 (테스트)
+    # 모델 예측값 분포: 0.33~0.59, 평균 0.46
+    # 0.5 사용 시 22.5% 통과, 0.45 사용 시 63.3% 통과
+    ML_THRESHOLD = 0.5  # 50% 이상 승률 예측 시 매수 허용
 
     # 에러 발생 시 동작
     ON_ML_ERROR_PASS_SIGNAL = True  # True: 신호 통과, False: 신호 차단

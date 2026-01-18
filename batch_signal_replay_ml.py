@@ -74,14 +74,17 @@ def run_signal_replay_ml(date, time_range="9:00-16:00", ml_threshold=0.5):
     final_filename = os.path.join(log_dir, f"signal_ml_replay_{date}_{time_parts}.txt")
 
     try:
-        # 1단계: 일반 signal_replay 실행 (절대 경로 사용)
-        abs_temp_filename = os.path.abspath(temp_filename)
+        # 🆕 ML 필터 실시간 적용 방식 (1단계로 통합)
+        # signal_replay.py에 --ml-filter 옵션을 사용하여 실시간으로 ML 필터 적용
+        abs_final_filename = os.path.abspath(final_filename)
 
         cmd = [
             sys.executable, '-m', 'utils.signal_replay',
             '--date', date,
             '--export', 'txt',
-            '--txt-path', abs_temp_filename
+            '--txt-path', abs_final_filename,
+            '--ml-filter',  # 🆕 ML 필터 실시간 적용
+            '--ml-threshold', str(ml_threshold)
         ]
 
         result = subprocess.run(
@@ -102,65 +105,37 @@ def run_signal_replay_ml(date, time_range="9:00-16:00", ml_threshold=0.5):
                 'stats': {}
             }
 
-        # 임시 파일이 생성되었는지 확인 (절대 경로로)
-        if not os.path.exists(abs_temp_filename):
+        # 결과 파일이 생성되었는지 확인
+        if not os.path.exists(abs_final_filename):
             return {
                 'date': date,
                 'success': False,
-                'message': f"백테스트 출력 파일 없음: {abs_temp_filename}",
+                'message': f"결과 파일 없음: {abs_final_filename}",
                 'stats': {}
             }
 
-        # 2단계: ML 필터 적용 (절대 경로 사용)
-        abs_final_filename = os.path.abspath(final_filename)
-        apply_ml_filter_path = os.path.join(original_cwd, 'apply_ml_filter.py')
+        # 결과 파싱 (ML 필터 로그에서 통계 추출)
+        stats = {}
+        if result.stdout:
+            ml_blocked_count = 0
+            ml_passed_count = 0
+            for line in result.stdout.split('\n'):
+                if 'ML 필터 차단' in line:
+                    ml_blocked_count += 1
+                elif 'ML 필터 통과' in line:
+                    ml_passed_count += 1
 
-        ml_cmd = [
-            sys.executable, apply_ml_filter_path,
-            abs_temp_filename,
-            '--output', abs_final_filename,
-            '--threshold', str(ml_threshold)
-        ]
+            if ml_blocked_count > 0 or ml_passed_count > 0:
+                stats['total'] = ml_blocked_count + ml_passed_count
+                stats['passed'] = ml_passed_count
+                stats['blocked'] = ml_blocked_count
 
-        ml_result = subprocess.run(
-            ml_cmd,
-            capture_output=True,
-            text=True,
-            cwd=original_cwd,
-            encoding='utf-8',
-            errors='ignore'
-        )
-
-        if ml_result.returncode == 0:
-            # 임시 파일 삭제 (절대 경로로)
-            if os.path.exists(abs_temp_filename):
-                os.remove(abs_temp_filename)
-
-            # ML 필터 결과 파싱
-            stats = {}
-            if ml_result.stdout:
-                for line in ml_result.stdout.split('\n'):
-                    if '총 신호:' in line:
-                        stats['total'] = int(line.split(':')[1].split('개')[0].strip())
-                    elif '통과:' in line:
-                        stats['passed'] = int(line.split(':')[1].split('개')[0].strip())
-                    elif '차단:' in line:
-                        stats['blocked'] = int(line.split(':')[1].split('개')[0].strip())
-
-            return {
-                'date': date,
-                'success': True,
-                'message': f"완료: {final_filename}",
-                'stats': stats
-            }
-        else:
-            error_msg = ml_result.stderr.strip() if ml_result.stderr else "알 수 없는 오류"
-            return {
-                'date': date,
-                'success': False,
-                'message': f"ML 필터 오류: {error_msg}",
-                'stats': {}
-            }
+        return {
+            'date': date,
+            'success': True,
+            'message': f"완료",
+            'stats': stats
+        }
 
     except Exception as e:
         return {

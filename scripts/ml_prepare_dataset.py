@@ -54,8 +54,8 @@ def extract_features_from_pattern(pattern_data: Dict) -> Optional[Dict]:
     signal_info = pattern_data.get('signal_info', {})
     pattern_stages = pattern_data.get('pattern_stages', {})
 
-    # 타임스탬프에서 시간 정보 추출
-    timestamp_str = pattern_data.get('timestamp', '')
+    # 타임스탬프에서 시간 정보 추출 (signal_time 우선 사용)
+    timestamp_str = pattern_data.get('signal_time') or pattern_data.get('log_timestamp') or pattern_data.get('timestamp', '')
     try:
         dt = datetime.fromisoformat(timestamp_str)
         hour = dt.hour

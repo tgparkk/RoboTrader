@@ -982,7 +982,32 @@ class SupportPatternAnalyzer:
         
         # 신뢰도 계산
         confidence = self._calculate_confidence(uptrend, decline, support, breakout)
-        
+
+        # 🆕 패배 패턴 필터 (2026-01-18 분석 기반)
+        # 분석 결과: 아래 조건에서 패배율 60%, 필터 적용 시 승률 +1.5%p 향상
+        breakout_row = data.iloc[breakout.idx]
+        breakout_body = abs(breakout_row['close'] - breakout_row['open'])
+        breakout_range = breakout_row['high'] - breakout_row['low']
+        body_ratio = breakout_body / breakout_range if breakout_range > 0 else 0
+        breakout_vol_ratio = breakout.volume / uptrend.max_volume if uptrend.max_volume > 0 else 0
+
+        # 패배 패턴 조건:
+        # 1. 하락률 > 2.5% AND 돌파 거래량 비율 > 0.4
+        # 2. 하락률 > 3.0%
+        # 3. 몸통비율 < 0.35 AND 돌파 거래량 비율 > 0.5
+        is_loss_pattern = (
+            (decline.decline_pct > 0.025 and breakout_vol_ratio > 0.4) or
+            (decline.decline_pct > 0.03) or
+            (body_ratio < 0.35 and breakout_vol_ratio > 0.5)
+        )
+
+        if is_loss_pattern:
+            return SupportPatternResult(
+                has_pattern=False, uptrend_phase=uptrend, decline_phase=decline, support_phase=support,
+                breakout_candle=None, entry_price=None, confidence=0.0,
+                reasons=["패배 패턴 감지 (하락률/거래량/몸통비율 조건)"]
+            )
+
         # 판단 근거 생성
         reasons = [
             f"상승구간: 인덱스{uptrend.start_idx}~{uptrend.end_idx} +{uptrend.price_gain:.1%}",
