@@ -65,20 +65,30 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+from utils.data_cache import DailyDataCache
+
 # 전역 변수로 현재 처리 중인 종목코드 추적
 current_processing_stock = {'code': 'UNKNOWN'}
 
+# 일봉 캐시 매니저 (전역)
+_daily_cache = None
+
+def _get_daily_cache():
+    """일봉 캐시 매니저 가져오기 (싱글톤)"""
+    global _daily_cache
+    if _daily_cache is None:
+        _daily_cache = DailyDataCache()
+    return _daily_cache
+
 def load_daily_data(stock_code: str) -> Optional[pd.DataFrame]:
-    """일봉 데이터 로드"""
+    """일봉 데이터 로드 (DuckDB 우선, pkl 폴백)"""
     try:
-        daily_cache_dir = Path("cache/daily_data")
-        daily_file = daily_cache_dir / f"{stock_code}_daily.pkl"
-        
-        if not daily_file.exists():
+        # DuckDB에서 먼저 시도
+        daily_cache = _get_daily_cache()
+        data = daily_cache.load_data(stock_code)
+
+        if data is None:
             return None
-            
-        with open(daily_file, 'rb') as f:
-            data = pickle.load(f)
         
         # 컬럼명 정리 및 데이터 타입 변환
         if 'stck_bsop_date' in data.columns:
@@ -403,8 +413,16 @@ def list_all_buy_signals(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] 
         return []
 
 
-def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = None, *, logger: Optional[logging.Logger] = None, stock_code: str = "UNKNOWN", selection_date: Optional[str] = None, simulation_date: Optional[str] = None) -> List[Dict[str, object]]:
-    """매수신호 발생 시점에서 1분봉 기준으로 실제 거래를 시뮬레이션 (ML 필터 적용)"""
+def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = None, *, logger: Optional[logging.Logger] = None, stock_code: str = "UNKNOWN", selection_date: Optional[str] = None, simulation_date: Optional[str] = None, ml_filter_enabled: bool = False, ml_model=None, ml_feature_names=None, ml_threshold: float = 0.5, pattern_data_cache: Optional[Dict] = None) -> List[Dict[str, object]]:
+    """매수신호 발생 시점에서 1분봉 기준으로 실제 거래를 시뮬레이션 (ML 필터 실시간 적용)
+
+    Args:
+        ml_filter_enabled: ML 필터 사용 여부
+        ml_model: ML 모델 객체
+        ml_feature_names: ML 모델 특성 이름 목록
+        ml_threshold: ML 임계값 (기본 0.5)
+        pattern_data_cache: 패턴 데이터 캐시 (signal_time -> pattern_data)
+    """
 
     if df_3min is None or df_3min.empty:
         return []
@@ -615,8 +633,57 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                     if logger:
                         logger.warning(f"⚠️ [{stock_code}] 일봉 필터 적용 실패: {e}")
                     # 필터 오류 시에도 거래 진행 (안전장치)
-            
-            
+
+            # ==================== 🆕 ML 필터 실시간 적용 ====================
+            # 실전과 동일하게 패턴 신호 발생 시점에 즉시 ML 필터 적용
+            # ML 필터에서 차단되면 쿨다운을 설정하지 않고 다음 신호로 넘어감
+            if ml_filter_enabled and ml_model is not None and ml_feature_names is not None:
+                try:
+                    # 패턴 데이터 캐시에서 해당 신호의 패턴 찾기
+                    signal_time_key = signal_completion_time.strftime('%H:%M')
+                    pattern_data = None
+
+                    if pattern_data_cache:
+                        # 정확히 일치하는 시간 또는 ±3분 이내의 패턴 찾기
+                        for pattern_key, pdata in pattern_data_cache.items():
+                            if stock_code in pattern_key:
+                                pattern_signal_time = pdata.get('signal_time', '')
+                                if pattern_signal_time:
+                                    try:
+                                        pst = datetime.strptime(pattern_signal_time, '%Y-%m-%d %H:%M:%S')
+                                        # signal_completion_time과 3분 이내 매칭
+                                        time_diff = abs((pst - signal_completion_time).total_seconds())
+                                        if time_diff <= 180:  # 3분 이내
+                                            pattern_data = pdata
+                                            break
+                                    except:
+                                        pass
+
+                    if pattern_data:
+                        # apply_ml_filter.py의 extract_features_from_pattern 함수 사용
+                        from apply_ml_filter import extract_features_from_pattern, predict_win_probability
+
+                        win_prob, status = predict_win_probability(
+                            ml_model, ml_feature_names, signal, pattern_data
+                        )
+
+                        if win_prob < ml_threshold:
+                            if logger:
+                                logger.info(f"🤖 [{signal_completion_time.strftime('%H:%M')}] {stock_code} ML 필터 차단: {win_prob:.1%} < {ml_threshold:.1%}")
+                            # ML 필터에서 차단 - 쿨다운 설정하지 않고 다음 신호로
+                            continue
+                        else:
+                            if logger:
+                                logger.debug(f"✅ [{signal_completion_time.strftime('%H:%M')}] {stock_code} ML 필터 통과: {win_prob:.1%}")
+                    else:
+                        if logger:
+                            logger.debug(f"⚠️ [{signal_completion_time.strftime('%H:%M')}] {stock_code} ML 필터용 패턴 데이터 없음 - 거래 진행")
+
+                except Exception as e:
+                    if logger:
+                        logger.warning(f"⚠️ [{stock_code}] ML 필터 적용 실패: {e}")
+                    # ML 필터 오류 시에도 거래 진행 (안전장치)
+
             # ==================== 🆕 돌파봉 4/5 가격 조건 체크 ====================
             
             # 돌파봉이 확정된 후, 다음 2개의 3분봉에서 4/5가에 도달하는지 확인
@@ -1134,6 +1201,9 @@ def main():
     parser.add_argument("--txt-path", default="signal_replay.txt", help="TXT 저장 경로 (기본: signal_replay.txt)")
     parser.add_argument("--charts", action="store_true", help="3분봉 차트 생성 (거래량, 이등분선, 매수/매도 포인트 포함)")
     parser.add_argument("--use-dynamic-profit-loss", action="store_true", help="동적 손익비 모드 사용 (환경 변수 설정용)")
+    parser.add_argument("--ml-filter", action="store_true", help="ML 필터 실시간 적용 (실전과 동일하게 신호 시점에 즉시 필터링)")
+    parser.add_argument("--ml-model", default="ml_model.pkl", help="ML 모델 파일 경로 (기본: ml_model.pkl)")
+    parser.add_argument("--ml-threshold", type=float, default=None, help="ML 필터 임계값 (기본: config/ml_settings.py의 ML_THRESHOLD)")
 
     args = parser.parse_args()
 
@@ -1204,6 +1274,60 @@ def main():
         logger.error(f"❌ KIS API 매니저 초기화 실패: {e}")
         sys.exit(1)
 
+    # ==================== 🆕 ML 필터 초기화 ====================
+    ml_filter_enabled = args.ml_filter
+    ml_model = None
+    ml_feature_names = None
+    ml_threshold = 0.5
+    pattern_data_cache = {}  # {pattern_id: pattern_data}
+
+    if ml_filter_enabled:
+        logger.info(f"🤖 ML 필터 실시간 적용 모드 활성화")
+
+        # ML 임계값 로드
+        if args.ml_threshold is not None:
+            ml_threshold = args.ml_threshold
+        else:
+            try:
+                from config.ml_settings import MLSettings
+                ml_threshold = MLSettings.ML_THRESHOLD
+            except:
+                ml_threshold = 0.5
+        logger.info(f"   ML 임계값: {ml_threshold:.1%}")
+
+        # ML 모델 로드
+        try:
+            from apply_ml_filter import load_ml_model
+            ml_model, ml_feature_names = load_ml_model(args.ml_model)
+            if ml_model is None:
+                logger.warning(f"⚠️ ML 모델 로드 실패 - ML 필터 비활성화")
+                ml_filter_enabled = False
+        except Exception as e:
+            logger.warning(f"⚠️ ML 모델 로드 실패: {e} - ML 필터 비활성화")
+            ml_filter_enabled = False
+
+        # 패턴 데이터 로드
+        if ml_filter_enabled:
+            try:
+                import json
+                pattern_log_file = Path(f"pattern_data_log/pattern_data_{date_str}.jsonl")
+                if pattern_log_file.exists():
+                    with open(pattern_log_file, 'r', encoding='utf-8') as f:
+                        for line in f:
+                            if line.strip():
+                                try:
+                                    record = json.loads(line)
+                                    pattern_id = record.get('pattern_id', '')
+                                    if pattern_id:
+                                        pattern_data_cache[pattern_id] = record
+                                except:
+                                    pass
+                    logger.info(f"   패턴 데이터 로드: {len(pattern_data_cache)}개")
+                else:
+                    logger.warning(f"⚠️ 패턴 데이터 파일 없음: {pattern_log_file}")
+            except Exception as e:
+                logger.warning(f"⚠️ 패턴 데이터 로드 실패: {e}")
+
     # 병렬 처리를 위한 함수 정의
     def process_single_stock(stock_code: str) -> Tuple[str, List[Dict[str, object]], pd.DataFrame]:
         """단일 종목 처리 함수"""
@@ -1221,12 +1345,13 @@ def main():
 
             # 과거 날짜인 경우 캐시 먼저 확인
             if date_str != today_str:
-                cache_file = Path(f"cache/minute_data/{stock_code}_{date_str}.pkl")
+                # DuckDB에서 먼저 시도
+                from utils.data_cache import DataCache
+                minute_cache = DataCache()
+                cached_data = minute_cache.load_data(stock_code, date_str)
 
-                if cache_file.exists():
+                if cached_data is not None:
                     try:
-                        with open(cache_file, 'rb') as f:
-                            cached_data = pickle.load(f)
 
                         # 데이터 품질 검증: 동적 시장 시간대 포함 확인
                         if not cached_data.empty and 'datetime' in cached_data.columns:
@@ -1278,13 +1403,9 @@ def main():
                             df_1min = loop.run_until_complete(dp.get_historical_chart_data(stock_code, date_str))
                             logger.info(f"✅ [{stock_code}] API 데이터 수신 완료")
 
-                            # API로 조회한 데이터를 캐시에 저장 (save_candidate_data.py 방식)
+                            # API로 조회한 데이터를 DuckDB에 캐시 저장
                             if df_1min is not None and not df_1min.empty:
-                                cache_file.parent.mkdir(parents=True, exist_ok=True)
-
-                                # pickle로 저장
-                                with open(cache_file, 'wb') as f:
-                                    pickle.dump(df_1min, f)
+                                minute_cache.save_data(stock_code, date_str, df_1min)
 
                                 # 시간 범위 정보
                                 time_info = ""
@@ -1298,7 +1419,7 @@ def main():
                                     if hasattr(start_dt, 'strftime') and hasattr(end_dt, 'strftime'):
                                         time_info = f" ({start_dt.strftime('%H%M%S')}~{end_dt.strftime('%H%M%S')})"
 
-                                logger.info(f"💾 [{stock_code}] 캐시 저장 완료: {len(df_1min)}건{time_info}")
+                                logger.info(f"💾 [{stock_code}] DuckDB 캐시 저장 완료: {len(df_1min)}건{time_info}")
                         finally:
                             loop.close()
                     except Exception as e:
@@ -1316,9 +1437,20 @@ def main():
                 logger.warning(f"⚠️  [{stock_code}] 3분봉 변환 실패")
                 return stock_code, []
 
-            # 거래 시뮬레이션 실행
+            # 거래 시뮬레이션 실행 (🆕 ML 필터 매개변수 전달)
             selection_date = stock_selection_map.get(stock_code)
-            simulation_result = simulate_trades(df_3min, df_1min, logger=logger, stock_code=stock_code, selection_date=selection_date, simulation_date=date_str)
+            simulation_result = simulate_trades(
+                df_3min, df_1min,
+                logger=logger,
+                stock_code=stock_code,
+                selection_date=selection_date,
+                simulation_date=date_str,
+                ml_filter_enabled=ml_filter_enabled,
+                ml_model=ml_model,
+                ml_feature_names=ml_feature_names,
+                ml_threshold=ml_threshold,
+                pattern_data_cache=pattern_data_cache
+            )
             
             # 반환값 처리 (기존 호환성 유지)
             if isinstance(simulation_result, dict):

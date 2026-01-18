@@ -16,6 +16,7 @@ import re
 
 from utils.logger import setup_logger
 from utils.korean_time import now_kst
+from utils.data_cache import DailyDataCache
 
 
 @dataclass
@@ -159,16 +160,13 @@ class DailyPatternAnalyzer:
             return None
     
     def load_daily_data(self, stock_code: str, date_str: str) -> Optional[pd.DataFrame]:
-        """일봉 데이터 로드"""
+        """일봉 데이터 로드 (DuckDB)"""
         try:
-            daily_cache_dir = Path("cache/daily_data")
-            daily_file = daily_cache_dir / f"{stock_code}_daily.pkl"
-            
-            if not daily_file.exists():
+            daily_cache = DailyDataCache()
+            data = daily_cache.load_data(stock_code)
+
+            if data is None or data.empty:
                 return None
-                
-            with open(daily_file, 'rb') as f:
-                data = pickle.load(f)
             
             # 컬럼명 정리 및 데이터 타입 변환
             if 'stck_bsop_date' in data.columns:

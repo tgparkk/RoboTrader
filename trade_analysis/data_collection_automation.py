@@ -16,14 +16,16 @@ import time
 from api.kis_market_api import get_inquire_daily_itemchartprice
 from utils.logger import setup_logger
 from utils.korean_time import now_kst
+from utils.data_cache import DailyDataCache
 
 class DataCollectionAutomation:
     """데이터 수집 자동화"""
-    
+
     def __init__(self, logger=None):
         self.logger = logger or setup_logger(__name__)
         self.cache_dir = Path("cache/daily_data")
         self.cache_dir.mkdir(exist_ok=True)
+        self.daily_cache = DailyDataCache()
         
     def collect_extended_data(self, start_date: str, end_date: str, stock_codes: List[str]):
         """확장된 기간의 데이터 수집"""
@@ -124,15 +126,13 @@ class DataCollectionAutomation:
             return None
     
     def _save_collected_data(self, collected_data: Dict[str, pd.DataFrame]):
-        """수집된 데이터 저장"""
+        """수집된 데이터 DuckDB에 저장"""
         try:
             for stock_code, data in collected_data.items():
-                file_path = self.cache_dir / f"{stock_code}_daily.pkl"
-                with open(file_path, 'wb') as f:
-                    pickle.dump(data, f)
-            
-            self.logger.info(f"💾 {len(collected_data)}개 종목 데이터 저장 완료")
-            
+                self.daily_cache.save_data(stock_code, data)
+
+            self.logger.info(f"💾 {len(collected_data)}개 종목 데이터 DuckDB 저장 완료")
+
         except Exception as e:
             self.logger.error(f"데이터 저장 실패: {e}")
     
@@ -248,25 +248,18 @@ class DataCollectionAutomation:
             return {}
     
     def _save_market_data(self, stock_data: Dict[str, pd.DataFrame], index_data: Dict[str, pd.DataFrame]):
-        """시장 데이터 저장"""
+        """시장 데이터 DuckDB에 저장"""
         try:
             # 종목 데이터 저장
             for stock_code, data in stock_data.items():
-                file_path = self.cache_dir / f"{stock_code}_daily.pkl"
-                with open(file_path, 'wb') as f:
-                    pickle.dump(data, f)
-            
-            # 지수 데이터 저장
-            index_dir = Path("cache/index_data")
-            index_dir.mkdir(exist_ok=True)
-            
+                self.daily_cache.save_data(stock_code, data)
+
+            # 지수 데이터 저장 (DuckDB에 지수 테이블로 저장)
             for index_name, data in index_data.items():
-                file_path = index_dir / f"{index_name}_daily.pkl"
-                with open(file_path, 'wb') as f:
-                    pickle.dump(data, f)
-            
-            self.logger.info(f" 시장 데이터 저장 완료: {len(stock_data)}개 종목, {len(index_data)}개 지수")
-            
+                self.daily_cache.save_data(index_name, data)
+
+            self.logger.info(f" 시장 데이터 DuckDB 저장 완료: {len(stock_data)}개 종목, {len(index_data)}개 지수")
+
         except Exception as e:
             self.logger.error(f"시장 데이터 저장 실패: {e}")
 

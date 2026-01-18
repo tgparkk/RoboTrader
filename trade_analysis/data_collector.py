@@ -22,6 +22,7 @@ from api.kis_chart_api import get_historical_minute_data, get_inquire_time_daily
 from api.kis_auth import KisAuth
 from utils.logger import setup_logger
 from utils.korean_time import now_kst
+from utils.data_cache import DataCache, DailyDataCache
 
 logger = setup_logger(__name__)
 
@@ -41,9 +42,9 @@ class AnalysisDataCollector:
             db_path = project_root / "data" / "robotrader.db"
         self.db_path = str(db_path)
 
-        # 캐시 디렉토리 설정
-        self.daily_cache_dir = project_root / "cache" / "daily_data"
-        self.minute_cache_dir = project_root / "cache" / "minute_data"
+        # DuckDB 캐시 매니저
+        self.minute_cache = DataCache()
+        self.daily_cache = DailyDataCache()
 
         # 데이터베이스 매니저 초기화
         self.db_manager = DatabaseManager(self.db_path)
@@ -244,34 +245,22 @@ class AnalysisDataCollector:
             pd.DataFrame: 일봉 데이터 또는 None
         """
         try:
-            cache_file = self.daily_cache_dir / f"{stock_code}_daily.pkl"
+            # DuckDB에서 로드
+            data = self.daily_cache.load_data(stock_code)
 
-            if not cache_file.exists():
+            if data is None or data.empty:
                 return None
 
-            with open(cache_file, 'rb') as f:
-                data = pickle.load(f)
+            # 날짜 필터링 (stck_bsop_date 컬럼 사용)
+            if 'stck_bsop_date' in data.columns:
+                filtered_data = data[data['stck_bsop_date'] == date_str]
+                if not filtered_data.empty:
+                    self.logger.debug(f"일봉 캐시에서 로드: {stock_code} {date_str} ({len(filtered_data)}건)")
+                    return filtered_data
 
-            if isinstance(data, pd.DataFrame) and not data.empty:
-                # 날짜 필터링
-                if 'date' in data.columns:
-                    filtered_data = data[data['date'] == date_str]
-                    if not filtered_data.empty:
-                        self.logger.debug(f"일봉 캐시에서 로드: {stock_code} {date_str} ({len(filtered_data)}건)")
-                        return filtered_data
-                elif 'datetime' in data.columns:
-                    # datetime 컬럼이 있는 경우
-                    data['date'] = data['datetime'].dt.strftime('%Y%m%d')
-                    filtered_data = data[data['date'] == date_str]
-                    if not filtered_data.empty:
-                        self.logger.debug(f"일봉 캐시에서 로드: {stock_code} {date_str} ({len(filtered_data)}건)")
-                        return filtered_data
-
-                # 날짜 컬럼이 없는 경우 전체 데이터 반환 (하루치 데이터라고 가정)
-                self.logger.debug(f"일봉 캐시에서 로드: {stock_code} {date_str} ({len(data)}건)")
-                return data
-
-            return None
+            # 전체 데이터 반환
+            self.logger.debug(f"일봉 캐시에서 로드: {stock_code} {date_str} ({len(data)}건)")
+            return data
 
         except Exception as e:
             self.logger.error(f"일봉 캐시 로드 실패 ({stock_code}, {date_str}): {e}")
@@ -289,15 +278,10 @@ class AnalysisDataCollector:
             pd.DataFrame: 분봉 데이터 또는 None
         """
         try:
-            cache_file = self.minute_cache_dir / f"{stock_code}_{date_str}.pkl"
+            # DuckDB에서 로드
+            data = self.minute_cache.load_data(stock_code, date_str)
 
-            if not cache_file.exists():
-                return None
-
-            with open(cache_file, 'rb') as f:
-                data = pickle.load(f)
-
-            if isinstance(data, pd.DataFrame) and not data.empty:
+            if data is not None and not data.empty:
                 self.logger.debug(f"분봉 캐시에서 로드: {stock_code} {date_str} ({len(data)}건)")
                 return data
 
@@ -455,58 +439,35 @@ class AnalysisDataCollector:
         return None
 
     def _save_daily_data_to_cache(self, stock_code: str, date_str: str, data: pd.DataFrame):
-        """일봉 데이터를 캐시에 저장 (새로운 구조: 종목별 통합 파일 업데이트)"""
+        """일봉 데이터를 DuckDB 캐시에 저장"""
         try:
-            cache_file = self.daily_cache_dir / f"{stock_code}_daily.pkl"
-            cache_file.parent.mkdir(parents=True, exist_ok=True)
+            # 기존 데이터 로드 후 병합
+            existing_data = self.daily_cache.load_data(stock_code)
 
-            # 기존 데이터 로드
-            existing_data = None
-            if cache_file.exists():
-                try:
-                    with open(cache_file, 'rb') as f:
-                        existing_data = pickle.load(f)
-                except:
-                    existing_data = None
-
-            # 새 데이터에 날짜 컬럼 추가
-            if 'date' not in data.columns:
-                data = data.copy()
-                data['date'] = date_str
-
-            if existing_data is not None and isinstance(existing_data, pd.DataFrame):
-                # 기존 데이터와 병합
-                # 같은 날짜의 데이터가 있으면 제거하고 새 데이터로 교체
-                if 'date' in existing_data.columns:
-                    existing_data = existing_data[existing_data['date'] != date_str]
+            if existing_data is not None and not existing_data.empty:
+                # 같은 날짜의 데이터가 있으면 제거
+                if 'stck_bsop_date' in existing_data.columns:
+                    existing_data = existing_data[existing_data['stck_bsop_date'] != date_str]
 
                 # 새 데이터와 병합
                 combined_data = pd.concat([existing_data, data], ignore_index=True)
-                # 날짜순으로 정렬
-                if 'date' in combined_data.columns:
-                    combined_data = combined_data.sort_values('date')
+                if 'stck_bsop_date' in combined_data.columns:
+                    combined_data = combined_data.sort_values('stck_bsop_date')
             else:
                 combined_data = data
 
-            # 통합된 데이터 저장
-            with open(cache_file, 'wb') as f:
-                pickle.dump(combined_data, f)
-
-            self.logger.debug(f"일봉 데이터 캐시 저장: {stock_code} {date_str} (총 {len(combined_data)}건)")
+            # DuckDB에 저장
+            self.daily_cache.save_data(stock_code, combined_data)
+            self.logger.debug(f"일봉 데이터 DuckDB 저장: {stock_code} {date_str} (총 {len(combined_data)}건)")
 
         except Exception as e:
             self.logger.error(f"일봉 데이터 캐시 저장 실패 ({stock_code}, {date_str}): {e}")
 
     def _save_minute_data_to_cache(self, stock_code: str, date_str: str, data: pd.DataFrame):
-        """분봉 데이터를 캐시에 저장"""
+        """분봉 데이터를 DuckDB 캐시에 저장"""
         try:
-            cache_file = self.minute_cache_dir / f"{stock_code}_{date_str}.pkl"
-            cache_file.parent.mkdir(parents=True, exist_ok=True)
-
-            with open(cache_file, 'wb') as f:
-                pickle.dump(data, f)
-
-            self.logger.debug(f"분봉 데이터 캐시 저장: {stock_code} {date_str}")
+            self.minute_cache.save_data(stock_code, date_str, data)
+            self.logger.debug(f"분봉 데이터 DuckDB 저장: {stock_code} {date_str}")
 
         except Exception as e:
             self.logger.error(f"분봉 데이터 캐시 저장 실패 ({stock_code}, {date_str}): {e}")

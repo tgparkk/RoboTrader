@@ -18,10 +18,20 @@ sys.path.append(str(project_root))
 
 from utils.logger import setup_logger
 from utils.korean_time import now_kst
+from utils.data_cache import DataCache
 from api.kis_auth import KisAuth
 from api.kis_chart_api import get_historical_minute_data, get_inquire_time_dailychartprice
 
 logger = setup_logger(__name__)
+
+# 분봉 캐시 매니저
+_minute_cache = None
+
+def _get_minute_cache():
+    global _minute_cache
+    if _minute_cache is None:
+        _minute_cache = DataCache()
+    return _minute_cache
 
 
 def check_minute_data_sufficiency(stock_code: str, date_str: str, required_count: int = 15) -> bool:
@@ -37,19 +47,11 @@ def check_minute_data_sufficiency(stock_code: str, date_str: str, required_count
         bool: 데이터가 충분한지 여부
     """
     try:
-        # 분봉 캐시 파일 경로
-        minute_cache_dir = project_root / "cache" / "minute_data"
-        cache_file = minute_cache_dir / f"{stock_code}_{date_str}.pkl"
-        
-        if not cache_file.exists():
-            logger.warning(f"❌ {stock_code} {date_str} 분봉 캐시 파일 없음")
-            return False
-        
-        # 캐시에서 데이터 로드
-        with open(cache_file, 'rb') as f:
-            minute_data = pickle.load(f)
-        
-        if not isinstance(minute_data, pd.DataFrame) or minute_data.empty:
+        # DuckDB에서 데이터 로드
+        cache = _get_minute_cache()
+        minute_data = cache.load_data(stock_code, date_str)
+
+        if minute_data is None or minute_data.empty:
             logger.warning(f"❌ {stock_code} {date_str} 분봉 데이터 없음")
             return False
         
@@ -157,14 +159,11 @@ def save_minute_data_to_cache(stock_code: str, date_str: str, data: pd.DataFrame
             logger.error(f"❌ {stock_code} 당일 데이터 없음 (캐시 저장 중단)")
             return
         
-        minute_cache_dir = project_root / "cache" / "minute_data"
-        minute_cache_dir.mkdir(parents=True, exist_ok=True)
-        
-        cache_file = minute_cache_dir / f"{stock_code}_{date_str}.pkl"
-        with open(cache_file, 'wb') as f:
-            pickle.dump(filtered_data, f)
-        
-        logger.debug(f"분봉 데이터 캐시 저장: {stock_code} {date_str} ({len(filtered_data)}건)")
+        # DuckDB에 저장
+        cache = _get_minute_cache()
+        cache.save_data(stock_code, date_str, filtered_data)
+
+        logger.debug(f"분봉 데이터 DuckDB 저장: {stock_code} {date_str} ({len(filtered_data)}건)")
         
     except Exception as e:
         logger.error(f"분봉 데이터 캐시 저장 실패 ({stock_code}, {date_str}): {e}")

@@ -29,6 +29,7 @@ import pandas as pd
 sys.path.append(str(Path(__file__).parent))
 
 from utils.logger import setup_logger
+from utils.data_cache import DataCache, DailyDataCache
 from api.kis_api_manager import KISAPIManager
 from api.kis_chart_api import get_full_trading_day_data_async
 from api.kis_market_api import get_inquire_daily_itemchartprice
@@ -49,6 +50,10 @@ class CandidateDataSaver:
         self.cache_dir = Path("cache")
         self.daily_dir = self.cache_dir / "daily"
         self.minute_dir = self.cache_dir / "minute_data"
+
+        # DuckDB 캐시 매니저
+        self.minute_cache = DataCache()
+        self.daily_cache = DailyDataCache()
 
         # 디렉토리 생성
         self._ensure_directories()
@@ -238,12 +243,9 @@ class CandidateDataSaver:
             bool: 저장 성공 여부
         """
         try:
-            # 파일명 생성
-            minute_file = self.minute_dir / f"{stock_code}_{target_date}.pkl"
-
-            # 이미 파일이 존재하면 스킵
-            if minute_file.exists():
-                self.logger.debug(f"📉 {stock_code} 분봉 데이터 이미 존재 (스킵): {minute_file.name}")
+            # DuckDB에 데이터 존재 확인
+            if self.minute_cache.has_data(stock_code, target_date):
+                self.logger.debug(f"📉 {stock_code} 분봉 데이터 이미 존재 (스킵)")
                 return True
 
             # 🆕 동적 시장 거래시간 가져오기
@@ -275,9 +277,8 @@ class CandidateDataSaver:
                 self.logger.warning(f"❌ {stock_code} 분봉 데이터 비어있음")
                 return False
 
-            # pickle로 저장
-            with open(minute_file, 'wb') as f:
-                pickle.dump(minute_data, f)
+            # DuckDB에 저장
+            self.minute_cache.save_data(stock_code, target_date, minute_data)
 
             # 시간 범위 정보
             time_info = ""
@@ -291,7 +292,7 @@ class CandidateDataSaver:
                 if hasattr(start_dt, 'strftime') and hasattr(end_dt, 'strftime'):
                     time_info = f" ({start_dt.strftime('%H%M%S')}~{end_dt.strftime('%H%M%S')})"
 
-            self.logger.info(f"✅ {stock_code} 분봉 데이터 저장 완료: {data_count}건{time_info}")
+            self.logger.info(f"✅ {stock_code} 분봉 데이터 DuckDB 저장 완료: {data_count}건{time_info}")
             return True
 
         except Exception as e:
@@ -311,12 +312,9 @@ class CandidateDataSaver:
             bool: 저장 성공 여부
         """
         try:
-            # 파일명 생성 (종목코드 + 선정날짜 조합)
-            daily_file = self.daily_dir / f"{stock_code}_{target_date}_daily.pkl"
-
-            # 이미 파일이 존재하면 스킵
-            if daily_file.exists():
-                self.logger.debug(f"{stock_code} 일봉 데이터 이미 존재 (스킵): {daily_file.name}")
+            # DuckDB에 충분한 데이터 존재 확인
+            if self.daily_cache.has_data(stock_code, min_records=days_back):
+                self.logger.debug(f"{stock_code} 일봉 데이터 이미 존재 (스킵)")
                 return True
 
             # 날짜 계산 (주말/휴일 고려해서 여유있게)
@@ -349,9 +347,8 @@ class CandidateDataSaver:
                 daily_data = daily_data.tail(days_back)
                 self.logger.debug(f"📈 {stock_code} 일봉 데이터 {original_count}건 → {days_back}건으로 조정")
 
-            # pickle로 저장
-            with open(daily_file, 'wb') as f:
-                pickle.dump(daily_data, f)
+            # DuckDB에 저장
+            self.daily_cache.save_data(stock_code, daily_data)
 
             # 날짜 범위 정보
             date_info = ""
@@ -360,7 +357,7 @@ class CandidateDataSaver:
                 end_date_actual = daily_data.iloc[-1]['stck_bsop_date']
                 date_info = f" ({start_date_actual}~{end_date_actual})"
 
-            self.logger.info(f"{stock_code} 일봉 데이터 저장 완료: {len(daily_data)}일치{date_info}")
+            self.logger.info(f"{stock_code} 일봉 데이터 DuckDB 저장 완료: {len(daily_data)}일치{date_info}")
             return True
 
         except Exception as e:

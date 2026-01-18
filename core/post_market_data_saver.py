@@ -1,10 +1,9 @@
 """
 장 마감 후 데이터 저장 전담 모듈
-- 분봉 데이터 저장 (cache/minute_data/)
-- 일봉 데이터 저장 (cache/daily/)
+- 분봉 데이터 저장 (DuckDB: cache/market_data_v2.duckdb)
+- 일봉 데이터 저장 (DuckDB: cache/market_data_v2.duckdb)
 - 텍스트 파일 저장 (디버깅용)
 """
-import pickle
 import pandas as pd
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -12,6 +11,7 @@ from datetime import datetime, timedelta
 
 from utils.logger import setup_logger
 from utils.korean_time import now_kst
+from utils.data_cache import DataCache, DailyDataCache
 from api.kis_market_api import get_inquire_daily_itemchartprice
 
 
@@ -21,14 +21,12 @@ class PostMarketDataSaver:
     def __init__(self):
         """초기화"""
         self.logger = setup_logger(__name__)
-        self.minute_cache_dir = Path("cache/minute_data")
-        self.daily_cache_dir = Path("cache/daily")
 
-        # 디렉토리 생성
-        self.minute_cache_dir.mkdir(parents=True, exist_ok=True)
-        self.daily_cache_dir.mkdir(parents=True, exist_ok=True)
+        # DuckDB 캐시 매니저
+        self.minute_cache = DataCache()
+        self.daily_cache = DailyDataCache()
 
-        self.logger.info("장 마감 후 데이터 저장기 초기화 완료")
+        self.logger.info("장 마감 후 데이터 저장기 초기화 완료 (DuckDB 모드)")
 
     def save_minute_data_to_cache(self, intraday_manager) -> Dict[str, int]:
         """
@@ -84,15 +82,12 @@ class PostMarketDataSaver:
                         failed_count += 1
                         continue
 
-                    # 파일명: 종목코드_날짜.pkl
-                    cache_file = self.minute_cache_dir / f"{stock_code}_{today}.pkl"
-
-                    # pickle로 저장
-                    with open(cache_file, 'wb') as f:
-                        pickle.dump(combined_data, f)
-
-                    saved_count += 1
-                    self.logger.debug(f"💾 [{stock_code}] 분봉 캐시 저장: {len(combined_data)}건 → {cache_file.name}")
+                    # DuckDB에 저장
+                    if self.minute_cache.save_data(stock_code, today, combined_data):
+                        saved_count += 1
+                        self.logger.debug(f"💾 [{stock_code}] 분봉 캐시 저장: {len(combined_data)}건")
+                    else:
+                        failed_count += 1
 
                 except Exception as e:
                     self.logger.error(f"❌ [{stock_code}] 분봉 캐시 저장 실패: {e}")
@@ -187,13 +182,10 @@ class PostMarketDataSaver:
 
             for stock_code in stock_codes:
                 try:
-                    # 파일명 생성
-                    daily_file = self.daily_cache_dir / f"{stock_code}_{target_date}_daily.pkl"
-
-                    # 이미 파일이 존재하면 스킵
-                    if daily_file.exists():
-                        self.logger.debug(f"⏭️ [{stock_code}] 일봉 데이터 이미 존재 (스킵): {daily_file.name}")
-                        saved_count += 1  # 이미 있는 것도 성공으로 카운트
+                    # DuckDB에 이미 충분한 데이터가 있으면 스킵
+                    if self.daily_cache.has_data(stock_code, min_records=days_back):
+                        self.logger.debug(f"⏭️ [{stock_code}] 일봉 데이터 이미 존재 (스킵)")
+                        saved_count += 1
                         continue
 
                     # 날짜 계산 (주말/휴일 고려해서 여유있게)
@@ -227,19 +219,19 @@ class PostMarketDataSaver:
                         daily_data = daily_data.tail(days_back)
                         self.logger.debug(f"📈 [{stock_code}] 일봉 데이터 {original_count}건 → {days_back}건으로 조정")
 
-                    # pickle로 저장
-                    with open(daily_file, 'wb') as f:
-                        pickle.dump(daily_data, f)
+                    # DuckDB에 저장
+                    if self.daily_cache.save_data(stock_code, daily_data):
+                        # 날짜 범위 정보
+                        date_info = ""
+                        if 'stck_bsop_date' in daily_data.columns and not daily_data.empty:
+                            start_date_actual = daily_data.iloc[0]['stck_bsop_date']
+                            end_date_actual = daily_data.iloc[-1]['stck_bsop_date']
+                            date_info = f" ({start_date_actual}~{end_date_actual})"
 
-                    # 날짜 범위 정보
-                    date_info = ""
-                    if 'stck_bsop_date' in daily_data.columns and not daily_data.empty:
-                        start_date_actual = daily_data.iloc[0]['stck_bsop_date']
-                        end_date_actual = daily_data.iloc[-1]['stck_bsop_date']
-                        date_info = f" ({start_date_actual}~{end_date_actual})"
-
-                    saved_count += 1
-                    self.logger.info(f"✅ [{stock_code}] 일봉 데이터 저장 완료: {len(daily_data)}일치{date_info}")
+                        saved_count += 1
+                        self.logger.info(f"✅ [{stock_code}] 일봉 데이터 저장 완료: {len(daily_data)}일치{date_info}")
+                    else:
+                        failed_count += 1
 
                 except Exception as e:
                     self.logger.error(f"❌ [{stock_code}] 일봉 데이터 저장 실패: {e}")
@@ -289,15 +281,15 @@ class PostMarketDataSaver:
             self.logger.info(f"📋 대상 종목: {len(stock_codes)}개")
             self.logger.info(f"   종목 코드: {', '.join(stock_codes)}")
 
-            # 1. 분봉 데이터 저장 (pkl)
+            # 1. 분봉 데이터 저장 (DuckDB)
             self.logger.info("\n" + "=" * 80)
-            self.logger.info("1️⃣ 분봉 데이터 pkl 저장")
+            self.logger.info("1️⃣ 분봉 데이터 DuckDB 저장")
             self.logger.info("=" * 80)
             minute_result = self.save_minute_data_to_cache(intraday_manager)
 
-            # 2. 일봉 데이터 저장 (pkl)
+            # 2. 일봉 데이터 저장 (DuckDB)
             self.logger.info("\n" + "=" * 80)
-            self.logger.info("2️⃣ 일봉 데이터 pkl 저장")
+            self.logger.info("2️⃣ 일봉 데이터 DuckDB 저장")
             self.logger.info("=" * 80)
             daily_result = self.save_daily_data(stock_codes)
 

@@ -66,3 +66,28 @@
 - 현재 사용 중: ml_model.pkl (config/ml_settings.py)
 - ml_model_merged.pkl은 AUC 0.75로 높지만, 실전에서는 ml_model.pkl이 더 우수
 - 실제 성능: 승률 52.1%, 거래당 평균 +7,238원
+
+---
+
+## 데이터 캐시 시스템 (2026-01-18 업데이트)
+
+### DuckDB 마이그레이션 완료
+- **기존**: pkl 파일 기반 캐시 (cache/minute_data/*.pkl, cache/daily/*.pkl)
+- **현재**: DuckDB 기반 캐시 (`cache/market_data_v2.duckdb`)
+
+### 테이블 구조
+- **분봉 데이터**: `minute_{종목코드}` 테이블 (예: `minute_005930`)
+- **일봉 데이터**: `daily_{종목코드}` 테이블 (예: `daily_005930`)
+- 약 750개 분봉 테이블, 747개 일봉 테이블
+
+### 주요 클래스
+- `DataCache` (utils/data_cache.py): 분봉 데이터 캐시 관리
+- `DailyDataCache` (utils/data_cache.py): 일봉 데이터 캐시 관리
+
+### 데이터 로드 우선순위
+1. DuckDB에서 로드 시도
+2. DuckDB에 없으면 pkl 파일에서 폴백 로드 (하위 호환성)
+
+### gitignore 처리
+- `cache/daily/`, `cache/minute_data/`, `cache/*.duckdb` - git 추적 제외
+- `signal_replay_log/`, `signal_replay_log_ml/` - git 추적 제외
