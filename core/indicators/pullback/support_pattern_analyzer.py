@@ -383,8 +383,26 @@ class SupportPatternAnalyzer:
         opens = numpy_arrays['open'][start_idx:end_idx+1]
         closes = numpy_arrays['close'][start_idx:end_idx+1]
         
-        # 🆕 당일 전체 최대 거래량을 기준거래량으로 사용
-        max_volume = numpy_arrays['volume'].max()
+        # 🆕 기준 거래량 개선: 상승 구간 내 최대 거래량 사용 (기존: 전체 데이터 최대값)
+        # 상승 구간 내에서 터진 최대 거래량을 기준으로 삼아야 함
+        max_vol_idx_in_slice = np.argmax(volumes)
+        max_volume = volumes[max_vol_idx_in_slice]
+        
+        # 1. 기준 거래량(최대 거래량) 발생 캔들은 양봉이어야 함 (세력 진입 확인)
+        max_vol_open = opens[max_vol_idx_in_slice]
+        max_vol_close = closes[max_vol_idx_in_slice]
+        
+        if max_vol_close < max_vol_open: # 최대 거래량이 음봉에서 터졌다면 매도세로 간주
+            return None
+
+        # 2. 매수 거래량 우위 확인 (양봉 거래량 합 > 음봉 거래량 합)
+        is_bullish = closes >= opens
+        bullish_vol_sum = volumes[is_bullish].sum()
+        bearish_vol_sum = volumes[~is_bullish].sum()
+        
+        if bullish_vol_sum <= bearish_vol_sum: # 파는 물량이 더 많으면 가짜 상승 가능성
+            return None
+
         avg_volume = volumes.mean() if len(volumes) > 0 else 0
 
         # NumPy 배열로 고점 가격 계산 (슬라이싱)
@@ -844,7 +862,7 @@ class SupportPatternAnalyzer:
                     'gain_pct': breakout_gain_pct
                 }
 
-                # 🆕 best_breakout: 필터링에 필요한 캔들 상세 정보
+                # best_breakout: 필터링에 필요한 캔들 상세 정보
                 debug_info['best_breakout'] = {
                     'high': float(breakout_row['high']),
                     'low': float(breakout_row['low']),
