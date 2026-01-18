@@ -20,6 +20,9 @@ from multiprocessing import cpu_count
 # ML 설정 불러오기
 from config.ml_settings import MLSettings
 
+# 🆕 병렬 처리를 위한 전역 변수
+_process_ml_predictor = None
+
 
 def parse_date(date_str):
     """날짜 문자열을 datetime 객체로 변환"""
@@ -41,6 +44,22 @@ def generate_date_range(start_date, end_date):
         current += timedelta(days=1)
     
     return dates
+
+
+def init_worker_process():
+    """
+    워커 프로세스 초기화 함수
+    각 프로세스가 시작될 때 한 번만 호출되어 ML 모델을 로드함
+    """
+    global _process_ml_predictor
+    try:
+        from core.ml_predictor import MLPredictor
+        _process_ml_predictor = MLPredictor(MLSettings.MODEL_PATH)
+        _process_ml_predictor.load_model()
+        print(f"[워커 초기화] ML 모델 로드 완료 (PID: {os.getpid()})")
+    except Exception as e:
+        print(f"[워커 초기화] ML 모델 로드 실패: {e}")
+        _process_ml_predictor = None
 
 
 def run_signal_replay_ml(date, time_range="9:00-16:00", ml_threshold=0.5):
@@ -262,8 +281,9 @@ def main():
                 print(f"   ❌ {result['message']}")
             print()
     else:
-        # 병렬 실행 모드
-        with ProcessPoolExecutor(max_workers=args.workers) as executor:
+        # 병렬 실행 모드 (워커 초기화 포함)
+        print(f"🔧 워커 프로세스 초기화 중... ({args.workers}개)")
+        with ProcessPoolExecutor(max_workers=args.workers, initializer=init_worker_process) as executor:
             # 작업 제출
             futures = {
                 executor.submit(run_signal_replay_ml, date, args.time_range, args.threshold): date

@@ -193,62 +193,26 @@ def extract_features_from_pattern(pattern_data: Dict) -> Optional[Dict]:
         'profit_rate': profit_rate,
         'sell_reason': trade_result.get('sell_reason', ''),
 
-        # 시간 특징
-        'hour': hour,
-        'minute': minute,
-        'time_in_minutes': time_in_minutes,
-        'is_morning': 1 if hour < 12 else 0,
+        # === 패배 패턴 핵심 특징 (3개) ===
+        # 패배 분석 결과: decline_pct(3.5% vs 2.1%), breakout_vol_ratio(0.68 vs 0.48), body_ratio(0.55 vs 0.67)
+        'decline_pct': abs(decline_pct),
+        'volume_ratio_breakout_to_uptrend': volume_ratio_breakout_to_uptrend,
+        'breakout_body_ratio': breakout_body_ratio,
 
-        # 신호 특징
-        'signal_type': signal_type,
-        'confidence': confidence,
-
-        # 패턴 특징 - 상승구간
-        'uptrend_candles': uptrend_candles,
+        # === 4단계 패턴 기본 특징 (5개) ===
         'uptrend_gain': uptrend_gain,
         'uptrend_max_volume': uptrend_max_volume,
-        'uptrend_avg_body': uptrend_avg_body,
-        'uptrend_total_volume': uptrend_total_volume,
-
-        # 패턴 특징 - 하락구간
         'decline_candles': decline_candles,
-        'decline_pct': abs(decline_pct),  # 절댓값
-        'decline_avg_volume': decline_avg_volume,
-
-        # 패턴 특징 - 지지구간
         'support_candles': support_candles,
         'support_volatility': support_volatility,
-        'support_avg_volume_ratio': support_avg_volume_ratio,
-        'support_avg_volume': support_avg_volume,
 
-        # 패턴 특징 - 돌파양봉
-        'breakout_volume': breakout_volume,
-        'breakout_body': breakout_body,
-        'breakout_range': breakout_range,
-
-        # 파생 특징
-        'volume_ratio_decline_to_uptrend': volume_ratio_decline_to_uptrend,
-        'volume_ratio_support_to_uptrend': volume_ratio_support_to_uptrend,
-        'volume_ratio_breakout_to_uptrend': volume_ratio_breakout_to_uptrend,
-        'price_gain_to_decline_ratio': price_gain_to_decline_ratio,
-        'candle_ratio_support_to_decline': candle_ratio_support_to_decline,
-
-        # 🆕 새로운 특징 (10개)
-        # 거래량 변동성
-        'uptrend_volume_std': uptrend_volume_std,
-        'decline_volume_std': decline_volume_std,
-        'support_volume_std': support_volume_std,
-        # 패턴 특성
-        'uptrend_bullish_ratio': uptrend_bullish_ratio,
+        # === 파생 특징 (4개) ===
+        # 기존 모델 상위 중요도: uptrend_volume_std(#1), uptrend_gain_per_candle(#3), 
+        # volume_concentration(#4), decline_depth(#6)
         'decline_depth': decline_depth,
-        'recovery_rate': recovery_rate,
-        'breakout_body_ratio': breakout_body_ratio,
-        # 속도/효율
         'uptrend_gain_per_candle': uptrend_gain_per_candle,
-        'decline_loss_per_candle': decline_loss_per_candle,
-        # 전체 특성
-        'total_pattern_candles': total_pattern_candles,
         'volume_concentration': volume_concentration,
+        'uptrend_volume_std': uptrend_volume_std,
 
         # 메타데이터
         'stock_code': pattern_data.get('stock_code', ''),
@@ -324,21 +288,17 @@ def create_ml_dataset(pattern_log_dir: str = 'pattern_data_log', output_file: st
     print(f"총 샘플 수: {len(df)}")
     print(f"승리 샘플: {df['label'].sum()} ({df['label'].mean()*100:.1f}%)")
     print(f"패배 샘플: {len(df) - df['label'].sum()} ({(1-df['label'].mean())*100:.1f}%)")
-    print(f"\n특징(feature) 수: {len(df.columns) - 5}")  # 라벨 관련 컬럼 제외
+    print(f"\n특징(feature) 수: {len(df.columns) - 6}")  # 라벨 관련 컬럼 + 메타데이터 제외
 
-    # 시간대별 통계
-    print("\n⏰ 시간대별 분포:")
-    for hour in sorted(df['hour'].unique()):
-        hour_df = df[df['hour'] == hour]
-        win_rate = hour_df['label'].mean() * 100
-        print(f"   {hour:02d}시: {len(hour_df):3d}건 (승률 {win_rate:.1f}%)")
-
-    # 신호 타입별 통계
-    print("\n🎯 신호 타입별 분포:")
-    for signal_type in df['signal_type'].unique():
-        sig_df = df[df['signal_type'] == signal_type]
-        win_rate = sig_df['label'].mean() * 100
-        print(f"   {signal_type}: {len(sig_df):3d}건 (승률 {win_rate:.1f}%)")
+    # 주요 특징 통계
+    print("\n📊 주요 특징 통계:")
+    key_features = ['decline_pct', 'volume_ratio_breakout_to_uptrend', 'breakout_body_ratio', 
+                    'uptrend_gain', 'support_volatility']
+    for feat in key_features:
+        if feat in df.columns:
+            win_mean = df[df['label'] == 1][feat].mean()
+            loss_mean = df[df['label'] == 0][feat].mean()
+            print(f"   {feat:35s}: 승리 평균={win_mean:.4f}, 패배 평균={loss_mean:.4f}")
 
     # CSV 저장
     df.to_csv(output_file, index=False, encoding='utf-8-sig')
