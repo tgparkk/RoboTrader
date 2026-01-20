@@ -86,10 +86,10 @@ class TradingDecisionEngine:
         # ML 설정 로드
         try:
             from config.ml_settings import MLSettings
-            self.use_ml_filter = True  # ML 필터 활성화
-            self.ml_threshold = 0.5  # 승률 임계값 (50%)
+            self.use_ml_filter = MLSettings.USE_ML_FILTER
+            self.ml_threshold = MLSettings.ML_THRESHOLD
             self.ml_settings = MLSettings
-            self.logger.info("🤖 ML 필터 설정 로드 완료 (임계값: 50%)")
+            self.logger.info(f"🤖 ML 필터 설정 로드 완료 (임계값: {self.ml_threshold:.1%})")
         except ImportError:
             self.use_ml_filter = False
             self.ml_threshold = 0.5
