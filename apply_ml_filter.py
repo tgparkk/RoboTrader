@@ -231,57 +231,71 @@ def calculate_avg_body_pct(candles: list) -> float:
 
 def extract_features_from_pattern(pattern_data: Dict) -> Dict:
     """
-    패턴 데이터에서 ML 특성 추출 (실제 패턴 특성 사용)
+    패턴 데이터에서 ML 특성 추출 (12개 핵심 특징)
+    
+    현재 모델 특징:
+    1. decline_pct
+    2. volume_ratio_breakout_to_uptrend
+    3. breakout_body_ratio
+    4. uptrend_gain
+    5. uptrend_max_volume
+    6. decline_candles
+    7. support_candles
+    8. support_volatility
+    9. decline_depth
+    10. uptrend_gain_per_candle
+    11. volume_concentration
+    12. uptrend_volume_std
     """
-    # 신호 시간 정보
-    signal_time_str = pattern_data.get('signal_time', '')
-    if signal_time_str:
-        try:
-            signal_time = datetime.strptime(signal_time_str, '%Y-%m-%d %H:%M:%S')
-            hour = signal_time.hour
-            minute = signal_time.minute
-        except:
-            hour, minute = 0, 0
-    else:
-        hour, minute = 0, 0
-
-    # 신호 정보
-    signal_info = pattern_data.get('signal_info', {})
-    signal_type = signal_info.get('signal_type', '')
-    signal_type_encoded = 1 if signal_type == 'STRONG_BUY' else 0
-    confidence = safe_float(signal_info.get('confidence', 0.0))
-
+    import numpy as np
+    
     # 패턴 구간 정보
     pattern_stages = pattern_data.get('pattern_stages', {})
 
-    # 상승 구간
+    # ===== 상승 구간 =====
     uptrend = pattern_stages.get('1_uptrend', {})
     uptrend_candles = uptrend.get('candle_count', 0)
     uptrend_gain = safe_float(uptrend.get('price_gain', 0.0))
     uptrend_max_volume_str = uptrend.get('max_volume', '0')
     uptrend_max_volume = safe_float(uptrend_max_volume_str)
-
-    # 상승 구간 캔들에서 평균 계산
     uptrend_candles_list = uptrend.get('candles', [])
-    uptrend_avg_body = calculate_avg_body_pct(uptrend_candles_list)
-    uptrend_total_volume = sum(c.get('volume', 0) for c in uptrend_candles_list)
 
-    # 하락 구간
+    # uptrend_volume_std 계산
+    uptrend_volume_std = 0
+    if uptrend_candles_list and len(uptrend_candles_list) > 1:
+        volumes = [c.get('volume', 0) for c in uptrend_candles_list]
+        uptrend_volume_std = float(np.std(volumes))
+
+    # volume_concentration 계산
+    volume_concentration = 0
+    if uptrend_candles_list and uptrend_max_volume > 0:
+        uptrend_volume_avg = sum(c.get('volume', 0) for c in uptrend_candles_list) / len(uptrend_candles_list)
+        if uptrend_volume_avg > 0:
+            volume_concentration = uptrend_max_volume / uptrend_volume_avg
+
+    # uptrend_gain_per_candle 계산
+    uptrend_gain_per_candle = uptrend_gain / uptrend_candles if uptrend_candles > 0 else 0
+
+    # ===== 하락 구간 =====
     decline = pattern_stages.get('2_decline', {})
     decline_candles = decline.get('candle_count', 0)
     decline_pct = abs(safe_float(decline.get('decline_pct', 0.0)))
     decline_candles_list = decline.get('candles', [])
-    decline_avg_volume = calculate_avg_volume_from_candles(decline_candles_list)
 
-    # 지지 구간
+    # decline_depth 계산
+    decline_depth = 0
+    if uptrend_candles_list and decline_candles_list:
+        uptrend_max_price = max(c.get('high', 0) for c in uptrend_candles_list)
+        decline_min_price = min(c.get('low', float('inf')) for c in decline_candles_list)
+        if uptrend_max_price > 0 and decline_min_price < float('inf'):
+            decline_depth = (uptrend_max_price - decline_min_price) / uptrend_max_price
+
+    # ===== 지지 구간 =====
     support = pattern_stages.get('3_support', {})
     support_candles = support.get('candle_count', 0)
     support_volatility = safe_float(support.get('price_volatility', 0.0))
-    support_avg_volume_ratio = safe_float(support.get('avg_volume_ratio', 1.0))
-    support_candles_list = support.get('candles', [])
-    support_avg_volume = calculate_avg_volume_from_candles(support_candles_list)
 
-    # 돌파 구간
+    # ===== 돌파 구간 =====
     breakout = pattern_stages.get('4_breakout', {})
     if breakout and breakout.get('candle'):
         breakout_candle = breakout.get('candle', {})
@@ -305,86 +319,28 @@ def extract_features_from_pattern(pattern_data: Dict) -> Dict:
     else:
         breakout_volume, breakout_body, breakout_range = 0, 0.0, 0.0
 
-    # 비율 특성 계산
-    volume_ratio_decline_to_uptrend = (
-        decline_avg_volume / uptrend_max_volume if uptrend_max_volume > 0 else 0
-    )
-    volume_ratio_support_to_uptrend = (
-        support_avg_volume / uptrend_max_volume if uptrend_max_volume > 0 else 0
-    )
+    # breakout_body_ratio 계산
+    breakout_body_ratio = breakout_body / breakout_range if breakout_range > 0 else 0
+
+    # volume_ratio_breakout_to_uptrend 계산
     volume_ratio_breakout_to_uptrend = (
         breakout_volume / uptrend_max_volume if uptrend_max_volume > 0 else 0
     )
-    price_gain_to_decline_ratio = (
-        uptrend_gain / decline_pct if decline_pct > 0 else 0
-    )
-    candle_ratio_support_to_decline = (
-        support_candles / decline_candles if decline_candles > 0 else 0
-    )
 
-    # ⭐ 동적 손익비 목표값 계산 (ML 모델 예측에 필요)
-    from config.dynamic_profit_loss_config import DynamicProfitLossConfig
-
-    # 패턴 로그 형식 → extract_pattern_from_debug_info 형식으로 변환
-    uptrend_avg_volume = uptrend.get('volume_avg', 0)  # volume_avg 키 사용
-
-    debug_info = {
-        'uptrend': {
-            'max_volume': uptrend_max_volume,
-            'avg_volume': uptrend_avg_volume
-        },
-        'decline': {
-            'avg_volume': decline_avg_volume
-        },
-        'support': {
-            'avg_volume': support_avg_volume
-        }
-    }
-
-    support_vol_class, decline_vol_class = DynamicProfitLossConfig.extract_pattern_from_debug_info(debug_info)
-
-    if support_vol_class and decline_vol_class:
-        ratios = DynamicProfitLossConfig.get_ratio_by_pattern(support_vol_class, decline_vol_class)
-    else:
-        # 패턴 분류 실패 시 기본값
-        ratios = {'stop_loss': -2.5, 'take_profit': 3.5}
-
+    # ===== 12개 특징 구성 =====
     features = {
-        'uptrend_candles': uptrend_candles,
+        'decline_pct': decline_pct,
+        'volume_ratio_breakout_to_uptrend': volume_ratio_breakout_to_uptrend,
+        'breakout_body_ratio': breakout_body_ratio,
         'uptrend_gain': uptrend_gain,
         'uptrend_max_volume': uptrend_max_volume,
-        'uptrend_avg_body': uptrend_avg_body,
-        'uptrend_total_volume': uptrend_total_volume,
-
         'decline_candles': decline_candles,
-        'decline_pct': decline_pct,
-        'decline_avg_volume': decline_avg_volume,
-
         'support_candles': support_candles,
         'support_volatility': support_volatility,
-        'support_avg_volume_ratio': support_avg_volume_ratio,
-        'support_avg_volume': support_avg_volume,
-
-        'breakout_volume': breakout_volume,
-        'breakout_body': breakout_body,
-        'breakout_range': breakout_range,
-
-        'volume_ratio_decline_to_uptrend': volume_ratio_decline_to_uptrend,
-        'volume_ratio_support_to_uptrend': volume_ratio_support_to_uptrend,
-        'volume_ratio_breakout_to_uptrend': volume_ratio_breakout_to_uptrend,
-        'price_gain_to_decline_ratio': price_gain_to_decline_ratio,
-        'candle_ratio_support_to_decline': candle_ratio_support_to_decline,
-
-        'signal_type': signal_type_encoded,
-        'confidence': confidence,
-
-        'target_stop_loss': ratios['stop_loss'],
-        'target_take_profit': ratios['take_profit'],
-
-        'hour': hour,
-        'minute': minute,
-        'time_in_minutes': hour * 60 + minute,
-        'is_morning': 1 if hour < 12 else 0,
+        'decline_depth': decline_depth,
+        'uptrend_gain_per_candle': uptrend_gain_per_candle,
+        'volume_concentration': volume_concentration,
+        'uptrend_volume_std': uptrend_volume_std,
     }
 
     return features
