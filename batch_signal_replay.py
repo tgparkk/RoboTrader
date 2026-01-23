@@ -51,7 +51,7 @@ def generate_date_range(start_date, end_date):
     return dates
 
 
-def run_signal_replay(date, time_range="9:00-16:00", output_dir="signal_replay_log", save_pattern_log=False, use_dynamic=False):
+def run_signal_replay(date, time_range="9:00-16:00", output_dir="signal_replay_log", save_pattern_log=False, use_dynamic=False, advanced_filter=False):
     """지정된 날짜에 대해 signal_replay 실행"""
     # 출력 폴더 생성
     log_dir = output_dir
@@ -76,6 +76,10 @@ def run_signal_replay(date, time_range="9:00-16:00", output_dir="signal_replay_l
     # 동적 손익비 옵션 추가
     if use_dynamic:
         cmd.extend(['--use-dynamic-profit-loss'])
+
+    # 고급 필터 옵션 추가
+    if advanced_filter:
+        cmd.extend(['--advanced-filter'])
 
     print(f"실행 중: {date}")
 
@@ -410,6 +414,12 @@ def main():
         help='동적 손익비 모드 사용 (pattern_data_log_dynamic 폴더에 저장)'
     )
 
+    parser.add_argument(
+        '--advanced-filter',
+        action='store_true',
+        help='고급 필터 적용 (승률 개선 필터: 연속양봉, 가격위치, 화요일제외 등)'
+    )
+
     args = parser.parse_args()
     
     # 날짜 범위 검증
@@ -452,6 +462,8 @@ def main():
         print(f"   📊 패턴 로그 저장: {pattern_log_dir}/")
     if args.use_dynamic:
         print(f"   💰 동적 손익비 모드: 활성화")
+    if args.advanced_filter:
+        print(f"   🔰 고급 필터: 활성화 (승률 개선 필터)")
     print(f"   CPU 코어: {cpu_count()}개")
     print("=" * 70)
 
@@ -470,7 +482,8 @@ def main():
                     args.time_range,
                     args.output_dir,
                     save_pattern_log=args.save_pattern_log,
-                    use_dynamic=args.use_dynamic
+                    use_dynamic=args.use_dynamic,
+                    advanced_filter=args.advanced_filter
                 )
                 if success:
                     success_count += 1
@@ -496,7 +509,8 @@ def main():
                         args.time_range,
                         args.output_dir,
                         args.save_pattern_log,
-                        args.use_dynamic
+                        args.use_dynamic,
+                        args.advanced_filter
                     ): date
                     for date in dates
                 }

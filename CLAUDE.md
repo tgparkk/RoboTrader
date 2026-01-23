@@ -69,6 +69,45 @@
 
 ---
 
+## 고급 필터 시스템 (2026-01-24 업데이트)
+
+### 개요
+- **설정 파일**: `config/advanced_filter_settings.py`
+- **필터 로직**: `core/indicators/advanced_filters.py`
+- **분석 기준**: 3분봉 (489건 백테스트)
+- **기본 승률**: 49.9% → **필터 적용 후 75.5%** (+25.6%p)
+
+### 현재 활성화된 필터
+| 필터 | 임계값 | 예상 승률 |
+|------|--------|----------|
+| 연속양봉 | >= 1개 | 66.7% |
+| 가격위치 | >= 80% | 65.8% |
+| 화요일 회피 | - | - |
+| 시간대-요일 | 9시화, 10시화, 11시화, 10시수 회피 | - |
+| 저승률 종목 | 101170, 394800 | - |
+
+### 적용 범위
+- **실시간**: `trading_decision_engine.py`에서 자동 적용 (ENABLED=True 시)
+- **시뮬레이션**: `--advanced-filter` 옵션으로 적용
+
+### 시뮬레이션 명령어
+```bash
+# 고급 필터 적용 시뮬레이션
+python batch_signal_replay.py --start 20250901 --end 20260123 --advanced-filter
+```
+
+### 주요 파일
+- `config/advanced_filter_settings.py`: 필터 설정 (임계값, 활성화 여부)
+- `config/advanced_filter_settings_1min_backup.py`: 1분봉 기준 설정 백업
+- `core/indicators/advanced_filters.py`: 필터 로직 (AdvancedFilterManager)
+- `analyze_win_loss_patterns_3min.py`: 3분봉 기준 분석 스크립트
+
+### 데이터 기준
+- **시뮬/실시간 모두 3분봉 사용** (5개 봉 = 15분 범위)
+- OHLCV 시퀀스에서 연속양봉, 가격위치 등 특징 추출
+
+---
+
 ## 데이터 캐시 시스템 (2026-01-18 업데이트)
 
 ### DuckDB 마이그레이션 완료

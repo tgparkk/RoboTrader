@@ -413,7 +413,7 @@ def list_all_buy_signals(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] 
         return []
 
 
-def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = None, *, logger: Optional[logging.Logger] = None, stock_code: str = "UNKNOWN", selection_date: Optional[str] = None, simulation_date: Optional[str] = None, ml_filter_enabled: bool = False, ml_model=None, ml_feature_names=None, ml_threshold: float = 0.5, pattern_data_cache: Optional[Dict] = None) -> List[Dict[str, object]]:
+def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = None, *, logger: Optional[logging.Logger] = None, stock_code: str = "UNKNOWN", selection_date: Optional[str] = None, simulation_date: Optional[str] = None, ml_filter_enabled: bool = False, ml_model=None, ml_feature_names=None, ml_threshold: float = 0.5, pattern_data_cache: Optional[Dict] = None, advanced_filter_enabled: bool = False, advanced_filter_manager=None) -> List[Dict[str, object]]:
     """매수신호 발생 시점에서 1분봉 기준으로 실제 거래를 시뮬레이션 (ML 필터 실시간 적용)
 
     Args:
@@ -422,6 +422,8 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
         ml_feature_names: ML 모델 특성 이름 목록
         ml_threshold: ML 임계값 (기본 0.5)
         pattern_data_cache: 패턴 데이터 캐시 (signal_time -> pattern_data)
+        advanced_filter_enabled: 고급 필터 사용 여부
+        advanced_filter_manager: 고급 필터 매니저 인스턴스
     """
 
     if df_3min is None or df_3min.empty:
@@ -683,6 +685,74 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                     if logger:
                         logger.warning(f"⚠️ [{stock_code}] ML 필터 적용 실패: {e}")
                     # ML 필터 오류 시에도 거래 진행 (안전장치)
+
+            # ==================== 🆕 고급 필터 (승률 개선 필터) 적용 ====================
+            if advanced_filter_enabled and advanced_filter_manager is not None:
+                try:
+                    # 패턴 데이터에서 필터 입력 추출
+                    signal_time_key = signal_completion_time.strftime('%H:%M')
+                    adv_pattern_data = None
+
+                    if pattern_data_cache:
+                        for pattern_key, pdata in pattern_data_cache.items():
+                            if stock_code in pattern_key:
+                                pattern_signal_time = pdata.get('signal_time', '')
+                                if pattern_signal_time:
+                                    try:
+                                        pst = datetime.strptime(pattern_signal_time, '%Y-%m-%d %H:%M:%S')
+                                        time_diff = abs((pst - signal_completion_time).total_seconds())
+                                        if time_diff <= 180:
+                                            adv_pattern_data = pdata
+                                            break
+                                    except:
+                                        pass
+
+                    # 필터 입력 데이터 추출 (3분봉 사용 - 실시간과 동일)
+                    ohlcv_sequence = []
+                    rsi = None
+                    volume_ma_ratio = None
+
+                    # df_3min에서 직접 3분봉 OHLCV 추출
+                    signal_index = signal['index']
+                    start_idx = max(0, signal_index - 4)  # 최근 5개 봉 (돌파봉 포함)
+                    end_idx = signal_index + 1
+
+                    if end_idx <= len(df_3min):
+                        recent_candles = df_3min.iloc[start_idx:end_idx]
+                        for _, row in recent_candles.iterrows():
+                            ohlcv_sequence.append({
+                                'open': float(row.get('open', 0)),
+                                'high': float(row.get('high', 0)),
+                                'low': float(row.get('low', 0)),
+                                'close': float(row.get('close', 0)),
+                                'volume': float(row.get('volume', 0))
+                            })
+
+                    # RSI와 volume_ma_ratio는 pattern_data에서 가져옴
+                    if adv_pattern_data:
+                        signal_snapshot = adv_pattern_data.get('signal_snapshot', {})
+                        tech = signal_snapshot.get('technical_indicators_3min', {})
+                        rsi = tech.get('rsi_14')
+                        volume_ma_ratio = tech.get('volume_vs_ma_ratio')
+
+                    # 고급 필터 체크
+                    adv_result = advanced_filter_manager.check_signal(
+                        ohlcv_sequence=ohlcv_sequence,
+                        rsi=rsi,
+                        stock_code=stock_code,
+                        signal_time=signal_completion_time,
+                        volume_ma_ratio=volume_ma_ratio
+                    )
+
+                    if not adv_result.passed:
+                        if logger:
+                            logger.info(f"🔰 [{signal_completion_time.strftime('%H:%M')}] {stock_code} 고급 필터 차단: {adv_result.blocked_by} - {adv_result.blocked_reason}")
+                        continue  # 고급 필터에서 차단되면 다음 신호로
+
+                except Exception as e:
+                    if logger:
+                        logger.warning(f"⚠️ [{stock_code}] 고급 필터 적용 실패: {e}")
+                    # 고급 필터 오류 시에도 거래 진행 (안전장치)
 
             # ==================== 🆕 돌파봉 4/5 가격 조건 체크 ====================
             
@@ -1204,6 +1274,7 @@ def main():
     parser.add_argument("--ml-filter", action="store_true", help="ML 필터 실시간 적용 (실전과 동일하게 신호 시점에 즉시 필터링)")
     parser.add_argument("--ml-model", default="ml_model.pkl", help="ML 모델 파일 경로 (기본: ml_model.pkl)")
     parser.add_argument("--ml-threshold", type=float, default=None, help="ML 필터 임계값 (기본: config/ml_settings.py의 ML_THRESHOLD)")
+    parser.add_argument("--advanced-filter", action="store_true", help="고급 필터 적용 (승률 개선 필터: 연속양봉, 가격위치, 화요일제외 등)")
 
     args = parser.parse_args()
 
@@ -1328,6 +1399,21 @@ def main():
             except Exception as e:
                 logger.warning(f"⚠️ 패턴 데이터 로드 실패: {e}")
 
+    # ==================== 🆕 고급 필터 초기화 ====================
+    advanced_filter_enabled = args.advanced_filter
+    advanced_filter_manager = None
+
+    if advanced_filter_enabled:
+        try:
+            from core.indicators.advanced_filters import AdvancedFilterManager
+            advanced_filter_manager = AdvancedFilterManager()
+            active_filters = advanced_filter_manager.get_active_filters()
+            logger.info(f"🔰 고급 필터 활성화: {', '.join(active_filters) if active_filters else '없음'}")
+            logger.info(f"   {advanced_filter_manager.get_summary()}")
+        except Exception as e:
+            logger.warning(f"⚠️ 고급 필터 초기화 실패: {e} - 고급 필터 비활성화")
+            advanced_filter_enabled = False
+
     # 병렬 처리를 위한 함수 정의
     def process_single_stock(stock_code: str) -> Tuple[str, List[Dict[str, object]], pd.DataFrame]:
         """단일 종목 처리 함수"""
@@ -1437,7 +1523,7 @@ def main():
                 logger.warning(f"⚠️  [{stock_code}] 3분봉 변환 실패")
                 return stock_code, []
 
-            # 거래 시뮬레이션 실행 (🆕 ML 필터 매개변수 전달)
+            # 거래 시뮬레이션 실행 (🆕 ML 필터 + 고급 필터 매개변수 전달)
             selection_date = stock_selection_map.get(stock_code)
             simulation_result = simulate_trades(
                 df_3min, df_1min,
@@ -1449,7 +1535,9 @@ def main():
                 ml_model=ml_model,
                 ml_feature_names=ml_feature_names,
                 ml_threshold=ml_threshold,
-                pattern_data_cache=pattern_data_cache
+                pattern_data_cache=pattern_data_cache,
+                advanced_filter_enabled=advanced_filter_enabled,
+                advanced_filter_manager=advanced_filter_manager
             )
             
             # 반환값 처리 (기존 호환성 유지)

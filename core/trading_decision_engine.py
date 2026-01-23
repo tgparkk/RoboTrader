@@ -82,7 +82,24 @@ class TradingDecisionEngine:
             self.logger.warning(f"⚠️ 간단한 패턴 필터 초기화 실패: {e}")
             self.simple_pattern_filter = None
             self.use_simple_filter = False
-        
+
+        # 🆕 고급 필터 초기화 (승률 개선 필터)
+        try:
+            from core.indicators.advanced_filters import AdvancedFilterManager
+            from config.advanced_filter_settings import AdvancedFilterSettings
+            self.use_advanced_filter = AdvancedFilterSettings.ENABLED
+            if self.use_advanced_filter:
+                self.advanced_filter_manager = AdvancedFilterManager()
+                active_filters = self.advanced_filter_manager.get_active_filters()
+                self.logger.info(f"🔰 고급 필터 초기화 완료: {', '.join(active_filters) if active_filters else '없음'}")
+            else:
+                self.advanced_filter_manager = None
+                self.logger.info("🔰 고급 필터 비활성화 (설정에서 ENABLED=False)")
+        except Exception as e:
+            self.logger.warning(f"⚠️ 고급 필터 초기화 실패: {e}")
+            self.advanced_filter_manager = None
+            self.use_advanced_filter = False
+
         # ML 설정 로드
         try:
             from config.ml_settings import MLSettings
@@ -304,6 +321,50 @@ class TradingDecisionEngine:
                         except Exception as e:
                             self.logger.error(f"❌ {stock_code} ML 필터 오류: {e} - 신호 허용")
                             # ML 오류 시 신호 허용
+
+                    # 🆕 고급 필터 적용 (승률 개선 필터)
+                    if self.use_advanced_filter and self.advanced_filter_manager:
+                        try:
+                            from utils.korean_time import now_kst
+                            signal_time = now_kst()
+
+                            # 🆕 combined_data (3분봉)에서 직접 OHLCV 시퀀스 추출 (시뮬과 동일한 방식)
+                            ohlcv_sequence = []
+                            if combined_data is not None and len(combined_data) >= 5:
+                                recent_candles = combined_data.tail(5)
+                                for _, row in recent_candles.iterrows():
+                                    ohlcv_sequence.append({
+                                        'open': float(row.get('open', 0)),
+                                        'high': float(row.get('high', 0)),
+                                        'low': float(row.get('low', 0)),
+                                        'close': float(row.get('close', 0)),
+                                        'volume': float(row.get('volume', 0))
+                                    })
+
+                            # RSI와 거래량비율은 pattern_data에서 추출 시도 (없으면 None)
+                            pattern_features = price_info.get('pattern_data', {})
+                            tech = pattern_features.get('technical_indicators_3min', {})
+                            rsi = tech.get('rsi_14')
+                            volume_ma_ratio = tech.get('volume_vs_ma_ratio')
+
+                            # 고급 필터 체크
+                            adv_result = self.advanced_filter_manager.check_signal(
+                                ohlcv_sequence=ohlcv_sequence,
+                                rsi=rsi,
+                                stock_code=stock_code,
+                                signal_time=signal_time,
+                                volume_ma_ratio=volume_ma_ratio
+                            )
+
+                            if not adv_result.passed:
+                                self.logger.info(f"🔰 {stock_code} 고급 필터 차단: {adv_result.blocked_by} - {adv_result.blocked_reason}")
+                                return False, f"눌림목캔들패턴: {reason} + 고급필터차단: {adv_result.blocked_reason}", {'buy_price': 0, 'quantity': 0, 'max_buy_amount': 0}
+                            else:
+                                self.logger.debug(f"✅ {stock_code} 고급 필터 통과")
+
+                        except Exception as e:
+                            self.logger.warning(f"⚠️ {stock_code} 고급 필터 오류: {e} - 신호 허용")
+                            # 고급 필터 오류 시 신호 허용
 
                     # 매수 정보 생성
                     buy_info = {
