@@ -121,6 +121,7 @@ python batch_signal_replay.py --start 20250901 --end 20260123 --advanced-filter
 
 ### 설정 위치
 - **설정 파일**: `config/trading_config.json` → `order_management.buy_budget_ratio`
+- **자금 관리**: `core/fund_manager.py` → `max_position_ratio`
 - **적용 코드**: `core/trading_decision_engine.py` → `_get_max_buy_amount()`
 
 ### 현재 설정
