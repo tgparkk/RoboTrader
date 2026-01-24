@@ -115,6 +115,47 @@ python batch_signal_replay.py --start 20250901 --end 20260123 --advanced-filter
 - OHLCV 시퀀스에서 연속양봉, 가격위치 등 특징 추출
 - pattern_stages에서 상승폭, 하락폭, 지지캔들 수 추출
 
+### pattern_stages 데이터 흐름 (실시간)
+```
+1. PullbackCandlePattern.generate_improved_signals()  [pullback_candle_pattern.py:433]
+   ↓
+2. complete_pattern_data['pattern_stages'] 생성      [pullback_candle_pattern.py:695]
+   ↓
+3. signal_strength.pattern_data에 저장              [pullback_candle_pattern.py:718]
+   ↓
+4. price_info['pattern_data'] 전달                  [trading_decision_engine.py:1089]
+   ↓
+5. pattern_stages 추출                              [trading_decision_engine.py:349]
+   ↓
+6. AdvancedFilterManager.check_signal() 호출        [trading_decision_engine.py:352]
+```
+
+### pattern_stages 구조
+```python
+{
+    '1_uptrend': {
+        'price_gain': 0.15,      # 상승폭 (0~1, 15% = 0.15)
+        'candle_count': 5
+    },
+    '2_decline': {
+        'decline_pct': 3.5,      # 하락폭 (% 값, 3.5%)
+        'candle_count': 3
+    },
+    '3_support': {
+        'candle_count': 2        # 지지캔들 수
+    },
+    '4_breakout': {
+        'idx': 45                # 돌파봉 인덱스
+    }
+}
+```
+
+### 검증 스크립트
+```bash
+# 실시간 흐름과 동일하게 pattern_stages 생성 검증
+python test_pattern_stages_realtime.py --code 종목코드 --date YYYYMMDD
+```
+
 ---
 
 ## 투자 비율 설정 (2026-01-24 업데이트)

@@ -682,6 +682,39 @@ class PullbackCandlePattern:
                     'confidence': determined_confidence
                 }
 
+                # 🆕 pattern_stages 추가 (고급 필터용 - advanced_filters.py에서 사용)
+                breakout_info = debug_info.get('breakout', {})
+
+                # decline_pct 변환 (문자열 "2.50%" → 숫자 2.50)
+                decline_pct_raw = decline_info.get('decline_pct', 0)
+                if isinstance(decline_pct_raw, str):
+                    decline_pct_value = float(decline_pct_raw.replace('%', '').replace(',', '').strip() or 0)
+                else:
+                    decline_pct_value = float(decline_pct_raw) * 100 if decline_pct_raw else 0  # 소수 → %
+
+                complete_pattern_data['pattern_stages'] = {
+                    '1_uptrend': {
+                        'start_idx': uptrend_info.get('start_idx'),
+                        'end_idx': uptrend_info.get('end_idx'),
+                        'candle_count': uptrend_info.get('bar_count', 0),
+                        'price_gain': uptrend_info.get('gain_pct', 0),  # 0~1 범위
+                    },
+                    '2_decline': {
+                        'start_idx': decline_info.get('start_idx'),
+                        'end_idx': decline_info.get('end_idx'),
+                        'candle_count': decline_info.get('bar_count', 0),
+                        'decline_pct': decline_pct_value,  # % 값 (예: 2.50)
+                    },
+                    '3_support': {
+                        'start_idx': support_info.get('start_idx'),
+                        'end_idx': support_info.get('end_idx'),
+                        'candle_count': support_info.get('bar_count', 0),
+                    },
+                    '4_breakout': {
+                        'idx': breakout_info.get('idx'),
+                    }
+                }
+
                 signal_strength = SignalStrength(
                     signal_type=determined_signal_type,
                     confidence=determined_confidence,
