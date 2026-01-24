@@ -341,11 +341,12 @@ class TradingDecisionEngine:
                                         'volume': float(row.get('volume', 0))
                                     })
 
-                            # RSI와 거래량비율은 pattern_data에서 추출 시도 (없으면 None)
+                            # RSI와 거래량비율, pattern_stages는 pattern_data에서 추출 시도 (없으면 None)
                             pattern_features = price_info.get('pattern_data', {})
                             tech = pattern_features.get('technical_indicators_3min', {})
                             rsi = tech.get('rsi_14')
                             volume_ma_ratio = tech.get('volume_vs_ma_ratio')
+                            pattern_stages = pattern_features.get('pattern_stages')
 
                             # 고급 필터 체크
                             adv_result = self.advanced_filter_manager.check_signal(
@@ -353,7 +354,8 @@ class TradingDecisionEngine:
                                 rsi=rsi,
                                 stock_code=stock_code,
                                 signal_time=signal_time,
-                                volume_ma_ratio=volume_ma_ratio
+                                volume_ma_ratio=volume_ma_ratio,
+                                pattern_stages=pattern_stages
                             )
 
                             if not adv_result.passed:
@@ -427,27 +429,26 @@ class TradingDecisionEngine:
     
     def _get_max_buy_amount(self, stock_code: str = "") -> float:
         """최대 매수 가능 금액 조회"""
-        # 🆕 자금 관리 시스템 사용 (임시 주석 - 아직 연동 안됨)
-        # if hasattr(self, 'fund_manager') and self.fund_manager:
-        #     return self.fund_manager.get_max_buy_amount(stock_code)
-        
+        # 설정에서 투자 비율 가져오기 (기본값: 0.20 = 1/5)
+        buy_budget_ratio = self.config.get('order_management', {}).get('buy_budget_ratio', 0.20)
+
         # 🆕 기존 방식 (현재 사용 중)
         max_buy_amount = 500000  # 기본값
-        
+
         try:
             if self.api_manager:
                 account_info = self.api_manager.get_account_balance()
                 if account_info and hasattr(account_info, 'available_amount'):
                     available_balance = float(account_info.available_amount)
-                    max_buy_amount = min(5000000, available_balance * 0.1)  # 최대 500만원
-                    self.logger.debug(f"💰 계좌 가용금액: {available_balance:,.0f}원, 투자금액: {max_buy_amount:,.0f}원")
+                    max_buy_amount = min(5000000, available_balance * buy_budget_ratio)
+                    self.logger.debug(f"💰 계좌 가용금액: {available_balance:,.0f}원, 투자비율: {buy_budget_ratio:.0%}, 투자금액: {max_buy_amount:,.0f}원")
                 elif hasattr(account_info, 'total_balance'):
                     total_balance = float(account_info.total_balance)
-                    max_buy_amount = min(5000000, total_balance * 0.1)  # 최대 500만원
-                    self.logger.debug(f"💰 총 자산: {total_balance:,.0f}원, 투자금액: {max_buy_amount:,.0f}원")
+                    max_buy_amount = min(5000000, total_balance * buy_budget_ratio)
+                    self.logger.debug(f"💰 총 자산: {total_balance:,.0f}원, 투자비율: {buy_budget_ratio:.0%}, 투자금액: {max_buy_amount:,.0f}원")
         except Exception as e:
             self.logger.warning(f"⚠️ 계좌 잔고 조회 실패: {e}, 기본값 사용")
-        
+
         return max_buy_amount
     
     async def analyze_sell_decision(self, trading_stock, combined_data=None) -> Tuple[bool, str]:

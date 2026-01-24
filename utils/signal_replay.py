@@ -728,12 +728,14 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                                 'volume': float(row.get('volume', 0))
                             })
 
-                    # RSI와 volume_ma_ratio는 pattern_data에서 가져옴
+                    # RSI와 volume_ma_ratio, pattern_stages는 pattern_data에서 가져옴
+                    pattern_stages = None
                     if adv_pattern_data:
                         signal_snapshot = adv_pattern_data.get('signal_snapshot', {})
                         tech = signal_snapshot.get('technical_indicators_3min', {})
                         rsi = tech.get('rsi_14')
                         volume_ma_ratio = tech.get('volume_vs_ma_ratio')
+                        pattern_stages = adv_pattern_data.get('pattern_stages')
 
                     # 고급 필터 체크
                     adv_result = advanced_filter_manager.check_signal(
@@ -741,7 +743,8 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                         rsi=rsi,
                         stock_code=stock_code,
                         signal_time=signal_completion_time,
-                        volume_ma_ratio=volume_ma_ratio
+                        volume_ma_ratio=volume_ma_ratio,
+                        pattern_stages=pattern_stages
                     )
 
                     if not adv_result.passed:

@@ -79,6 +79,7 @@ class AdvancedFilterManager:
         stock_code: Optional[str] = None,
         signal_time: Optional[datetime] = None,
         volume_ma_ratio: Optional[float] = None,
+        pattern_stages: Optional[Dict] = None,
     ) -> FilterResult:
         """
         신호에 대해 모든 필터 적용
@@ -89,6 +90,7 @@ class AdvancedFilterManager:
             stock_code: 종목 코드
             signal_time: 신호 발생 시간
             volume_ma_ratio: 거래량 MA 비율 (없으면 ohlcv에서 계산)
+            pattern_stages: 눌림목 패턴 4단계 데이터 (1_uptrend, 2_decline, 3_support, 4_breakout)
 
         Returns:
             FilterResult
@@ -153,6 +155,26 @@ class AdvancedFilterManager:
             if not result.passed:
                 return result
             details['rsi'] = 'passed'
+
+        # pattern_stages 기반 필터 (9~11)
+        if pattern_stages:
+            # 9. 상승폭 필터
+            result = self._check_uptrend_gain(pattern_stages)
+            if not result.passed:
+                return result
+            details['uptrend_gain'] = 'passed'
+
+            # 10. 하락폭 필터
+            result = self._check_decline_pct(pattern_stages)
+            if not result.passed:
+                return result
+            details['decline_pct'] = 'passed'
+
+            # 11. 지지구간 캔들 수 필터
+            result = self._check_support_candle(pattern_stages)
+            if not result.passed:
+                return result
+            details['support_candle'] = 'passed'
 
         return FilterResult(passed=True, details=details)
 
@@ -371,6 +393,69 @@ class AdvancedFilterManager:
 
         return FilterResult(passed=True)
 
+    def _check_uptrend_gain(self, pattern_stages: Dict) -> FilterResult:
+        """상승폭 필터 (pattern_stages 기반)"""
+        config = getattr(self.settings, 'UPTREND_GAIN_FILTER', {})
+        if not config.get('enabled', False):
+            return FilterResult(passed=True)
+
+        uptrend = pattern_stages.get('1_uptrend', {})
+        price_gain = uptrend.get('price_gain', 0) * 100  # %로 변환
+
+        max_gain = config.get('max_gain', 15.0)
+
+        if price_gain >= max_gain:
+            return FilterResult(
+                passed=False,
+                blocked_by='uptrend_gain',
+                blocked_reason=f'상승폭 {price_gain:.1f}% >= {max_gain}% (과열 진입 회피)',
+                details={'actual': price_gain, 'max': max_gain}
+            )
+
+        return FilterResult(passed=True)
+
+    def _check_decline_pct(self, pattern_stages: Dict) -> FilterResult:
+        """하락폭 필터 (pattern_stages 기반)"""
+        config = getattr(self.settings, 'DECLINE_PCT_FILTER', {})
+        if not config.get('enabled', False):
+            return FilterResult(passed=True)
+
+        decline = pattern_stages.get('2_decline', {})
+        decline_pct = decline.get('decline_pct', 0)
+
+        max_decline = config.get('max_decline', 5.0)
+
+        if decline_pct >= max_decline:
+            return FilterResult(
+                passed=False,
+                blocked_by='decline_pct',
+                blocked_reason=f'하락폭 {decline_pct:.1f}% >= {max_decline}% (추세 반전 위험)',
+                details={'actual': decline_pct, 'max': max_decline}
+            )
+
+        return FilterResult(passed=True)
+
+    def _check_support_candle(self, pattern_stages: Dict) -> FilterResult:
+        """지지구간 캔들 수 필터 (pattern_stages 기반)"""
+        config = getattr(self.settings, 'SUPPORT_CANDLE_FILTER', {})
+        if not config.get('enabled', False):
+            return FilterResult(passed=True)
+
+        support = pattern_stages.get('3_support', {})
+        candle_count = support.get('candle_count', 0)
+
+        avoid_counts = config.get('avoid_counts', [3])
+
+        if candle_count in avoid_counts:
+            return FilterResult(
+                passed=False,
+                blocked_by='support_candle',
+                blocked_reason=f'지지구간 캔들 {candle_count}개 (회피 대상)',
+                details={'actual': candle_count, 'avoid': avoid_counts}
+            )
+
+        return FilterResult(passed=True)
+
     def get_active_filters(self) -> List[str]:
         """현재 활성화된 필터 목록"""
         active = []
@@ -384,6 +469,9 @@ class AdvancedFilterManager:
             ('TUESDAY_FILTER', '화요일'),
             ('TIME_DAY_FILTER', '시간대-요일'),
             ('LOW_WINRATE_STOCKS', '저승률종목'),
+            ('UPTREND_GAIN_FILTER', '상승폭제한'),
+            ('DECLINE_PCT_FILTER', '하락폭제한'),
+            ('SUPPORT_CANDLE_FILTER', '지지캔들'),
         ]
 
         for attr_name, display_name in filters:

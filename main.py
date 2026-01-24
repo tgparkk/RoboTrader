@@ -417,9 +417,10 @@ class DayTradingBot:
 
                 # 🆕 매수 전 자금 확인 (전달받은 available_funds 활용)
                 if available_funds is not None:
-                    # 전달받은 가용 자금 기준으로 종목당 최대 투자 금액 계산 (10%)
+                    # 전달받은 가용 자금 기준으로 종목당 최대 투자 금액 계산 (설정값 사용, 기본 20%)
                     fund_status = self.fund_manager.get_status()
-                    max_buy_amount = min(available_funds, fund_status['total_funds'] * 0.1)
+                    buy_budget_ratio = self.config.order_management.buy_budget_ratio
+                    max_buy_amount = min(available_funds, fund_status['total_funds'] * buy_budget_ratio)
                 else:
                     # 기존 방식 (fallback)
                     max_buy_amount = self.fund_manager.get_max_buy_amount(stock_code)
