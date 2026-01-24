@@ -121,22 +121,29 @@ class DataCache:
             # 테이블 생성 (없으면)
             self._create_table_if_not_exists(con, stock_code)
 
-            # 기존 데이터 삭제
-            con.execute(f"""
-                DELETE FROM {table_name} WHERE trade_date = ?
-            """, [date_str])
-
-            # DataFrame 준비
-            df_to_save = df_minute.copy()
+            # DataFrame 준비 (인덱스 리셋으로 중복 방지)
+            df_to_save = df_minute.copy().reset_index(drop=True)
             df_to_save['trade_date'] = date_str
-            df_to_save['idx'] = df_minute.index
+            df_to_save['idx'] = range(len(df_to_save))
 
-            # 삽입
-            con.execute(f"""
-                INSERT INTO {table_name}
-                SELECT trade_date, idx, date, time, close, open, high, low, volume, amount, datetime
-                FROM df_to_save
-            """)
+            # 트랜잭션으로 DELETE + INSERT 원자적 실행
+            con.execute("BEGIN TRANSACTION")
+            try:
+                # 기존 데이터 삭제
+                con.execute(f"""
+                    DELETE FROM {table_name} WHERE trade_date = ?
+                """, [date_str])
+
+                # 삽입
+                con.execute(f"""
+                    INSERT INTO {table_name}
+                    SELECT trade_date, idx, date, time, close, open, high, low, volume, amount, datetime
+                    FROM df_to_save
+                """)
+                con.execute("COMMIT")
+            except Exception as inner_e:
+                con.execute("ROLLBACK")
+                raise inner_e
 
             con.close()
             self.logger.debug(f"[{stock_code}] DuckDB 저장 완료 ({len(df_minute)}개)")
@@ -379,9 +386,6 @@ class DailyDataCache:
             # 테이블 생성 (없으면)
             self._create_table_if_not_exists(con, stock_code)
 
-            # 기존 데이터 전체 삭제 후 새로 삽입
-            con.execute(f"DELETE FROM {table_name}")
-
             # DataFrame에서 필요한 컬럼만 선택
             cols = ['stck_bsop_date', 'stck_clpr', 'stck_oprc', 'stck_hgpr', 'stck_lwpr',
                     'acml_vol', 'acml_tr_pbmn', 'flng_cls_code', 'prtt_rate', 'mod_yn',
@@ -393,14 +397,24 @@ class DailyDataCache:
                 if col not in df_to_save.columns:
                     df_to_save[col] = ''
 
-            # 삽입
-            con.execute(f"""
-                INSERT INTO {table_name}
-                SELECT stck_bsop_date, stck_clpr, stck_oprc, stck_hgpr, stck_lwpr,
-                       acml_vol, acml_tr_pbmn, flng_cls_code, prtt_rate, mod_yn,
-                       prdy_vrss_sign, prdy_vrss, revl_issu_reas
-                FROM df_to_save
-            """)
+            # 트랜잭션으로 DELETE + INSERT 원자적 실행
+            con.execute("BEGIN TRANSACTION")
+            try:
+                # 기존 데이터 전체 삭제 후 새로 삽입
+                con.execute(f"DELETE FROM {table_name}")
+
+                # 삽입
+                con.execute(f"""
+                    INSERT INTO {table_name}
+                    SELECT stck_bsop_date, stck_clpr, stck_oprc, stck_hgpr, stck_lwpr,
+                           acml_vol, acml_tr_pbmn, flng_cls_code, prtt_rate, mod_yn,
+                           prdy_vrss_sign, prdy_vrss, revl_issu_reas
+                    FROM df_to_save
+                """)
+                con.execute("COMMIT")
+            except Exception as inner_e:
+                con.execute("ROLLBACK")
+                raise inner_e
 
             con.close()
             self.logger.debug(f"[{stock_code}] 일봉 DuckDB 저장 완료 ({len(df_daily)}개)")
