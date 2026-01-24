@@ -37,8 +37,8 @@ class FundManager:
         # 주문별 예약 금액 추적
         self.order_reservations: Dict[str, float] = {}  # order_id -> reserved_amount
         
-        # 설정
-        self.max_position_ratio = 0.09  # 종목당 최대 투자 비율 (9%)
+        # 설정 (trading_config.json의 buy_budget_ratio와 동일하게 유지)
+        self.max_position_ratio = 0.20  # 종목당 최대 투자 비율 (20% = 1/5)
         self.max_total_investment_ratio = 0.9  # 전체 자금 대비 최대 투자 비율 (90%)
         
         self.logger.info(f"💰 자금 관리자 초기화 완료 - 초기자금: {initial_funds:,.0f}원")
