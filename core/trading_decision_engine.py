@@ -7,7 +7,6 @@ from datetime import datetime
 
 from utils.logger import setup_logger
 from utils.korean_time import now_kst
-from core.indicators.pullback_candle_pattern import SignalType
 from core.timeframe_converter import TimeFrameConverter
 
 
@@ -143,24 +142,6 @@ class TradingDecisionEngine:
 
         self.logger.info("🧠 매매 판단 엔진 초기화 완료")
 
-    def _initialize_hardcoded_ml(self):
-        """하드코딩된 경량 ML 예측기 초기화"""
-        try:
-            from trade_analysis.hardcoded_ml_predictor import HardcodedMLPredictor
-            
-            self.hardcoded_ml_predictor = HardcodedMLPredictor()
-            
-            if self.hardcoded_ml_predictor.is_ready:
-                self.logger.info("⚡ 하드코딩된 경량 ML 예측기 초기화 완료")
-            else:
-                self.logger.warning("⚠️ 하드코딩된 ML 예측기 준비 실패")
-                self.use_hardcoded_ml = False
-                
-        except Exception as e:
-            self.logger.error(f"❌ 하드코딩된 ML 예측기 초기화 실패: {e}")
-            self.use_hardcoded_ml = False
-            self.hardcoded_ml_predictor = None
-    
     def _initialize_ml_predictor(self):
         """ML 예측기 초기화"""
         try:
@@ -397,36 +378,6 @@ class TradingDecisionEngine:
     
     # set_buy_cooldown 메서드 제거: TradingStock 모델에서 last_buy_time으로 관리
     
-    def _calculate_buy_price(self, combined_data) -> float:
-        """매수가 계산 (4/5가 또는 현재가)
-        
-        @deprecated: generate_improved_signals에서 직접 계산하도록 변경됨
-        """
-        try:
-            current_price = self._safe_float_convert(combined_data['close'].iloc[-1])
-            
-            # 4/5가 계산 시도
-            try:
-                from core.price_calculator import PriceCalculator
-                
-                data_3min = TimeFrameConverter.convert_to_3min_data(combined_data)
-                four_fifths_price, entry_low = PriceCalculator.calculate_three_fifths_price(data_3min, self.logger)
-                
-                if four_fifths_price is not None:
-                    self.logger.debug(f"🎯 4/5가 계산 성공: {four_fifths_price:,.0f}원")
-                    return four_fifths_price
-                else:
-                    self.logger.debug(f"⚠️ 4/5가 계산 실패 → 현재가 사용: {current_price:,.0f}원")
-                    return current_price
-                    
-            except Exception as e:
-                self.logger.debug(f"4/5가 계산 오류: {e} → 현재가 사용")
-                return current_price
-                
-        except Exception as e:
-            self.logger.error(f"❌ 매수가 계산 오류: {e}")
-            return 0
-    
     def _get_max_buy_amount(self, stock_code: str = "") -> float:
         """최대 매수 가능 금액 조회"""
         # 설정에서 투자 비율 가져오기 (기본값: 0.20 = 1/5)
@@ -620,15 +571,8 @@ class TradingDecisionEngine:
                 # 가상 포지션 정보를 trading_stock에 저장
                 trading_stock.set_virtual_buy_info(buy_record_id, current_price, quantity)
                 
-                # 신호 강도에 따른 목표수익률 설정
-                if "눌림목" in buy_reason:
-                    try:
-                        target_rate = self._get_target_profit_rate(data_3min, buy_reason)
-                        trading_stock.target_profit_rate = target_rate
-                        self.logger.info(f"📊 목표수익률 설정: {target_rate*100:.0f}% ({buy_reason})")
-                    except Exception as e:
-                        self.logger.warning(f"목표수익률 설정 실패, 기본값 사용: {e}")
-                        trading_stock.target_profit_rate = 0.03
+                # 목표수익률 설정 (기본값 사용)
+                trading_stock.target_profit_rate = 0.03
                 
                 # 포지션 상태로 변경 (가상)
                 trading_stock.set_position(quantity, current_price)
@@ -871,101 +815,7 @@ class TradingDecisionEngine:
             self.logger.error(f"❌ 간단한 손절/익절 조건 확인 오류: {e}")
             return False, ""
     
-    def _check_stop_loss_conditions(self, trading_stock, data) -> Tuple[bool, str]:
-        """손절 조건 확인 (trading_config.json의 손익비 설정 사용)"""
-        try:
-            if not trading_stock.position:
-                return False, ""
-            
-            current_price = data['close'].iloc[-1]
-            buy_price = trading_stock.position.avg_price
-            
-            # 🆕 trading_config.json에서 손익비 설정 가져오기
-            from config.settings import load_trading_config
-            config = load_trading_config()
-            target_profit_rate = config.risk_management.take_profit_ratio  # 0.035 (3.5%)
-            stop_loss_rate = config.risk_management.stop_loss_ratio        # 0.025 (2.5%)
-            
-            loss_rate = (current_price - buy_price) / buy_price
-            if loss_rate <= -stop_loss_rate:
-                return True, f"신호강도별손절 {loss_rate*100:.1f}% (기준: -{stop_loss_rate*100:.1f}%)"
-            
-            # 매수 사유에 따른 추가 기술적 손절 조건 (신호강도별 손절과 병행)
-            if "눌림목캔들패턴" in trading_stock.selection_reason:
-                technical_stop, technical_reason = self._check_pullback_candle_stop_loss(trading_stock, data, buy_price, current_price)
-                if technical_stop:
-                    return True, f"기술적손절: {technical_reason}"
-            
-            return False, ""
-            
-        except Exception as e:
-            self.logger.error(f"❌ 손절 조건 확인 오류: {e}")
-            return False, ""
     
-    
-    def _get_target_profit_rate(self, data_3min: pd.DataFrame, signal_type: str) -> float:
-        """신호 강도에 따른 목표수익률 계산"""
-        try:
-            from core.indicators.pullback_candle_pattern import PullbackCandlePattern
-            
-            # 신호 강도 정보 계산
-            signals_improved = PullbackCandlePattern.generate_trading_signals(
-                data_3min,
-                enable_candle_shrink_expand=False,
-                enable_divergence_precondition=False,
-                enable_overhead_supply_filter=True,
-                use_improved_logic=True,  # 개선된 로직 사용으로 신호 강도 정보 포함
-                candle_expand_multiplier=1.10,
-                overhead_lookback=10,
-                overhead_threshold_hits=2,
-                debug=False,
-            )
-            
-            if signals_improved.empty:
-                return 0.02  # 기본값 2.0% (기존 1.5% → 2.0%로 상향)
-            
-            # 마지막 신호의 강도 정보 확인
-            last_row = signals_improved.iloc[-1]
-            
-            if 'signal_type' in signals_improved.columns:
-                signal_type_val = last_row['signal_type']
-                if signal_type_val == SignalType.STRONG_BUY.value:
-                    return 0.025  # 최고신호: 2.5%
-                elif signal_type_val == SignalType.CAUTIOUS_BUY.value:
-                    return 0.02  # 중간신호: 2.0%
-            
-            # target_profit 컬럼이 있으면 직접 사용
-            if 'target_profit' in signals_improved.columns:
-                target = last_row['target_profit']
-                if pd.notna(target) and target > 0:
-                    return float(target)
-                    
-            return 0.02  # 기본신호: 2.0% (기존 1.5% → 2.0%로 상향)
-            
-        except Exception as e:
-            self.logger.warning(f"목표수익률 계산 실패, 기본값 사용: {e}")
-            return 0.02
-    
-    def _check_profit_target(self, trading_stock, current_price) -> Tuple[bool, str]:
-        """수익실현 조건 확인 (신뢰도별 차등 목표수익 적용)"""
-        try:
-            if not trading_stock.position:
-                return False, ""
-            
-            buy_price = trading_stock.position.avg_price
-            profit_rate = (current_price - buy_price) / buy_price
-            
-            # 신뢰도별 차등 목표수익률 사용
-            target_rate = getattr(trading_stock, 'target_profit_rate', 0.03)
-            
-            if profit_rate >= target_rate:
-                return True, f"매수가 대비 +{target_rate*100:.0f}% 수익실현"
-            
-            return False, ""
-            
-        except Exception as e:
-            self.logger.error(f"❌ 수익실현 조건 확인 오류: {e}")
-            return False, ""
     
     def _is_already_holding(self, stock_code: str) -> bool:
         """
@@ -1201,67 +1051,3 @@ class TradingDecisionEngine:
             self.logger.debug(f"3분봉 확정 확인 오류: {e}")
             return False
     
-    def _check_pullback_candle_stop_loss(self, trading_stock, data, buy_price, current_price) -> Tuple[bool, str]:
-        """눌림목 캔들패턴 전략 손절 조건 (실시간 가격 + 3분봉 기준)"""
-        try:
-            from core.indicators.pullback_candle_pattern import PullbackCandlePattern
-            
-            # 1단계: 실시간 가격 기반 신호강도별 손절/익절 체크 (30초마다 체크용)
-            if buy_price and buy_price > 0:
-                profit_rate = (current_price - buy_price) / buy_price
-                
-                # 임시 고정: 익절 +3%, 손절 -2%
-                target_profit_rate = 0.03  # 3% 고정
-                stop_loss_rate = 0.02      # 2% 고정
-                
-                # 신호강도별 손절
-                if profit_rate <= -stop_loss_rate:
-                    return True, f"⚡신호강도별손절 {profit_rate*100:.1f}% (기준: -{stop_loss_rate*100:.1f}%)"
-                
-                # 신호강도별 익절
-                if profit_rate >= target_profit_rate:
-                    return True, f"⚡신호강도별익절 {profit_rate*100:.1f}% (기준: +{target_profit_rate*100:.1f}%)"
-                
-                # 진입저가 실시간 체크 (주석처리: 손익비로만 판단)
-                # entry_low_value = getattr(trading_stock, '_entry_low', None)
-                # if entry_low_value and entry_low_value > 0:
-                #     if current_price < entry_low_value * 0.998:  # -0.2%
-                #         return True, f"⚡실시간진입저가이탈 ({current_price:.0f}<{entry_low_value*0.998:.0f})"
-            
-            # 2단계: 3분봉 기반 정밀 분석 (기존 로직 유지)
-            # 1분봉 데이터를 3분봉으로 변환
-            data_3min = TimeFrameConverter.convert_to_3min_data(data)
-            if data_3min is None or len(data_3min) < 15:
-                return False, ""
-            
-            # 매도 신호 직접 계산 (in_position 비의존)
-            entry_low_value = None
-            try:
-                entry_low_value = getattr(trading_stock, '_entry_low', None)
-            except Exception:
-                entry_low_value = None
-            sell_signals = PullbackCandlePattern.generate_sell_signals(
-                data_3min,
-                entry_low=entry_low_value
-            )
-            
-            if sell_signals is None or sell_signals.empty:
-                return False, ""
-            
-            # 손절 조건 1: 이등분선 이탈 (0.2% 기준)
-            if 'sell_bisector_break' in sell_signals.columns and bool(sell_signals['sell_bisector_break'].iloc[-1]):
-                return True, "📈이등분선이탈(0.2%)"
-            
-            # 손절 조건 2: 지지 저점 이탈
-            if 'sell_support_break' in sell_signals.columns and bool(sell_signals['sell_support_break'].iloc[-1]):
-                return True, "📈지지저점이탈"
-            
-            # 손절 조건 3: 진입 양봉 저가 0.2% 이탈 (entry_low 전달 시에만 유효)
-            if 'stop_entry_low_break' in sell_signals.columns and bool(sell_signals['stop_entry_low_break'].iloc[-1]):
-                return True, "📈진입양봉저가이탈(0.2%)"
-            
-            return False, ""
-            
-        except Exception as e:
-            self.logger.error(f"❌ 눌림목 캔들패턴 손절 조건 확인 오류: {e}")
-            return False, ""
