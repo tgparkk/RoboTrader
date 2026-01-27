@@ -1,211 +1,135 @@
--눌림목 캔들패턴-
+# RoboTrader - Claude 컨텍스트
 
-주가는 상승, 거래량의 추세는 하락, 주가가 이등분선 위에서 조정받는 동안 거래량이 급감하며 봉 캔들이 짧아졌다. 이후 급감되었던 거래량이 조금씩 증가하며 봉의 크키가 서서히 커진다 -> 매수
+## Claude 작업 지침
 
-
-
-(본래 주가가 상승할수록 거래량 증가가 일반적이지만, 주가가 상승할수록 거래량이 하락추세면 매물의 부담이 없다는것. 적은 돈으로 주가가 올랐기 때문에 하락할 때도 적은 돈으로 하락할 가능성 높음. 즉, 대량의 매도물량이 나오지 않을 가능성이 높아 매물부담 없이 눌림목에서 반등 확률 높음)
-
-
-
-'급감된 거래량' 을 다음 봉에서 상회를 했고 캔들의 크기가 커졌는지 판단.
-
-손절 타이밍
-
-'이등분선 이탈' 또는 지지가 되었던 저점을 이탈할 때.
-
-
-
-이등분선을 이탈해도 , 지지되다가 이등분선을 넘어서면서 거래량이 조금씩 증가 -> 매수
-
-
-
-당일 분봉차트(3분봉) 에서 가장 많이 나온 거래량을 기준거래량으로 설정하고 이 기준 거래량의 1/2 수치 정도 거래되면서 주가가 하락한다면 매도세가 쏟아진다고 판단가능. 이 매도세는 결국 악성매물로 바뀌게 되어 주가 상승 방해.
-
-
-
-통상적으로 기준 거래량의 1/4 수준으로 거래돼야 상대적으로 매물부담이 덜함.
+**상세 정보가 필요할 때 참조할 문서**:
+- 데이터 흐름, 디버깅, 실시간 vs 시뮬 차이 → `DEVELOPMENT.md` 읽기
+- 설정값 변경, 필터 설정, 투자비율 조정 → `CONFIGURATION.md` 읽기
+- 분석 명령어, 로그 검색 상세 → `ROBOTRADER_ANALYSIS_GUIDE.md` 읽기
 
 ---
 
-# RoboTrader 시스템 분석 방법
+## 프로젝트 개요
 
-## 실시간 거래 분석
-- **로그 파일**: `logs/trading_YYYYMMDD.log`
-- **종목 선정 시점**: `grep "종목코드" logs/trading_YYYYMMDD.log | grep "선정 완료"`
-- **매수 신호**: `grep "종목코드" logs/trading_YYYYMMDD.log | grep "매수 신호 발생"`
-- **ML 필터 결과**: `grep "종목코드" logs/trading_YYYYMMDD.log | grep "ML 필터"`
-- **패턴 상세 정보**: `pattern_data_log/pattern_data_YYYYMMDD.jsonl`
+한국투자증권 KIS API 기반 **눌림목 캔들패턴** 자동매매 시스템
 
-## 시뮬레이션 분석
-- **순수 패턴 신호**: `signal_replay_log/signal_new2_replay_YYYYMMDD_9_00_0.txt`
-- **ML 필터 적용**: `signal_replay_log_ml/signal_ml_replay_YYYYMMDD_9_00_0.txt`
-- **데이터 소스**: `cache/minute_data/종목코드_YYYYMMDD.pkl` (확정된 캐시 데이터)
-- **주의**: selection_date 필터링 적용됨 (선정 시점 이전 신호는 차단)
+## 핵심 전략: 눌림목 캔들패턴
 
-## 실시간 vs 시뮬 차이 분석 3단계
-1. **신호 시점 비교**: 실시간과 시뮬에서 같은 시간에 신호가 발생했는가?
-2. **selection_date 확인**: 시뮬에서 필터링되었는가? (completion_time < selection_date 체크)
-3. **데이터 일치 확인**: 캐시 데이터 vs 실시간 패턴 로그 데이터 비교
+**매수 조건**:
+- 주가 상승 중 거래량은 하락 추세
+- 이등분선 위에서 조정 (거래량 급감, 봉 크기 축소)
+- 급감된 거래량 상회 + 캔들 크기 회복 → 매수
 
-## 핵심 개념
-- **3분봉 completion_time**: 라벨 시간 + 3분 (예: 10:42 캔들 → 10:45:00 완성)
-- **ML 임계값**: 50% (config/ml_settings.py의 ML_THRESHOLD)
-- **selection_date 필터링**: 시뮬레이션에서만 적용 (실시간은 없음)
-- **데이터 차이**: 실시간은 지속 업데이트, 캐시는 확정값 → 같은 시간대 캔들도 값이 다를 수 있음
+**손절 조건**:
+- 이등분선 이탈
+- 지지 저점 이탈
 
-## 주요 차이 원인
-1. **selection_date 필터링**: 시뮬에서 선정 시점 이전 신호 차단
-2. **데이터 불일치**: 실시간 업데이트 데이터 vs 확정 캐시 데이터
-3. **ML 확률 차이**: 패턴 구조가 미묘하게 다를 경우
-
-상세 가이드: `ROBOTRADER_ANALYSIS_GUIDE.md` 참조
-
-## ML 모델 관련
-
-- 현재 사용 중: ml_model.pkl (config/ml_settings.py)
-- ml_model_merged.pkl은 AUC 0.75로 높지만, 실전에서는 ml_model.pkl이 더 우수
-- 실제 성능: 승률 52.1%, 거래당 평균 +7,238원
+**거래량 판단**:
+- 기준 거래량: 당일 3분봉 최대 거래량
+- 1/4 수준: 매물부담 적음 (양호)
+- 1/2 수준: 매도세 발생 (주의)
 
 ---
 
-## 고급 필터 시스템 (2026-01-24 v2 업데이트)
+## 현재 시스템 설정
 
-### 개요
-- **설정 파일**: `config/advanced_filter_settings.py`
-- **필터 로직**: `core/indicators/advanced_filters.py`
-- **분석 기준**: 3분봉 (877건 백테스트, pattern_stages 매칭 714건)
-- **기본 승률**: 45.6% → **필터 적용 후 51.4%** (477건)
+### ML 필터 (config/ml_settings.py)
+- **USE_ML_FILTER**: False (비활성화)
+- **ML_THRESHOLD**: 0.4 (40%)
+- **MODEL_PATH**: ml_model.pkl
 
-### 현재 활성화된 필터
+### 고급 필터 (config/advanced_filter_settings.py)
+- **ENABLED**: True
+- **활성화된 필터**:
+  - 연속양봉 >= 1개
+  - 가격위치 >= 80%
+  - 화요일 회피
+  - 시간대-요일 회피 (9시화, 10시화, 11시화, 10시수)
+  - 저승률 종목 회피 (101170, 394800)
+  - pattern_stages 기반: 상승폭 >= 15%, 하락폭 >= 5%, 지지캔들 = 3개 회피
 
-#### 3분봉 기반 필터
-| 필터 | 임계값 | 승률 향상 |
-|------|--------|----------|
-| 연속양봉 | >= 1개 | +17.4%p |
-| 가격위치 | >= 80% | +17.9%p |
-| 화요일 회피 | - | - |
-| 시간대-요일 | 9시화, 10시화, 11시화, 10시수 회피 | - |
-| 저승률 종목 | 101170, 394800 | - |
+### 투자 비율 (config/trading_config.json)
+- **buy_budget_ratio**: 0.20 (건당 가용잔고의 20%)
+- **max_position_ratio**: 0.20 (fund_manager.py)
 
-#### pattern_stages 기반 회피 필터 (2026-01-24 추가)
-| 필터 | 임계값 | 기존 승률 |
-|------|--------|----------|
-| 상승폭 제한 | >= 15% 회피 | 28.0% (과열 진입 방지) |
-| 하락폭 제한 | >= 5% 회피 | 21.1% (추세 반전 위험) |
-| 지지캔들 수 | = 3개 회피 | 34.1% (지지 실패 위험) |
+### 손익비 (config/trading_config.json)
+- **stop_loss_ratio**: 0.025 (-2.5%)
+- **take_profit_ratio**: 0.035 (+3.5%)
+- **use_dynamic_profit_loss**: false
 
-### 적용 범위
-- **실시간**: `trading_decision_engine.py`에서 자동 적용 (ENABLED=True 시)
-- **시뮬레이션**: `--advanced-filter` 옵션으로 적용
+---
 
-### 시뮬레이션 명령어
+## 주요 파일 구조
+
+```
+config/
+├── trading_config.json      # 거래 설정 (투자비율, 손익비)
+├── ml_settings.py           # ML 필터 설정
+├── advanced_filter_settings.py  # 고급 필터 설정
+
+core/
+├── trading_decision_engine.py   # 매매 판단 엔진
+├── fund_manager.py              # 자금 관리
+├── indicators/
+│   ├── advanced_filters.py      # 고급 필터 로직
+│   └── pullback_candle_pattern.py  # 눌림목 패턴 감지
+
+utils/
+├── signal_replay.py         # 시뮬레이션 (순수 패턴)
+├── data_cache.py            # DuckDB 캐시 관리
+
+cache/
+└── market_data_v2.duckdb    # 분봉/일봉 캐시 데이터
+```
+
+---
+
+## 분석 방법
+
+### 실시간 거래 분석
+```bash
+# 종목 선정 시점
+grep "종목코드" logs/trading_YYYYMMDD.log | grep "선정 완료"
+
+# 매수 신호
+grep "종목코드" logs/trading_YYYYMMDD.log | grep "매수 신호 발생"
+
+# 패턴 상세
+grep "종목코드" pattern_data_log/pattern_data_YYYYMMDD.jsonl
+```
+
+### 시뮬레이션 분석
 ```bash
 # 고급 필터 적용 시뮬레이션
 python batch_signal_replay.py --start 20250901 --end 20260123 --advanced-filter
 ```
 
-### 주요 파일
-- `config/advanced_filter_settings.py`: 필터 설정 (임계값, 활성화 여부)
-- `core/indicators/advanced_filters.py`: 필터 로직 (AdvancedFilterManager)
-- `analyze_combined_v3.py`: 통합 분석 스크립트 (signal_replay_log + pattern_data_log)
-
-### 데이터 기준
-- **시뮬/실시간 모두 3분봉 사용** (5개 봉 = 15분 범위)
-- OHLCV 시퀀스에서 연속양봉, 가격위치 등 특징 추출
-- pattern_stages에서 상승폭, 하락폭, 지지캔들 수 추출
-
-### pattern_stages 데이터 흐름 (실시간)
-```
-1. PullbackCandlePattern.generate_improved_signals()  [pullback_candle_pattern.py:433]
-   ↓
-2. complete_pattern_data['pattern_stages'] 생성      [pullback_candle_pattern.py:695]
-   ↓
-3. signal_strength.pattern_data에 저장              [pullback_candle_pattern.py:718]
-   ↓
-4. price_info['pattern_data'] 전달                  [trading_decision_engine.py:1089]
-   ↓
-5. pattern_stages 추출                              [trading_decision_engine.py:349]
-   ↓
-6. AdvancedFilterManager.check_signal() 호출        [trading_decision_engine.py:352]
-```
-
-### pattern_stages 구조
-```python
-{
-    '1_uptrend': {
-        'price_gain': 0.15,      # 상승폭 (0~1, 15% = 0.15)
-        'candle_count': 5
-    },
-    '2_decline': {
-        'decline_pct': 3.5,      # 하락폭 (% 값, 3.5%)
-        'candle_count': 3
-    },
-    '3_support': {
-        'candle_count': 2        # 지지캔들 수
-    },
-    '4_breakout': {
-        'idx': 45                # 돌파봉 인덱스
-    }
-}
-```
-
-### 검증 스크립트
-```bash
-# 실시간 흐름과 동일하게 pattern_stages 생성 검증
-python test_pattern_stages_realtime.py --code 종목코드 --date YYYYMMDD
-```
+**시뮬레이션 결과 파일**:
+- 순수 패턴: `signal_replay_log/signal_new2_replay_YYYYMMDD_9_00_0.txt`
+- ML 적용: `signal_replay_log_ml/signal_ml_replay_YYYYMMDD_9_00_0.txt`
 
 ---
 
-## 투자 비율 설정 (2026-01-24 업데이트)
+## 핵심 개념
 
-### 설정 위치
-- **설정 파일**: `config/trading_config.json` → `order_management.buy_budget_ratio`
-- **자금 관리**: `core/fund_manager.py` → `max_position_ratio`
-- **적용 코드**: `core/trading_decision_engine.py` → `_get_max_buy_amount()`
+### 3분봉 completion_time
+- 라벨 시간 + 3분 = 완성 시간
+- 예: 10:42 캔들 → 10:45:00 완성
 
-### 현재 설정
-- **buy_budget_ratio**: 0.20 (1/5, 건당 가용잔고의 20%)
+### selection_date 필터링
+- **시뮬레이션에서만 적용** (실시간은 없음)
+- completion_time < selection_date → 신호 차단
 
-### 최적 비율 분석 결과 (72일 백테스트)
-| 비율 | 건당 투자금 | 총 수익 | MDD | 수익/MDD |
-|------|-----------|---------|-----|---------|
-| 1/3 | 367만원 | +588만원 | 102만원 | 5.78 |
-| **1/4** | 275만원 | +564만원 | 68만원 | **8.25** |
-| **1/5** | 220만원 | +424만원 | 59만원 | 7.21 |
-| 1/11 | 100만원 | +201만원 | 32만원 | 6.33 |
-
-### 권장 사항
-- **수익/리스크 최적**: 1/4 (수익/MDD = 8.25)
-- **균형적 선택**: 1/5 (대부분 신호 캡처, 적절한 리스크)
-- **보수적**: 1/11 (안정적이지만 수익 제한)
-
-### 동시 보유 패턴
-- 70%의 날: 동시 보유 4개 이하
-- 90%의 날: 동시 보유 7개 이하
+### 데이터 차이
+- 실시간: KIS API (지속 업데이트)
+- 캐시: DuckDB (확정값)
+- 같은 시간대 캔들도 값이 다를 수 있음
 
 ---
 
-## 데이터 캐시 시스템 (2026-01-18 업데이트)
+## 상세 문서 참조
 
-### DuckDB 마이그레이션 완료
-- **기존**: pkl 파일 기반 캐시 (cache/minute_data/*.pkl, cache/daily/*.pkl)
-- **현재**: DuckDB 기반 캐시 (`cache/market_data_v2.duckdb`)
-
-### 테이블 구조
-- **분봉 데이터**: `minute_{종목코드}` 테이블 (예: `minute_005930`)
-- **일봉 데이터**: `daily_{종목코드}` 테이블 (예: `daily_005930`)
-- 약 750개 분봉 테이블, 747개 일봉 테이블
-
-### 주요 클래스
-- `DataCache` (utils/data_cache.py): 분봉 데이터 캐시 관리
-- `DailyDataCache` (utils/data_cache.py): 일봉 데이터 캐시 관리
-
-### 데이터 로드 우선순위
-1. DuckDB에서 로드 시도
-2. DuckDB에 없으면 pkl 파일에서 폴백 로드 (하위 호환성)
-
-### gitignore 처리
-- `cache/daily/`, `cache/minute_data/`, `cache/*.duckdb` - git 추적 제외
-- `signal_replay_log/`, `signal_replay_log_ml/` - git 추적 제외
+- [DEVELOPMENT.md](DEVELOPMENT.md) - 개발자용 상세 가이드 (데이터 흐름, 디버깅)
+- [CONFIGURATION.md](CONFIGURATION.md) - 설정 파일 상세 설명
+- [README.md](README.md) - 프로젝트 소개 및 설치 방법
+- [docs/trading_logic_documentation.md](docs/trading_logic_documentation.md) - 매매 로직 상세
