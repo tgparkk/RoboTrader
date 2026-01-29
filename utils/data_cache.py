@@ -397,13 +397,18 @@ class DailyDataCache:
                 if col not in df_to_save.columns:
                     df_to_save[col] = ''
 
-            # 트랜잭션으로 DELETE + INSERT 원자적 실행
+            # 트랜잭션으로 MERGE (중복 제거 + 과거 데이터 보존)
             con.execute("BEGIN TRANSACTION")
             try:
-                # 기존 데이터 전체 삭제 후 새로 삽입
-                con.execute(f"DELETE FROM {table_name}")
+                # 기존 날짜 데이터는 삭제 (업데이트)
+                con.execute(f"""
+                    DELETE FROM {table_name}
+                    WHERE stck_bsop_date IN (
+                        SELECT DISTINCT stck_bsop_date FROM df_to_save
+                    )
+                """)
 
-                # 삽입
+                # 신규 데이터 삽입
                 con.execute(f"""
                     INSERT INTO {table_name}
                     SELECT stck_bsop_date, stck_clpr, stck_oprc, stck_hgpr, stck_lwpr,
