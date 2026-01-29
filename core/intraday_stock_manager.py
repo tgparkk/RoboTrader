@@ -809,7 +809,10 @@ class IntradayStockManager:
             # 분봉 API로 완성된 데이터 조회
             div_code = get_div_code_for_stock(stock_code)
 
-            # 🆕 매분 1개 분봉만 가져오기
+            # 🆕 최대 30개 분봉 가져오기 (past_data_yn="Y")
+            # - API는 input_hour 기준 과거 데이터 포함하여 최대 30개 반환
+            # - 중복 데이터는 drop_duplicates(keep='last')로 제거
+            # - keep='last'는 최신 API 응답으로 기존 데이터 덮어쓰기
             result = get_inquire_time_itemchartprice(
                 div_code=div_code,
                 stock_code=stock_code,
