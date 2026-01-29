@@ -65,7 +65,9 @@
       "Bash(git diff:*)",
       "Bash(git status:*)",
       "Bash(pip show:*)",
-      "Bash(pip install:*)"
+      "Bash(pip install:*)",
+      "Bash(tasklist:*)",
+      "Bash(cmd /c \"tasklist /FI \"\"IMAGENAME eq python.exe\"\"\")"
     ],
     "deny": [],
     "ask": []
