@@ -4,11 +4,14 @@
 
 - DuckDB를 기본 저장소로 사용
 - 기존 pkl 파일도 읽기 가능 (호환성 유지)
+- Thread-local 연결 풀링으로 성능 최적화
 """
 import os
 import pickle
 import pandas as pd
 import duckdb
+import threading
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 from utils.logger import setup_logger
@@ -23,7 +26,11 @@ class DataCache:
 
     - 기본적으로 DuckDB에서 데이터를 읽고 씀
     - DuckDB에 데이터가 없으면 pkl 파일에서 폴백 로드 (호환성)
+    - Thread-local 연결 풀링으로 성능 최적화
     """
+
+    # 스레드별 DuckDB 연결 저장소
+    _thread_local = threading.local()
 
     def __init__(self, cache_dir: str = "cache/minute_data", use_duckdb: bool = True):
         self.logger = setup_logger(__name__)
@@ -42,6 +49,15 @@ class DataCache:
         except Exception as e:
             self.logger.warning(f"DuckDB 초기화 실패, pkl 모드로 전환: {e}")
             self.use_duckdb = False
+
+    def _get_connection(self):
+        """스레드별 DuckDB 연결 반환 (재사용)
+
+        각 스레드마다 하나의 연결을 유지하여 연결 생성 오버헤드 제거
+        """
+        if not hasattr(self._thread_local, 'connection') or self._thread_local.connection is None:
+            self._thread_local.connection = duckdb.connect(str(DB_PATH), read_only=True)
+        return self._thread_local.connection
 
     def _get_table_name(self, stock_code: str) -> str:
         """종목별 테이블명 생성"""
@@ -73,23 +89,23 @@ class DataCache:
         return self.cache_dir / f"{stock_code}_{date_str}.pkl"
 
     def has_data(self, stock_code: str, date_str: str) -> bool:
-        """캐시된 데이터 존재 여부 확인"""
+        """캐시된 데이터 존재 여부 확인 - 연결 풀링 사용"""
         if self.use_duckdb:
             try:
                 table_name = self._get_table_name(stock_code)
-                con = duckdb.connect(str(DB_PATH), read_only=True)
+                con = self._get_connection()  # 재사용되는 연결
                 # 테이블 존재 여부 확인
                 tables = con.execute("SELECT table_name FROM information_schema.tables WHERE table_name = ?", [table_name]).fetchall()
                 if not tables:
-                    con.close()
-                else:
-                    count = con.execute(f"""
-                        SELECT COUNT(*) FROM {table_name}
-                        WHERE trade_date = ?
-                    """, [date_str]).fetchone()[0]
-                    con.close()
-                    if count > 0:
-                        return True
+                    return False
+
+                count = con.execute(f"""
+                    SELECT COUNT(*) FROM {table_name}
+                    WHERE trade_date = ?
+                """, [date_str]).fetchone()[0]
+                # con.close() 제거 - 연결 유지
+                if count > 0:
+                    return True
             except:
                 pass
 
@@ -178,15 +194,14 @@ class DataCache:
             return None
 
     def _load_from_duckdb(self, stock_code: str, date_str: str) -> Optional[pd.DataFrame]:
-        """DuckDB에서 로드 (종목별 테이블)"""
+        """DuckDB에서 로드 (종목별 테이블) - 연결 풀링 사용"""
         try:
             table_name = self._get_table_name(stock_code)
-            con = duckdb.connect(str(DB_PATH), read_only=True)
+            con = self._get_connection()  # 재사용되는 연결
 
             # 테이블 존재 여부 확인
             tables = con.execute("SELECT table_name FROM information_schema.tables WHERE table_name = ?", [table_name]).fetchall()
             if not tables:
-                con.close()
                 return None
 
             df = con.execute(f"""
@@ -195,7 +210,7 @@ class DataCache:
                 WHERE trade_date = ?
                 ORDER BY idx
             """, [date_str]).fetchdf()
-            con.close()
+            # con.close() 제거 - 연결 유지
 
             if df.empty:
                 return None
@@ -272,7 +287,7 @@ class DataCache:
             }
 
             if self.use_duckdb and DB_PATH.exists():
-                con = duckdb.connect(str(DB_PATH), read_only=True)
+                con = self._get_connection()  # 재사용되는 연결
                 # 분봉 테이블 수
                 tables = con.execute("SELECT table_name FROM information_schema.tables WHERE table_name LIKE 'minute_%'").fetchall()
                 result['total_tables'] = len(tables)
@@ -285,7 +300,7 @@ class DataCache:
                 if tables:
                     result['total_records'] = int(total_records * len(tables) / min(10, len(tables)))
 
-                con.close()
+                # con.close() 제거 - 연결 유지
                 result['total_size_mb'] = round(DB_PATH.stat().st_size / (1024 * 1024), 2)
                 result['storage'] = 'duckdb'
             else:
@@ -301,19 +316,45 @@ class DataCache:
             self.logger.error(f"캐시 크기 확인 실패: {e}")
             return {'total_tables': 0, 'total_records': 0, 'total_size_mb': 0, 'cache_dir': str(self.cache_dir), 'storage': 'error'}
 
+    def __enter__(self):
+        """Context Manager 진입"""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context Manager 종료 - 스레드 로컬 연결 정리"""
+        if hasattr(self._thread_local, 'connection') and self._thread_local.connection is not None:
+            try:
+                self._thread_local.connection.close()
+                self._thread_local.connection = None
+            except Exception as e:
+                self.logger.warning(f"연결 정리 실패: {e}")
+
 
 class DailyDataCache:
     """DuckDB 기반 일봉 데이터 캐시 관리자
 
     - 기본적으로 DuckDB에서 데이터를 읽고 씀
     - DuckDB에 데이터가 없으면 pkl 파일에서 폴백 로드 (호환성)
+    - Thread-local 연결 풀링으로 성능 최적화
     """
+
+    # 스레드별 DuckDB 연결 저장소
+    _thread_local = threading.local()
 
     def __init__(self, cache_dir: str = "cache/daily", use_duckdb: bool = True):
         self.logger = setup_logger(__name__)
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.use_duckdb = use_duckdb and DB_PATH.exists()
+
+    def _get_connection(self):
+        """스레드별 DuckDB 연결 반환 (재사용)
+
+        각 스레드마다 하나의 연결을 유지하여 연결 생성 오버헤드 제거
+        """
+        if not hasattr(self._thread_local, 'connection') or self._thread_local.connection is None:
+            self._thread_local.connection = duckdb.connect(str(DB_PATH), read_only=True)
+        return self._thread_local.connection
 
     def _get_table_name(self, stock_code: str) -> str:
         """종목별 테이블명 생성"""
@@ -345,19 +386,19 @@ class DailyDataCache:
         return self.cache_dir / f"{stock_code}_{date_str}_daily.pkl"
 
     def has_data(self, stock_code: str, min_records: int = 50) -> bool:
-        """캐시된 일봉 데이터 존재 여부 확인 (최소 레코드 수 기준)"""
+        """캐시된 일봉 데이터 존재 여부 확인 (최소 레코드 수 기준) - 연결 풀링 사용"""
         if self.use_duckdb:
             try:
                 table_name = self._get_table_name(stock_code)
-                con = duckdb.connect(str(DB_PATH), read_only=True)
+                con = self._get_connection()  # 재사용되는 연결
                 tables = con.execute("SELECT table_name FROM information_schema.tables WHERE table_name = ?", [table_name]).fetchall()
                 if not tables:
-                    con.close()
-                else:
-                    count = con.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
-                    con.close()
-                    if count >= min_records:
-                        return True
+                    return False
+
+                count = con.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+                # con.close() 제거 - 연결 유지
+                if count >= min_records:
+                    return True
             except:
                 pass
         return False
@@ -455,21 +496,20 @@ class DailyDataCache:
             return None
 
     def _load_from_duckdb(self, stock_code: str) -> Optional[pd.DataFrame]:
-        """DuckDB에서 로드"""
+        """DuckDB에서 로드 - 연결 풀링 사용"""
         try:
             table_name = self._get_table_name(stock_code)
-            con = duckdb.connect(str(DB_PATH), read_only=True)
+            con = self._get_connection()  # 재사용되는 연결
 
             tables = con.execute("SELECT table_name FROM information_schema.tables WHERE table_name = ?", [table_name]).fetchall()
             if not tables:
-                con.close()
                 return None
 
             df = con.execute(f"""
                 SELECT * FROM {table_name}
                 ORDER BY stck_bsop_date
             """).fetchdf()
-            con.close()
+            # con.close() 제거 - 연결 유지
 
             if df.empty:
                 return None
@@ -494,3 +534,16 @@ class DailyDataCache:
 
         self.logger.debug(f"[{stock_code}] 일봉 pkl에서 로드 ({len(df_daily)}개)")
         return df_daily
+
+    def __enter__(self):
+        """Context Manager 진입"""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context Manager 종료 - 스레드 로컬 연결 정리"""
+        if hasattr(self._thread_local, 'connection') and self._thread_local.connection is not None:
+            try:
+                self._thread_local.connection.close()
+                self._thread_local.connection = None
+            except Exception as e:
+                self.logger.warning(f"연결 정리 실패: {e}")

@@ -28,6 +28,8 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass, field
+import pandas as pd
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -60,8 +62,16 @@ class AdvancedFilterManager:
         self._daily_trade_count: Dict[str, int] = {}
         self._last_reset_date: Optional[str] = None
 
+        # 일봉 데이터 캐시
+        self._daily_cache = None
+        if self._has_daily_filters_enabled():
+            from utils.data_cache import DailyDataCache
+            self._daily_cache = DailyDataCache()
+            logger.info("일봉 필터 활성화 - DailyDataCache 초기화")
+
     def _load_preset(self):
-        """프리셋 로드"""
+        """프리셋 로드 (3분봉 + 일봉)"""
+        # 3분봉 프리셋
         preset_name = getattr(self.settings, 'ACTIVE_PRESET', None)
         if preset_name and hasattr(self.settings, 'PRESETS'):
             preset = self.settings.PRESETS.get(preset_name)
@@ -72,6 +82,26 @@ class AdvancedFilterManager:
                         current = getattr(self.settings, filter_name)
                         current.update(config)
 
+        # 일봉 프리셋
+        daily_preset_name = getattr(self.settings, 'ACTIVE_DAILY_PRESET', None)
+        if daily_preset_name and hasattr(self.settings, 'DAILY_PRESETS'):
+            daily_preset = self.settings.DAILY_PRESETS.get(daily_preset_name)
+            if daily_preset:
+                logger.info(f"일봉 필터 프리셋 로드: {daily_preset_name}")
+                for filter_name, config in daily_preset.items():
+                    if hasattr(self.settings, filter_name) and isinstance(config, dict):
+                        current = getattr(self.settings, filter_name)
+                        current.update(config)
+
+    def _has_daily_filters_enabled(self) -> bool:
+        """일봉 필터가 하나라도 활성화되어 있는지 확인"""
+        daily_filters = ['DAILY_CONSECUTIVE_UP', 'DAILY_PREV_CHANGE', 'DAILY_VOLUME_RATIO', 'DAILY_PRICE_POSITION']
+        for filter_name in daily_filters:
+            config = getattr(self.settings, filter_name, {})
+            if config.get('enabled', False):
+                return True
+        return False
+
     def check_signal(
         self,
         ohlcv_sequence: Optional[List[Dict]] = None,
@@ -80,6 +110,7 @@ class AdvancedFilterManager:
         signal_time: Optional[datetime] = None,
         volume_ma_ratio: Optional[float] = None,
         pattern_stages: Optional[Dict] = None,
+        trade_date: Optional[str] = None,
     ) -> FilterResult:
         """
         신호에 대해 모든 필터 적용
@@ -91,6 +122,7 @@ class AdvancedFilterManager:
             signal_time: 신호 발생 시간
             volume_ma_ratio: 거래량 MA 비율 (없으면 ohlcv에서 계산)
             pattern_stages: 눌림목 패턴 4단계 데이터 (1_uptrend, 2_decline, 3_support, 4_breakout)
+            trade_date: 거래일 (YYYYMMDD 형식, 일봉 필터용)
 
         Returns:
             FilterResult
@@ -175,6 +207,36 @@ class AdvancedFilterManager:
             if not result.passed:
                 return result
             details['support_candle'] = 'passed'
+
+        # 일봉 기반 필터 (12~15)
+        if self._daily_cache and stock_code and trade_date:
+            daily_features = self._extract_daily_features(stock_code, trade_date)
+            if daily_features:
+                details['daily_features'] = daily_features
+
+                # 12. 일봉 연속 상승일 필터
+                result = self._check_daily_consecutive_up(daily_features)
+                if not result.passed:
+                    return result
+                details['daily_consecutive_up'] = 'passed'
+
+                # 13. 일봉 전일 등락률 필터
+                result = self._check_daily_prev_change(daily_features)
+                if not result.passed:
+                    return result
+                details['daily_prev_change'] = 'passed'
+
+                # 14. 일봉 거래량 비율 필터
+                result = self._check_daily_volume_ratio(daily_features)
+                if not result.passed:
+                    return result
+                details['daily_volume_ratio'] = 'passed'
+
+                # 15. 일봉 가격 위치 필터
+                result = self._check_daily_price_position(daily_features)
+                if not result.passed:
+                    return result
+                details['daily_price_position'] = 'passed'
 
         return FilterResult(passed=True, details=details)
 
@@ -456,6 +518,145 @@ class AdvancedFilterManager:
 
         return FilterResult(passed=True)
 
+    def _extract_daily_features(self, stock_code: str, trade_date: str) -> Optional[Dict]:
+        """일봉 데이터에서 특징 추출 (거래일 기준 과거 20일)"""
+        if not self._daily_cache:
+            return None
+
+        # 일봉 데이터 로드
+        daily_df = self._daily_cache.load_data(stock_code)
+        if daily_df is None or daily_df.empty:
+            return None
+
+        # 숫자 변환
+        daily_df = daily_df.copy()
+        for col in ['stck_clpr', 'stck_oprc', 'stck_hgpr', 'stck_lwpr', 'acml_vol']:
+            daily_df[col] = pd.to_numeric(daily_df[col], errors='coerce')
+
+        # 거래일 이전 데이터만 (당일 제외)
+        daily_df = daily_df[daily_df['stck_bsop_date'] < trade_date].copy()
+        daily_df = daily_df.sort_values('stck_bsop_date').tail(20)
+
+        if len(daily_df) < 5:
+            return None
+
+        features = {}
+
+        # 1. 20일 가격 위치
+        high_20d = daily_df['stck_hgpr'].max()
+        low_20d = daily_df['stck_lwpr'].min()
+        last_close = daily_df['stck_clpr'].iloc[-1]
+
+        if high_20d > low_20d:
+            features['price_position_20d'] = (last_close - low_20d) / (high_20d - low_20d)
+        else:
+            features['price_position_20d'] = 0.5
+
+        # 2. 거래량 비율
+        if len(daily_df) >= 2:
+            vol_ma20 = daily_df['acml_vol'].mean()
+            last_vol = daily_df['acml_vol'].iloc[-1]
+            if vol_ma20 > 0:
+                features['volume_ratio_20d'] = last_vol / vol_ma20
+            else:
+                features['volume_ratio_20d'] = 1.0
+
+        # 3. 연속 상승일 수
+        consecutive_up = 0
+        closes = daily_df['stck_clpr'].values
+        for i in range(len(closes) - 1, 0, -1):
+            if closes[i] > closes[i - 1]:
+                consecutive_up += 1
+            else:
+                break
+        features['consecutive_up_days'] = consecutive_up
+
+        # 4. 전일 대비 등락률
+        if len(daily_df) >= 2:
+            prev_close = daily_df['stck_clpr'].iloc[-2]
+            if prev_close > 0:
+                features['prev_day_change'] = (last_close - prev_close) / prev_close * 100
+            else:
+                features['prev_day_change'] = 0
+
+        return features
+
+    def _check_daily_consecutive_up(self, features: Dict) -> FilterResult:
+        """일봉 연속 상승일 필터"""
+        config = getattr(self.settings, 'DAILY_CONSECUTIVE_UP', {})
+        if not config.get('enabled', False):
+            return FilterResult(passed=True)
+
+        min_days = config.get('min_days', 1)
+        actual = features.get('consecutive_up_days', 0)
+
+        if actual < min_days:
+            return FilterResult(
+                passed=False,
+                blocked_by='daily_consecutive_up',
+                blocked_reason=f'일봉 연속 상승 {actual}일 < 최소 {min_days}일',
+                details={'actual': actual, 'required': min_days}
+            )
+
+        return FilterResult(passed=True)
+
+    def _check_daily_prev_change(self, features: Dict) -> FilterResult:
+        """일봉 전일 등락률 필터"""
+        config = getattr(self.settings, 'DAILY_PREV_CHANGE', {})
+        if not config.get('enabled', False):
+            return FilterResult(passed=True)
+
+        min_change = config.get('min_change', 0.0)
+        actual = features.get('prev_day_change', -999)
+
+        if actual < min_change:
+            return FilterResult(
+                passed=False,
+                blocked_by='daily_prev_change',
+                blocked_reason=f'전일 등락률 {actual:.2f}% < 최소 {min_change}%',
+                details={'actual': actual, 'required': min_change}
+            )
+
+        return FilterResult(passed=True)
+
+    def _check_daily_volume_ratio(self, features: Dict) -> FilterResult:
+        """일봉 거래량 비율 필터"""
+        config = getattr(self.settings, 'DAILY_VOLUME_RATIO', {})
+        if not config.get('enabled', False):
+            return FilterResult(passed=True)
+
+        min_ratio = config.get('min_ratio', 1.5)
+        actual = features.get('volume_ratio_20d', 0)
+
+        if actual < min_ratio:
+            return FilterResult(
+                passed=False,
+                blocked_by='daily_volume_ratio',
+                blocked_reason=f'전일 거래량 비율 {actual:.2f}x < 최소 {min_ratio}x',
+                details={'actual': actual, 'required': min_ratio}
+            )
+
+        return FilterResult(passed=True)
+
+    def _check_daily_price_position(self, features: Dict) -> FilterResult:
+        """일봉 가격 위치 필터"""
+        config = getattr(self.settings, 'DAILY_PRICE_POSITION', {})
+        if not config.get('enabled', False):
+            return FilterResult(passed=True)
+
+        min_position = config.get('min_position', 0.5)
+        actual = features.get('price_position_20d', 0)
+
+        if actual < min_position:
+            return FilterResult(
+                passed=False,
+                blocked_by='daily_price_position',
+                blocked_reason=f'20일 가격 위치 {actual*100:.1f}% < 최소 {min_position*100:.0f}%',
+                details={'actual': actual, 'required': min_position}
+            )
+
+        return FilterResult(passed=True)
+
     def get_active_filters(self) -> List[str]:
         """현재 활성화된 필터 목록"""
         active = []
@@ -472,6 +673,10 @@ class AdvancedFilterManager:
             ('UPTREND_GAIN_FILTER', '상승폭제한'),
             ('DECLINE_PCT_FILTER', '하락폭제한'),
             ('SUPPORT_CANDLE_FILTER', '지지캔들'),
+            ('DAILY_CONSECUTIVE_UP', '일봉연속상승'),
+            ('DAILY_PREV_CHANGE', '일봉전일상승'),
+            ('DAILY_VOLUME_RATIO', '일봉거래량'),
+            ('DAILY_PRICE_POSITION', '일봉가격위치'),
         ]
 
         for attr_name, display_name in filters:
@@ -492,7 +697,15 @@ class AdvancedFilterManager:
             return "고급 필터: 활성화 (개별 필터 없음)"
 
         preset = getattr(self.settings, 'ACTIVE_PRESET', None)
-        preset_str = f" (프리셋: {preset})" if preset else ""
+        daily_preset = getattr(self.settings, 'ACTIVE_DAILY_PRESET', None)
+
+        preset_parts = []
+        if preset:
+            preset_parts.append(f"3분봉:{preset}")
+        if daily_preset:
+            preset_parts.append(f"일봉:{daily_preset}")
+
+        preset_str = f" ({', '.join(preset_parts)})" if preset_parts else ""
 
         return f"고급 필터: {', '.join(active)}{preset_str}"
 

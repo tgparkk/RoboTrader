@@ -329,6 +329,9 @@ class TradingDecisionEngine:
                             volume_ma_ratio = tech.get('volume_vs_ma_ratio')
                             pattern_stages = pattern_features.get('pattern_stages')
 
+                            # 거래일 추출 (일봉 필터용)
+                            trade_date = signal_time.strftime('%Y%m%d') if signal_time else None
+
                             # 고급 필터 체크
                             adv_result = self.advanced_filter_manager.check_signal(
                                 ohlcv_sequence=ohlcv_sequence,
@@ -336,7 +339,8 @@ class TradingDecisionEngine:
                                 stock_code=stock_code,
                                 signal_time=signal_time,
                                 volume_ma_ratio=volume_ma_ratio,
-                                pattern_stages=pattern_stages
+                                pattern_stages=pattern_stages,
+                                trade_date=trade_date
                             )
 
                             if not adv_result.passed:

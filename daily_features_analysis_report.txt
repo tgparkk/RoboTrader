@@ -1,0 +1,83 @@
+일봉 기반 특징 분석 결과
+==================================================
+
+분석 대상: 516건
+기준 승률: 49.6%
+
+
+price_position_20d:
+count    516.000000
+mean       0.823714
+std        0.153548
+min        0.027221
+25%        0.745880
+50%        0.859093
+75%        0.934909
+max        1.000000
+Name: price_position_20d, dtype: float64
+
+trend_5d:
+count    516.000000
+mean       4.019836
+std        4.260073
+min      -27.754195
+25%        1.478485
+50%        3.455983
+75%        5.747954
+max       35.365226
+Name: trend_5d, dtype: float64
+
+ma_alignment:
+count    458.000000
+mean       2.757642
+std        0.617219
+min        0.000000
+25%        3.000000
+50%        3.000000
+75%        3.000000
+max        3.000000
+Name: ma_alignment, dtype: float64
+
+volume_ratio_20d:
+count    516.000000
+mean       2.677415
+std        3.313613
+min        0.000000
+25%        0.824940
+50%        1.522314
+75%        2.902243
+max       18.447665
+Name: volume_ratio_20d, dtype: float64
+
+consecutive_up_days:
+count    516.000000
+mean       1.864341
+std        1.876013
+min        0.000000
+25%        0.000000
+50%        1.000000
+75%        3.000000
+max       10.000000
+Name: consecutive_up_days, dtype: float64
+
+volatility_20d:
+count    516.000000
+mean       8.220317
+std        3.171929
+min        2.527010
+25%        5.987584
+50%        7.690316
+75%       10.134111
+max       18.458665
+Name: volatility_20d, dtype: float64
+
+prev_day_change:
+count    516.000000
+mean       6.446554
+std        9.429772
+min      -12.581913
+25%        0.000000
+50%        3.613669
+75%       10.268328
+max       30.000000
+Name: prev_day_change, dtype: float64

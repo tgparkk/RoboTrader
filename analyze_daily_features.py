@@ -33,32 +33,14 @@ def parse_replay_log(log_path: Path) -> list:
         return trades
     trade_date = match.group(1)
 
-    # 종목별 블록 찾기
-    stock_blocks = re.split(r'\n={20,}\n', content)
+    # 매수 라인 파싱
+    # 🔴 097230(HJ중공업) 09:39 매수 → -2.50%
+    # 🟢 064260(다날) 10:45 매수 → +3.50%
+    trade_lines = re.findall(r'[🔴🟢]\s*(\d{6})\(([^)]+)\)\s*(\d{2}:\d{2})\s*매수\s*→\s*([+-]\d+\.?\d*)%', content)
 
-    for block in stock_blocks:
-        # 종목코드와 이름 추출
-        stock_match = re.search(r'📊 (\d{6})\s*\(([^)]+)\)', block)
-        if not stock_match:
-            continue
-
-        stock_code = stock_match.group(1)
-        stock_name = stock_match.group(2)
-
-        # 승패 결과 추출
-        result_match = re.search(r'결과:\s*(승리|손실)', block)
-        if not result_match:
-            continue
-
-        is_win = result_match.group(1) == '승리'
-
-        # 매수 시간 추출
-        buy_match = re.search(r'매수.*?(\d{2}:\d{2})', block)
-        buy_time = buy_match.group(1) if buy_match else None
-
-        # 수익률 추출
-        profit_match = re.search(r'수익률:\s*([+-]?\d+\.?\d*)%', block)
-        profit_pct = float(profit_match.group(1)) if profit_match else 0
+    for stock_code, stock_name, buy_time, profit_str in trade_lines:
+        profit_pct = float(profit_str)
+        is_win = profit_pct > 0
 
         trades.append({
             'trade_date': trade_date,

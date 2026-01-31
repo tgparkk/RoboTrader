@@ -40,13 +40,24 @@
 
 ### 고급 필터 (config/advanced_filter_settings.py)
 - **ENABLED**: True
-- **활성화된 필터**:
+- **활성화된 필터 (3분봉 기준)**:
   - 연속양봉 >= 1개
   - 가격위치 >= 80%
   - 화요일 회피
   - 시간대-요일 회피 (9시화, 10시화, 11시화, 10시수)
   - 저승률 종목 회피 (101170, 394800)
   - pattern_stages 기반: 상승폭 >= 15%, 하락폭 >= 5%, 지지캔들 = 3개 회피
+
+### 일봉 필터 (config/advanced_filter_settings.py)
+- **ACTIVE_DAILY_PRESET**: None (기본값: 일봉 필터 미사용)
+- **사용 가능한 프리셋**:
+  - `'volume_surge'`: 최고 수익 전략 (승률 52.7%, 수익 200만원) ⭐ 추천
+  - `'consecutive_2days'`: 최고 승률 전략 (승률 53.3%, 수익 185만원)
+  - `'prev_day_up'`: 거래 빈도 유지 (승률 52.7%, 수익 184만원)
+  - `'consecutive_1day'`: 균형잡힌 선택 (승률 52.8%, 수익 182만원)
+  - `'balanced'`: 복합 조건 (승률 52.5%, 수익 173만원)
+- **필터 없을 때**: 승률 49.6%, 수익 144만원 (비추천)
+- **빠른 사용법**: [일봉필터_사용법.md](일봉필터_사용법.md) 참조
 
 ### 투자 비율 (config/trading_config.json)
 - **buy_budget_ratio**: 0.20 (건당 가용잔고의 20%)
@@ -102,11 +113,15 @@ grep "종목코드" pattern_data_log/pattern_data_YYYYMMDD.jsonl
 ```bash
 # 고급 필터 적용 시뮬레이션
 python batch_signal_replay.py --start 20250901 --end 20260123 --advanced-filter
+
+# 일봉 필터 전략별 비교 분석
+python compare_daily_filters.py
 ```
 
 **시뮬레이션 결과 파일**:
 - 순수 패턴: `signal_replay_log/signal_new2_replay_YYYYMMDD_9_00_0.txt`
 - ML 적용: `signal_replay_log_ml/signal_ml_replay_YYYYMMDD_9_00_0.txt`
+- 일봉 필터 비교: `daily_filter_comparison_report.txt`
 
 ---
 
@@ -133,3 +148,5 @@ python batch_signal_replay.py --start 20250901 --end 20260123 --advanced-filter
 - [CONFIGURATION.md](CONFIGURATION.md) - 설정 파일 상세 설명
 - [README.md](README.md) - 프로젝트 소개 및 설치 방법
 - [docs/trading_logic_documentation.md](docs/trading_logic_documentation.md) - 매매 로직 상세
+- [일봉필터_사용법.md](일봉필터_사용법.md) - 일봉 필터 빠른 시작 가이드 (1줄 요약)
+- [docs/daily_filter_usage.md](docs/daily_filter_usage.md) - 일봉 필터 상세 사용 가이드

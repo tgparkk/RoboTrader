@@ -292,14 +292,21 @@ def list_all_buy_signals(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] 
         from core.indicators.pullback_candle_pattern import PullbackCandlePattern, SignalType
         
         buy_signals = []
-        
+
         # 각 3분봉 시점에서 실시간과 동일한 방식으로 신호 체크 (시계열 순서 유지)
         for i in range(len(df_3min)):
             # 해당 시점까지의 데이터만 사용 (실시간과 동일)
             current_data = df_3min.iloc[:i+1].copy()
-            
+
             if len(current_data) < 5:  # 최소 데이터 요구사항
                 continue
+
+            # ⚡ 성능 최적화: 12시 이후 신호는 건너뛰기
+            current_row = df_3min.iloc[i]
+            if 'datetime' in current_row:
+                current_time = current_row['datetime']
+                if hasattr(current_time, 'hour') and current_time.hour >= 12:
+                    continue  # 12시 이후는 신호 계산 생략
             
             # ==================== 신호 생성 로직 선택 ====================
             # 🔄 현재 로직 사용 (개선된 버전)
@@ -737,6 +744,9 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                         volume_ma_ratio = tech.get('volume_vs_ma_ratio')
                         pattern_stages = adv_pattern_data.get('pattern_stages')
 
+                    # 거래일 추출 (일봉 필터용)
+                    trade_date = signal_completion_time.strftime('%Y%m%d') if signal_completion_time else None
+
                     # 고급 필터 체크
                     adv_result = advanced_filter_manager.check_signal(
                         ohlcv_sequence=ohlcv_sequence,
@@ -744,7 +754,8 @@ def simulate_trades(df_3min: pd.DataFrame, df_1min: Optional[pd.DataFrame] = Non
                         stock_code=stock_code,
                         signal_time=signal_completion_time,
                         volume_ma_ratio=volume_ma_ratio,
-                        pattern_stages=pattern_stages
+                        pattern_stages=pattern_stages,
+                        trade_date=trade_date
                     )
 
                     if not adv_result.passed:

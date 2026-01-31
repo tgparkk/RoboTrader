@@ -142,6 +142,39 @@ class AdvancedFilterSettings:
     }
 
     # ========================================
+    # 13. 일봉 기반 필터 (2026-01-31 분석)
+    # 기준 승률: 49.6% (516건)
+    # ========================================
+
+    # 13-1. 연속 상승일 필터 (일봉 기준)
+    DAILY_CONSECUTIVE_UP = {
+        'enabled': False,  # 기본 비활성화 (테스트용)
+        'min_days': 1,  # 최소 연속 상승일 (1: 52.8%, 2: 53.3%)
+        'description': '일봉 기준 최소 1일 연속 상승 필요 (승률 52.8%, +3.1%p, 381건)',
+    }
+
+    # 13-2. 전일 등락률 필터 (일봉 기준)
+    DAILY_PREV_CHANGE = {
+        'enabled': False,  # 기본 비활성화 (테스트용)
+        'min_change': 0.0,  # 최소 전일 등락률 (0%: 52.7%, 1%: 52.8%)
+        'description': '전일 종가 상승 필요 (승률 52.7%, +3.1%p, 391건)',
+    }
+
+    # 13-3. 거래량 비율 필터 (일봉 기준: 전일 거래량 / 20일 평균)
+    DAILY_VOLUME_RATIO = {
+        'enabled': False,  # 기본 비활성화 (테스트용)
+        'min_ratio': 1.5,  # 최소 거래량 비율 (1.5: 52.7%, 2.0: 52.8%)
+        'description': '전일 거래량이 20일 평균의 1.5배 이상 (승률 52.7%, +3.1%p, 262건)',
+    }
+
+    # 13-4. 가격 위치 필터 (일봉 기준: 20일 고저점 범위 내 위치)
+    DAILY_PRICE_POSITION = {
+        'enabled': False,  # 기본 비활성화 (테스트용)
+        'min_position': 0.5,  # 최소 가격 위치 (50%: 49.9%, 60%: 50.1%)
+        'description': '20일 범위 내 가격 위치 50% 이상 (승률 49.9%)',
+    }
+
+    # ========================================
     # 복합 필터 프리셋 (3분봉 기준)
     # ========================================
     PRESETS = {
@@ -178,6 +211,68 @@ class AdvancedFilterSettings:
     }
 
     # ========================================
+    # 일봉 필터 프리셋 (2026-01-31 분석)
+    # ========================================
+    DAILY_PRESETS = {
+        # 옵션 0: 필터 없음 (베이스라인)
+        'none': {
+            'description': '일봉 필터 없음 (베이스라인)',
+            'expected_winrate': 49.6,
+            'expected_trades': 516,
+        },
+        # 옵션 1: 전일 상승
+        'prev_day_up': {
+            'DAILY_PREV_CHANGE': {'enabled': True, 'min_change': 0.0},
+            'description': '전일 종가 상승 (보합 포함)',
+            'expected_winrate': 52.7,
+            'expected_trades': 391,  # 76% 유지
+        },
+        # 옵션 2: 연속 상승 1일
+        'consecutive_1day': {
+            'DAILY_CONSECUTIVE_UP': {'enabled': True, 'min_days': 1},
+            'description': '최소 1일 연속 상승',
+            'expected_winrate': 52.8,
+            'expected_trades': 381,  # 74% 유지
+        },
+        # 옵션 3: 연속 상승 + 가격위치 (복합)
+        'balanced': {
+            'DAILY_CONSECUTIVE_UP': {'enabled': True, 'min_days': 1},
+            'DAILY_PRICE_POSITION': {'enabled': True, 'min_position': 0.5},
+            'description': '연속 상승 1일 + 가격위치 50% 이상',
+            'expected_winrate': 52.5,
+            'expected_trades': 373,  # 72% 유지
+        },
+        # 옵션 4: 연속 상승 2일 (승률 우선)
+        'consecutive_2days': {
+            'DAILY_CONSECUTIVE_UP': {'enabled': True, 'min_days': 2},
+            'description': '최소 2일 연속 상승',
+            'expected_winrate': 53.3,
+            'expected_trades': 246,  # 48% 유지
+        },
+        # 옵션 5: 거래량 급증
+        'volume_surge': {
+            'DAILY_VOLUME_RATIO': {'enabled': True, 'min_ratio': 1.5},
+            'description': '전일 거래량 20일 평균의 1.5배 이상',
+            'expected_winrate': 52.7,
+            'expected_trades': 262,  # 51% 유지
+        },
+    }
+
+    # ========================================
     # 현재 활성 프리셋 (None이면 개별 설정 사용)
     # ========================================
     ACTIVE_PRESET = None  # 'conservative', 'balanced', 'aggressive', 'highest_winrate'
+
+    # ========================================
+    # 일봉 필터 프리셋 선택 (2026-01-31 분석 결과)
+    # ========================================
+    # None: 일봉 필터 사용 안 함
+    # 'volume_surge': 최고 수익 200만원 (승률 52.7%, 거래 262건) - 거래량 급증 전략 ⭐ 추천
+    # 'consecutive_2days': 최고 승률 53.3% (수익 185만원, 거래 246건) - 안정성 우선
+    # 'prev_day_up': 승률 52.7% (수익 184만원, 거래 391건) - 거래 빈도 유지
+    # 'consecutive_1day': 승률 52.8% (수익 182만원, 거래 381건)
+    # 'balanced': 승률 52.5% (수익 173만원, 거래 373건)
+    #
+    # ⚠️ 'none' 사용 시: 승률 49.6%, 수익 144만원으로 가장 낮음
+    #
+    ACTIVE_DAILY_PRESET = None  # None 또는 'volume_surge', 'consecutive_2days', 'prev_day_up', 'consecutive_1day', 'balanced'
