@@ -48,16 +48,15 @@
   - 저승률 종목 회피 (101170, 394800)
   - pattern_stages 기반: 상승폭 >= 15%, 하락폭 >= 5%, 지지캔들 = 3개 회피
 
-### 일봉 필터 (config/advanced_filter_settings.py)
-- **ACTIVE_DAILY_PRESET**: None (기본값: 일봉 필터 미사용)
-- **사용 가능한 프리셋**:
-  - `'volume_surge'`: 최고 수익 전략 (승률 52.7%, 수익 200만원) ⭐ 추천
-  - `'consecutive_2days'`: 최고 승률 전략 (승률 53.3%, 수익 185만원)
-  - `'prev_day_up'`: 거래 빈도 유지 (승률 52.7%, 수익 184만원)
-  - `'consecutive_1day'`: 균형잡힌 선택 (승률 52.8%, 수익 182만원)
-  - `'balanced'`: 복합 조건 (승률 52.5%, 수익 173만원)
-- **필터 없을 때**: 승률 49.6%, 수익 144만원 (비추천)
-- **빠른 사용법**: [일봉필터_사용법.md](일봉필터_사용법.md) 참조
+### 일봉 필터 (config/advanced_filter_settings.py) - 효과 미미
+- **ACTIVE_DAILY_PRESET**: 'volume_surge' (활성화됨)
+- **분석 결과**: 일봉 필터는 3분봉 필터 대비 효과 미미
+- **참고**: 기존 3분봉 필터가 이미 충분히 효과적
+
+### 최적 패턴 필터 (2026-01-31 분석) - 비활성화
+- **OPTIMAL_UPTREND_FILTER**: 비활성화 (기존 15% 필터와 중복)
+- **OPTIMAL_SUPPORT_FILTER**: 비활성화 (8%만 통과, 너무 엄격)
+- **OPTIMAL_DECLINE_FILTER**: 비활성화 (최근 시장에서 역효과)
 
 ### 투자 비율 (config/trading_config.json)
 - **buy_budget_ratio**: 0.20 (건당 가용잔고의 20%)
@@ -142,11 +141,26 @@ python compare_daily_filters.py
 
 ---
 
+---
+
+## 필터 효과 분석 결과 (2026-01-31)
+
+### 전체 기간 비교 (2025-09-01 ~ 2026-01-30)
+| 구분 | 거래수 | 승률 | 평균수익 |
+|------|--------|------|----------|
+| 순수 패턴 | 612 | 45.1% | +0.08% |
+| 3분봉 필터 | 291 | 53.6% | +0.61% |
+
+### 결론
+- **3분봉 필터**: 효과적 (승률 +8.5%p, 거래 53% 감소)
+- **일봉 필터**: 효과 미미
+- **신규 최적 패턴 필터**: 효과 없음 (기존 필터와 중복 또는 역효과)
+
+---
+
 ## 상세 문서 참조
 
 - [DEVELOPMENT.md](DEVELOPMENT.md) - 개발자용 상세 가이드 (데이터 흐름, 디버깅)
 - [CONFIGURATION.md](CONFIGURATION.md) - 설정 파일 상세 설명
 - [README.md](README.md) - 프로젝트 소개 및 설치 방법
 - [docs/trading_logic_documentation.md](docs/trading_logic_documentation.md) - 매매 로직 상세
-- [일봉필터_사용법.md](일봉필터_사용법.md) - 일봉 필터 빠른 시작 가이드 (1줄 요약)
-- [docs/daily_filter_usage.md](docs/daily_filter_usage.md) - 일봉 필터 상세 사용 가이드

@@ -208,6 +208,24 @@ class AdvancedFilterManager:
                 return result
             details['support_candle'] = 'passed'
 
+            # A. 최적 상승폭 필터 (승률 +11%p)
+            result = self._check_optimal_uptrend(pattern_stages)
+            if not result.passed:
+                return result
+            details['optimal_uptrend'] = 'passed'
+
+            # B. 최적 지지캔들 필터 (승률 +4.5%p)
+            result = self._check_optimal_support(pattern_stages)
+            if not result.passed:
+                return result
+            details['optimal_support'] = 'passed'
+
+            # C. 최적 조정폭 필터 (승률 +2.8%p)
+            result = self._check_optimal_decline(pattern_stages)
+            if not result.passed:
+                return result
+            details['optimal_decline'] = 'passed'
+
         # 일봉 기반 필터 (12~15)
         if self._daily_cache and stock_code and trade_date:
             daily_features = self._extract_daily_features(stock_code, trade_date)
@@ -514,6 +532,82 @@ class AdvancedFilterManager:
                 blocked_by='support_candle',
                 blocked_reason=f'지지구간 캔들 {candle_count}개 (회피 대상)',
                 details={'actual': candle_count, 'avoid': avoid_counts}
+            )
+
+        return FilterResult(passed=True)
+
+    def _check_optimal_uptrend(self, pattern_stages: Dict) -> FilterResult:
+        """최적 상승폭 필터 (pattern_stages 기반)
+
+        분석 결과: 상승폭이 낮을수록 승률 높음
+        - uptrend < 6% AND support >= 4: 57.1% 승률 (+11.2%p)
+        - 과도한 상승 후 눌림목은 차익실현 압력으로 손실 위험 증가
+        """
+        config = getattr(self.settings, 'OPTIMAL_UPTREND_FILTER', {})
+        if not config.get('enabled', False):
+            return FilterResult(passed=True)
+
+        uptrend = pattern_stages.get('1_uptrend', {})
+        price_gain = uptrend.get('price_gain', 0) * 100  # %로 변환
+
+        max_gain = config.get('max_gain', 6.0)
+
+        if price_gain >= max_gain:
+            return FilterResult(
+                passed=False,
+                blocked_by='optimal_uptrend',
+                blocked_reason=f'상승폭 {price_gain:.1f}% >= {max_gain}% (과도한 상승 회피)',
+                details={'actual': price_gain, 'max_allowed': max_gain}
+            )
+
+        return FilterResult(passed=True)
+
+    def _check_optimal_support(self, pattern_stages: Dict) -> FilterResult:
+        """최적 지지캔들 필터 (pattern_stages 기반)
+
+        분석 결과: 지지캔들 >= 4일 때 승률 50.5% (+4.5%p)
+        충분한 지지 형성이 안정적인 눌림목 신호
+        """
+        config = getattr(self.settings, 'OPTIMAL_SUPPORT_FILTER', {})
+        if not config.get('enabled', False):
+            return FilterResult(passed=True)
+
+        support = pattern_stages.get('3_support', {})
+        candle_count = support.get('candle_count', 0)
+
+        min_candles = config.get('min_candles', 4)
+
+        if candle_count < min_candles:
+            return FilterResult(
+                passed=False,
+                blocked_by='optimal_support',
+                blocked_reason=f'지지구간 캔들 {candle_count}개 < {min_candles}개 (지지 부족)',
+                details={'actual': candle_count, 'min_required': min_candles}
+            )
+
+        return FilterResult(passed=True)
+
+    def _check_optimal_decline(self, pattern_stages: Dict) -> FilterResult:
+        """최적 조정폭 필터 (pattern_stages 기반)
+
+        분석 결과: 낮은 조정폭(< 1.5%)이 오히려 승률 높음 (48.8%, +2.8%p)
+        강한 종목은 적게 조정받고 바로 상승하는 경향
+        """
+        config = getattr(self.settings, 'OPTIMAL_DECLINE_FILTER', {})
+        if not config.get('enabled', False):
+            return FilterResult(passed=True)
+
+        decline = pattern_stages.get('2_decline', {})
+        decline_pct = decline.get('decline_pct', 0)
+
+        max_decline = config.get('max_decline', 1.5)
+
+        if decline_pct >= max_decline:
+            return FilterResult(
+                passed=False,
+                blocked_by='optimal_decline',
+                blocked_reason=f'조정폭 {decline_pct:.1f}% >= {max_decline}% (과도한 조정)',
+                details={'actual': decline_pct, 'max_allowed': max_decline}
             )
 
         return FilterResult(passed=True)

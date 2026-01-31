@@ -142,6 +142,47 @@ class AdvancedFilterSettings:
     }
 
     # ========================================
+    # 최적 패턴 필터 (2026-01-31 심층 분석)
+    # 분석 결과: 608W/714L 기준 46.0% 베이스라인
+    # ========================================
+
+    # ========================================
+    # A. 최적 상승폭 필터 (pattern_stages 기반)
+    # 기존 UPTREND_GAIN_FILTER(>=15% 회피)보다 더 엄격한 버전
+    # uptrend < 6%: 승률 48.2% (+2.2%p, 850건)
+    # uptrend < 5%: 승률 48.2% (+2.2%p, 679건)
+    # ========================================
+    OPTIMAL_UPTREND_FILTER = {
+        'enabled': False,  # 기존 UPTREND_GAIN_FILTER와 중복 (15% → 8% 강화 시 활성화)
+        'max_gain': 8.0,   # 상승폭 8% 미만만 허용
+        'description': '상승폭 8% 미만만 허용 (과도한 상승 회피)',
+    }
+
+    # ========================================
+    # B. 최적 지지캔들 필터 (pattern_stages 기반)
+    # support >= 4: 승률 50.5% (+4.5%p, 107건) - 너무 엄격!
+    # support >= 2: 승률 46.4% (+0.5%p, 450건)
+    # 주의: 전체의 8%만 통과하므로 다른 필터와 조합 시 매우 제한적
+    # ========================================
+    OPTIMAL_SUPPORT_FILTER = {
+        'enabled': False,  # 기본 비활성화 (너무 제한적, 필요시만 활성화)
+        'min_candles': 4,  # 최소 지지 캔들 4개 이상 필요
+        'description': '지지구간 캔들 4개 이상 필요 (안정적 지지, 승률 +4.5%p)',
+    }
+
+    # ========================================
+    # C. 최적 조정폭 필터 (pattern_stages 기반)
+    # decline < 1.5%: 승률 48.8% (+2.8%p, 720건) - 55% 유지
+    # decline < 2.0%: 승률 48.3% (+2.3%p, 922건) - 70% 유지
+    # 강한 종목은 적게 조정받고 바로 상승
+    # ========================================
+    OPTIMAL_DECLINE_FILTER = {
+        'enabled': False,  # 비활성화 (최근 시장에서 역효과 확인됨)
+        'max_decline': 2.0,  # 조정폭 2.0% 미만만 허용
+        'description': '조정폭 2.0% 미만만 허용 (강한 종목 선별, 승률 +2.3%p)',
+    }
+
+    # ========================================
     # 13. 일봉 기반 필터 (2026-01-31 분석)
     # 기준 승률: 49.6% (516건)
     # ========================================
@@ -275,4 +316,4 @@ class AdvancedFilterSettings:
     #
     # ⚠️ 'none' 사용 시: 승률 49.6%, 수익 144만원으로 가장 낮음
     #
-    ACTIVE_DAILY_PRESET = None  # None 또는 'volume_surge', 'consecutive_2days', 'prev_day_up', 'consecutive_1day', 'balanced'
+    ACTIVE_DAILY_PRESET = 'volume_surge'  # None 또는 'volume_surge', 'consecutive_2days', 'prev_day_up', 'consecutive_1day', 'balanced'
