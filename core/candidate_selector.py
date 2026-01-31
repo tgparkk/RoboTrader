@@ -12,6 +12,7 @@ from .models import Stock, TradingConfig
 from api.kis_api_manager import KISAPIManager
 from utils.logger import setup_logger
 from utils.korean_time import now_kst
+from utils.daily_data_helper import ensure_daily_data_for_stock
 
 
 @dataclass
@@ -68,11 +69,14 @@ class CandidateSelector:
             # 4. 점수 기준 정렬 및 상위 종목 선정
             candidate_stocks.sort(key=lambda x: x.score, reverse=True)
             selected_candidates = candidate_stocks[:max_candidates]
-            
+
             self.logger.info(f"✅ 최종 선정된 후보 종목: {len(selected_candidates)}개")
             for candidate in selected_candidates:
                 self.logger.info(f"  - {candidate.code}({candidate.name}): {candidate.score:.2f}점 - {candidate.reason}")
-            
+
+            # 5. 일봉 데이터 자동 수집 (일봉 필터용)
+            await self._ensure_daily_data_for_candidates(selected_candidates)
+
             return selected_candidates
             
         except Exception as e:
@@ -523,19 +527,88 @@ class CandidateSelector:
     def get_condition_search_candidates(self, seq: str, max_candidates: int = 10) -> Optional[List[Dict]]:
         """
         조건검색 결과 조회 (단순 조회만)
-        
+
         Args:
             seq: 조건검색 순번
             max_candidates: 최대 후보 종목 수 (미사용, 호환성 유지용)
-            
+
         Returns:
             조건검색 결과 종목 리스트 또는 None
         """
         try:
             # 1. 조건검색 결과 조회
             search_results = self.get_condition_search_results(seq)
+
+            # 2. 일봉 데이터 자동 수집 (일봉 필터용)
+            if search_results:
+                self._ensure_daily_data_for_search_results(search_results)
+
             return search_results
-            
+
         except Exception as e:
             self.logger.error(f"❌ 조건검색 결과 조회 실패: {e}")
             return None
+
+    async def _ensure_daily_data_for_candidates(self, candidates: List[CandidateStock]):
+        """
+        선정된 후보 종목에 대해 일봉 데이터 확보 (비동기)
+
+        일봉 필터가 정상 작동하려면 DuckDB에 해당 종목의 일봉 데이터가 있어야 함.
+        종목 선정 시점에 자동으로 수집하여 필터 효과 보장.
+        """
+        if not candidates:
+            return
+
+        self.logger.info(f"📊 일봉 데이터 확보 시작: {len(candidates)}개 종목")
+
+        success_count = 0
+        for candidate in candidates:
+            try:
+                # 동기 함수를 비동기로 실행
+                result = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    ensure_daily_data_for_stock,
+                    candidate.code
+                )
+                if result:
+                    success_count += 1
+
+                # API 호출 제한 준수 (초당 20회)
+                await asyncio.sleep(0.05)
+
+            except Exception as e:
+                self.logger.warning(f"일봉 데이터 수집 실패: {candidate.code} - {e}")
+
+        self.logger.info(f"✅ 일봉 데이터 확보 완료: {success_count}/{len(candidates)}개 성공")
+
+    def _ensure_daily_data_for_search_results(self, results: List[Dict]):
+        """
+        조건검색 결과 종목에 대해 일봉 데이터 확보 (동기)
+
+        일봉 필터가 정상 작동하려면 DuckDB에 해당 종목의 일봉 데이터가 있어야 함.
+        """
+        if not results:
+            return
+
+        self.logger.info(f"📊 일봉 데이터 확보 시작: {len(results)}개 종목")
+
+        success_count = 0
+        import time
+
+        for stock in results:
+            try:
+                stock_code = stock.get('code', '')
+                if not stock_code:
+                    continue
+
+                result = ensure_daily_data_for_stock(stock_code)
+                if result:
+                    success_count += 1
+
+                # API 호출 제한 준수 (초당 20회)
+                time.sleep(0.05)
+
+            except Exception as e:
+                self.logger.warning(f"일봉 데이터 수집 실패: {stock.get('code', '?')} - {e}")
+
+        self.logger.info(f"✅ 일봉 데이터 확보 완료: {success_count}/{len(results)}개 성공")
