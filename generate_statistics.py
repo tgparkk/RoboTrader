@@ -170,7 +170,64 @@ def parse_signal_replay_result(txt_filename):
     return trades, max_concurrent_holdings
 
 
-def calculate_statistics(all_trades, start_date, end_date, max_holdings_list=None):
+def calculate_fifth_investment_stats(trades_by_date, trade_amount=2000000, max_concurrent=5):
+    """
+    1/5 투자 논리 적용 통계 계산
+    - 거래당 200만원 (1000만원 / 5)
+    - 최대 5개 동시 보유
+    - 하루 5개 초과 거래는 스킵
+    """
+    included_trades = []
+    skipped_trades = []
+
+    for date, trades in sorted(trades_by_date.items()):
+        # 시간순 정렬
+        sorted_trades = sorted(trades, key=lambda t: t['buy_time'])
+
+        # 상위 5개만 포함
+        included_trades.extend(sorted_trades[:max_concurrent])
+        skipped_trades.extend(sorted_trades[max_concurrent:])
+
+    if not included_trades:
+        return None
+
+    total_trades = len(included_trades)
+    wins = [t for t in included_trades if t['is_win']]
+    losses = [t for t in included_trades if not t['is_win']]
+
+    win_count = len(wins)
+    loss_count = len(losses)
+    win_rate = (win_count / total_trades * 100) if total_trades > 0 else 0
+
+    # 수익률 계산
+    total_profit_pct = sum(t['profit'] for t in included_trades)
+    avg_profit = total_profit_pct / total_trades if total_trades > 0 else 0
+
+    # 실제 수익금 계산 (200만원 기준)
+    actual_profit = sum(trade_amount * (t['profit'] / 100) for t in included_trades)
+
+    # 스킵된 거래 통계
+    skipped_count = len(skipped_trades)
+    skipped_profit = sum(trade_amount * (t['profit'] / 100) for t in skipped_trades) if skipped_trades else 0
+
+    return {
+        'trade_amount': trade_amount,
+        'max_concurrent': max_concurrent,
+        'total_trades': total_trades,
+        'skipped_trades': skipped_count,
+        'wins': win_count,
+        'losses': loss_count,
+        'win_rate': win_rate,
+        'total_profit_pct': total_profit_pct,
+        'avg_profit': avg_profit,
+        'actual_profit': actual_profit,
+        'skipped_profit': skipped_profit,
+        'included_list': included_trades,
+        'skipped_list': skipped_trades
+    }
+
+
+def calculate_statistics(all_trades, start_date, end_date, max_holdings_list=None, trades_by_date=None):
     """전체 거래 데이터에서 통계 계산"""
     if not all_trades:
         return {}
@@ -263,6 +320,11 @@ def calculate_statistics(all_trades, start_date, end_date, max_holdings_list=Non
             'avg_actual_profit': morning_avg_actual_profit
         }
 
+    # 1/5 투자 논리 통계 계산 (하루 5개 제한, 200만원/건)
+    fifth_investment_stats = None
+    if trades_by_date:
+        fifth_investment_stats = calculate_fifth_investment_stats(trades_by_date)
+
     return {
         'period': f"{start_date} ~ {end_date}",
         'total_trades': total_trades,
@@ -281,7 +343,8 @@ def calculate_statistics(all_trades, start_date, end_date, max_holdings_list=Non
         'avg_actual_profit': avg_actual_profit,
         'hourly_stats': hourly_summary,
         'morning_stats': morning_stats,
-        'max_holdings_stats': max_holdings_stats
+        'max_holdings_stats': max_holdings_stats,
+        'fifth_investment_stats': fifth_investment_stats
     }
 
 
@@ -369,6 +432,26 @@ def save_statistics_log(stats, output_dir, start_date, end_date):
                 f.write(f"거래당 평균 수익금: {m_stats['avg_actual_profit']:+,.0f}원\n")
                 f.write("\n")
 
+            # 1/5 투자 논리 통계 (하루 5개 제한)
+            if stats.get('fifth_investment_stats'):
+                fi_stats = stats['fifth_investment_stats']
+                f.write("=" * 60 + "\n")
+                f.write("💵 1/5 투자 논리 통계 (하루 최대 5개, 200만원/건)\n")
+                f.write("=" * 60 + "\n")
+                f.write(f"설정: 총 투자금 1000만원, 건당 {fi_stats['trade_amount']:,}원\n")
+                f.write(f"하루 최대 동시 보유: {fi_stats['max_concurrent']}개\n")
+                f.write("-" * 40 + "\n")
+                f.write(f"실행된 거래: {fi_stats['total_trades']}개\n")
+                f.write(f"스킵된 거래: {fi_stats['skipped_trades']}개 (5개 초과분)\n")
+                f.write(f"승리: {fi_stats['wins']}개 / 패배: {fi_stats['losses']}개\n")
+                f.write(f"승률: {fi_stats['win_rate']:.1f}%\n")
+                f.write(f"평균 수익률: {fi_stats['avg_profit']:+.2f}%\n")
+                f.write("-" * 40 + "\n")
+                f.write(f"✅ 실제 예상 수익금: {fi_stats['actual_profit']:+,.0f}원\n")
+                if fi_stats['skipped_trades'] > 0:
+                    f.write(f"⏭️ 스킵된 거래 손익: {fi_stats['skipped_profit']:+,.0f}원 (참고용)\n")
+                f.write("\n")
+
             # 시간대별 통계
             f.write("⏰ 시간대별 통계\n")
             f.write("-" * 60 + "\n")
@@ -382,10 +465,16 @@ def save_statistics_log(stats, output_dir, start_date, end_date):
 
             f.write("\n")
 
-            # JSON 형태로도 저장
+            # JSON 형태로도 저장 (큰 리스트는 제외)
             f.write("📋 상세 데이터 (JSON)\n")
             f.write("-" * 40 + "\n")
-            f.write(json.dumps(stats, indent=2, ensure_ascii=False))
+            stats_for_json = stats.copy()
+            # 1/5 투자 통계에서 큰 리스트 제거
+            if stats_for_json.get('fifth_investment_stats'):
+                fi_stats_clean = {k: v for k, v in stats_for_json['fifth_investment_stats'].items()
+                                  if k not in ['included_list', 'skipped_list']}
+                stats_for_json['fifth_investment_stats'] = fi_stats_clean
+            f.write(json.dumps(stats_for_json, indent=2, ensure_ascii=False))
 
         print(f"통계 파일 생성: {stats_filename}")
         return stats_filename
@@ -505,12 +594,17 @@ def main():
 
     # 각 파일에서 거래 데이터 및 최대 보유 종목 수 수집
     all_trades = []
+    trades_by_date = defaultdict(list)  # 1/5 통계용 날짜별 거래
     max_holdings_list = []
     for date, file_path in found_files:
         print(f"   처리 중: {date} ({os.path.basename(file_path)})")
         trades, max_holdings = parse_signal_replay_result(file_path)
         if trades:
+            # 각 거래에 날짜 정보 추가
+            for t in trades:
+                t['trade_date'] = date
             all_trades.extend(trades)
+            trades_by_date[date].extend(trades)
             print(f"      → {len(trades)}개 거래 발견")
         else:
             print(f"      → 거래 데이터 없음")
@@ -529,7 +623,7 @@ def main():
 
     # 통계 계산
     print("통계 계산 중...")
-    stats = calculate_statistics(all_trades, dates[0], dates[-1], max_holdings_list)
+    stats = calculate_statistics(all_trades, dates[0], dates[-1], max_holdings_list, trades_by_date)
 
     if not stats:
         print("[ERROR] 통계 계산에 실패했습니다.")
@@ -555,6 +649,17 @@ def main():
         print(f"\n[실제 수익금] (손익비 {target_profit}:{stop_loss}, 거래당 {trade_amount:,}원):")
         print(f"   총 수익금: {stats.get('actual_profit', 0):+,.0f}원")
         print(f"   거래당 평균: {stats.get('avg_actual_profit', 0):+,.0f}원")
+
+        # 1/5 투자 논리 통계 출력
+        if stats.get('fifth_investment_stats'):
+            fi_stats = stats['fifth_investment_stats']
+            print(f"\n[1/5 투자 논리] (건당 {fi_stats['trade_amount']:,}원, 하루 최대 {fi_stats['max_concurrent']}개):")
+            print(f"   실행: {fi_stats['total_trades']}개 / 스킵: {fi_stats['skipped_trades']}개")
+            print(f"   승률: {fi_stats['win_rate']:.1f}%")
+            print(f"   >> 예상 수익금: {fi_stats['actual_profit']:+,.0f}원")
+            if fi_stats['skipped_trades'] > 0:
+                print(f"   >> 스킵 손익: {fi_stats['skipped_profit']:+,.0f}원 (참고)")
+
         return 0
     else:
         print("[ERROR] 통계 파일 저장에 실패했습니다.")
