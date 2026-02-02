@@ -11,9 +11,47 @@
 
 ## 프로젝트 개요
 
-한국투자증권 KIS API 기반 **눌림목 캔들패턴** 자동매매 시스템
+한국투자증권 KIS API 기반 자동매매 시스템
 
-## 핵심 전략: 눌림목 캔들패턴
+---
+
+## 현재 활성 전략: 가격 위치 기반 전략 (2026-02-02~)
+
+### 전략 설정 (config/strategy_settings.py)
+```python
+ACTIVE_STRATEGY = 'price_position'  # 현재 활성화
+# ACTIVE_STRATEGY = 'pullback'      # 기존 눌림목 전략
+```
+
+### 진입 조건
+| 항목 | 설정값 |
+|------|--------|
+| 시가 대비 | 2% ~ 4% 상승 |
+| 거래 시간 | 10:00 ~ 12:00 |
+| 거래 요일 | 월/수/금 (화/목 회피) |
+| 일 최대 종목 | 5개 |
+
+### 청산 조건
+- **손절**: -2.5%
+- **익절**: +3.5%
+
+### 시뮬레이션 결과 (2025-09-01 ~ 2026-01-30)
+| 항목 | 결과 |
+|------|------|
+| 총 거래 | 315건 (자본금 제한 적용) |
+| 승률 | **59.7%** |
+| 월평균 순수익 | **+87만원** (1000만원 기준) |
+| 누적 수익률 | +43.5% (5개월) |
+
+### 관련 파일
+- `config/strategy_settings.py` - 전략 선택 및 설정
+- `core/strategies/price_position_strategy.py` - 전략 클래스
+- `simulate_price_position_strategy.py` - 시뮬레이션
+- `realistic_simulation.py` - 자본금 제한 시뮬레이션
+
+---
+
+## 기존 전략: 눌림목 캔들패턴 (pullback)
 
 **매수 조건**:
 - 주가 상승 중 거래량은 하락 추세
@@ -73,13 +111,17 @@
 
 ```
 config/
-├── trading_config.json      # 거래 설정 (투자비율, 손익비)
-├── ml_settings.py           # ML 필터 설정
+├── trading_config.json          # 거래 설정 (투자비율, 손익비)
+├── strategy_settings.py         # 전략 선택 설정 (NEW)
+├── ml_settings.py               # ML 필터 설정
 ├── advanced_filter_settings.py  # 고급 필터 설정
 
 core/
-├── trading_decision_engine.py   # 매매 판단 엔진
+├── trading_decision_engine.py   # 매매 판단 엔진 (전략 분기)
 ├── fund_manager.py              # 자금 관리
+├── strategies/                  # 전략 모듈 (NEW)
+│   ├── __init__.py
+│   └── price_position_strategy.py  # 가격 위치 전략
 ├── indicators/
 │   ├── advanced_filters.py      # 고급 필터 로직
 │   └── pullback_candle_pattern.py  # 눌림목 패턴 감지

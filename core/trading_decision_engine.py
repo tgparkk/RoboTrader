@@ -11,6 +11,8 @@ from core.timeframe_converter import TimeFrameConverter
 
 
 class TradingDecisionEngine:
+    # 가격 위치 전략 일별 거래 기록 (클래스 변수)
+    _price_position_daily_trades: Dict[str, set] = {}
     """
     매매 판단 엔진
     
@@ -140,6 +142,37 @@ class TradingDecisionEngine:
             self.pattern_logger = None
             self.logger.info("📊 패턴 데이터 로거 비활성화 (실시간 성능 최적화)")
 
+        # 🆕 전략 설정 로드
+        try:
+            from config.strategy_settings import StrategySettings
+            self.active_strategy = StrategySettings.ACTIVE_STRATEGY
+            self.strategy_settings = StrategySettings
+            self.logger.info(f"📈 활성 전략: {self.active_strategy}")
+
+            # 가격 위치 전략 초기화
+            if self.active_strategy == 'price_position':
+                from core.strategies.price_position_strategy import PricePositionStrategy
+                pp_config = {
+                    'min_pct_from_open': StrategySettings.PricePosition.MIN_PCT_FROM_OPEN,
+                    'max_pct_from_open': StrategySettings.PricePosition.MAX_PCT_FROM_OPEN,
+                    'entry_start_hour': StrategySettings.PricePosition.ENTRY_START_HOUR,
+                    'entry_end_hour': StrategySettings.PricePosition.ENTRY_END_HOUR,
+                    'allowed_weekdays': StrategySettings.PricePosition.ALLOWED_WEEKDAYS,
+                    'stop_loss_pct': -self.config.get('risk_management', {}).get('stop_loss_ratio', 0.025) * 100,
+                    'take_profit_pct': self.config.get('risk_management', {}).get('take_profit_ratio', 0.035) * 100,
+                }
+                self.price_position_strategy = PricePositionStrategy(config=pp_config, logger=self.logger)
+                self.logger.info(f"   진입조건: 시가+{pp_config['min_pct_from_open']}%~{pp_config['max_pct_from_open']}%, "
+                               f"{pp_config['entry_start_hour']}시~{pp_config['entry_end_hour']}시, 월/수/금")
+            else:
+                self.price_position_strategy = None
+
+        except Exception as e:
+            self.logger.warning(f"⚠️ 전략 설정 로드 실패: {e}, 기본 전략(pullback) 사용")
+            self.active_strategy = 'pullback'
+            self.strategy_settings = None
+            self.price_position_strategy = None
+
         self.logger.info("🧠 매매 판단 엔진 초기화 완료")
 
     def _initialize_ml_predictor(self):
@@ -220,9 +253,14 @@ class TradingDecisionEngine:
 
             # 🆕 현재 처리 중인 종목 코드 저장 (디버깅용)
             self._current_stock_code = stock_code
-            
-            # 전략 4: 눌림목 캔들패턴 매수 신호 (3분봉 사용)
-            signal_result, reason, price_info = self._check_pullback_candle_buy_signal(combined_data, trading_stock)
+
+            # 🆕 전략에 따라 매수 신호 확인 분기
+            if self.active_strategy == 'price_position':
+                # 가격 위치 기반 전략
+                signal_result, reason, price_info = self._check_price_position_buy_signal(combined_data, trading_stock)
+            else:
+                # 기존 눌림목 캔들패턴 전략 (기본값)
+                signal_result, reason, price_info = self._check_pullback_candle_buy_signal(combined_data, trading_stock)
             if signal_result and price_info:
                 # 매수 신호 발생 시 가격과 수량 계산
                 buy_price = price_info['buy_price']
@@ -1011,7 +1049,133 @@ class TradingDecisionEngine:
         except Exception as e:
             self.logger.error(f"❌ 눌림목 캔들패턴 매수 신호 확인 오류: {e}")
             return False, "", None
-    
+
+    def _check_price_position_buy_signal(self, data, trading_stock=None) -> Tuple[bool, str, Optional[Dict[str, float]]]:
+        """
+        가격 위치 기반 전략 매수 신호 확인
+
+        조건:
+        - 시가 대비 2~4% 상승
+        - 월/수/금요일만 거래
+        - 10시~12시 진입
+
+        Returns:
+            Tuple[bool, str, Optional[Dict]]: (신호여부, 사유, 가격정보)
+        """
+        try:
+            if not self.price_position_strategy:
+                return False, "가격위치전략 미초기화", None
+
+            stock_code = trading_stock.stock_code if trading_stock else "UNKNOWN"
+
+            # 데이터 검증
+            if data is None or len(data) < 10:
+                return False, "데이터 부족", None
+
+            # 현재 시간 정보
+            current_time = now_kst()
+            trade_date = current_time.strftime('%Y%m%d')
+            weekday = current_time.weekday()
+            time_str = current_time.strftime('%H%M%S')
+
+            # 요일 체크 (화/목 회피)
+            pp_settings = self.strategy_settings.PricePosition
+            if weekday not in pp_settings.ALLOWED_WEEKDAYS:
+                weekday_names = ['월', '화', '수', '목', '금', '토', '일']
+                return False, f"{weekday_names[weekday]}요일 거래 제외", None
+
+            # 시간 체크
+            hour = current_time.hour
+            if hour < pp_settings.ENTRY_START_HOUR:
+                return False, f"{pp_settings.ENTRY_START_HOUR}시 이전", None
+            if hour >= pp_settings.ENTRY_END_HOUR:
+                return False, f"{pp_settings.ENTRY_END_HOUR}시 이후", None
+
+            # 당일 거래 여부 체크 (종목당 1회)
+            if pp_settings.ONE_TRADE_PER_STOCK_PER_DAY:
+                if trade_date in TradingDecisionEngine._price_position_daily_trades:
+                    if stock_code in TradingDecisionEngine._price_position_daily_trades[trade_date]:
+                        return False, "당일 이미 거래함", None
+
+            # 당일 최대 보유 종목 수 체크
+            if trade_date in TradingDecisionEngine._price_position_daily_trades:
+                current_trades_today = len(TradingDecisionEngine._price_position_daily_trades[trade_date])
+                if current_trades_today >= pp_settings.MAX_DAILY_POSITIONS:
+                    return False, f"당일 최대 {pp_settings.MAX_DAILY_POSITIONS}종목 도달", None
+
+            # 시가 계산 (첫 번째 캔들)
+            day_open = self._safe_float_convert(data.iloc[0]['open'])
+            if day_open <= 0:
+                return False, "시가 데이터 없음", None
+
+            # 현재가 (마지막 캔들)
+            current_price = self._safe_float_convert(data.iloc[-1]['close'])
+            if current_price <= 0:
+                return False, "현재가 데이터 없음", None
+
+            # 시가 대비 상승률 계산
+            pct_from_open = (current_price / day_open - 1) * 100
+
+            # 진입 조건 확인
+            can_enter, reason = self.price_position_strategy.check_entry_conditions(
+                stock_code=stock_code,
+                current_price=current_price,
+                day_open=day_open,
+                current_time=time_str,
+                trade_date=trade_date,
+                weekday=weekday
+            )
+
+            if not can_enter:
+                return False, reason, None
+
+            # 3분봉 확정 확인
+            if not self._is_candle_confirmed(data):
+                return False, "3분봉 미확정", None
+
+            # 매수 신호 승인!
+            # 거래 기록
+            if trade_date not in TradingDecisionEngine._price_position_daily_trades:
+                TradingDecisionEngine._price_position_daily_trades[trade_date] = set()
+            TradingDecisionEngine._price_position_daily_trades[trade_date].add(stock_code)
+
+            # 가격 정보 생성
+            price_info = {
+                'buy_price': current_price,
+                'entry_low': day_open * 0.975,  # 시가 -2.5% (손절 기준)
+                'target_profit': 0.035,  # 3.5%
+                'pattern_data': {
+                    'pct_from_open': pct_from_open,
+                    'day_open': day_open,
+                    'current_price': current_price,
+                    'entry_hour': hour,
+                    'weekday': weekday,
+                }
+            }
+
+            self.logger.info(f"🚀 [가격위치전략] 매수 신호!")
+            self.logger.info(f"  - 종목: {stock_code}")
+            self.logger.info(f"  - 시가: {day_open:,.0f}원")
+            self.logger.info(f"  - 현재가: {current_price:,.0f}원 (시가+{pct_from_open:.1f}%)")
+            self.logger.info(f"  - 시간: {current_time.strftime('%H:%M')}")
+
+            signal_reason = f"가격위치전략: 시가+{pct_from_open:.1f}% ({pp_settings.MIN_PCT_FROM_OPEN}~{pp_settings.MAX_PCT_FROM_OPEN}%)"
+            return True, signal_reason, price_info
+
+        except Exception as e:
+            self.logger.error(f"❌ 가격위치전략 매수 신호 확인 오류: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+            return False, f"오류: {e}", None
+
+    @classmethod
+    def reset_daily_trades(cls, trade_date: str = None):
+        """일별 거래 기록 초기화 (가격위치전략용)"""
+        if trade_date:
+            cls._price_position_daily_trades.pop(trade_date, None)
+        else:
+            cls._price_position_daily_trades.clear()
+
     def _is_candle_confirmed(self, data_3min) -> bool:
         """3분봉 확정 여부 확인 (signal_replay.py와 완전히 동일한 방식)"""
         try:
