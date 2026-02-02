@@ -112,14 +112,19 @@ ACTIVE_STRATEGY = 'price_position'  # 현재 활성화
 ```
 config/
 ├── trading_config.json          # 거래 설정 (투자비율, 손익비)
-├── strategy_settings.py         # 전략 선택 설정 (NEW)
+├── strategy_settings.py         # 전략 선택 설정
 ├── ml_settings.py               # ML 필터 설정
 ├── advanced_filter_settings.py  # 고급 필터 설정
 
 core/
-├── trading_decision_engine.py   # 매매 판단 엔진 (전략 분기)
+├── trading_decision_engine.py   # 매매 판단 엔진 (980 lines)
+├── trade_executor.py            # 매수/매도 실행 로직 (325 lines)
+├── intraday_stock_manager.py    # 장중 데이터 관리 (794 lines)
+├── historical_data_collector.py # 과거 데이터 수집 (368 lines)
+├── realtime_data_updater.py     # 실시간 데이터 갱신 (393 lines)
+├── data_quality_checker.py      # 데이터 품질 검증 (171 lines)
 ├── fund_manager.py              # 자금 관리
-├── strategies/                  # 전략 모듈 (NEW)
+├── strategies/                  # 전략 모듈
 │   ├── __init__.py
 │   └── price_position_strategy.py  # 가격 위치 전략
 ├── indicators/
@@ -127,12 +132,25 @@ core/
 │   └── pullback_candle_pattern.py  # 눌림목 패턴 감지
 
 utils/
-├── signal_replay.py         # 시뮬레이션 (순수 패턴)
-├── data_cache.py            # DuckDB 캐시 관리
+├── signal_replay.py             # 시뮬레이션 메인 (2,180 lines)
+├── signal_replay_simulation.py  # 시뮬레이션 헬퍼 (394 lines)
+├── data_cache.py                # DuckDB 캐시 관리
 
 cache/
 └── market_data_v2.duckdb    # 분봉/일봉 캐시 데이터
 ```
+
+### 리팩토링 이력 (2026-02-02)
+
+대형 파일 분리를 통한 코드 가독성 개선:
+
+| 원본 파일 | 원본 라인 | 현재 라인 | 분리된 헬퍼 |
+|-----------|-----------|-----------|-------------|
+| trading_decision_engine.py | 1,221 | 980 | trade_executor.py |
+| intraday_stock_manager.py | 1,624 | 794 | historical_data_collector.py, realtime_data_updater.py, data_quality_checker.py |
+| signal_replay.py | 2,180 | 2,180 | signal_replay_simulation.py (신규 헬퍼) |
+
+**설계 패턴**: Composition (위임) 패턴 사용 - 기존 public API 유지하면서 내부 로직만 헬퍼 클래스로 분리
 
 ---
 
