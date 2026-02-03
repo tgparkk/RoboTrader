@@ -5,6 +5,7 @@
 - DuckDB를 기본 저장소로 사용
 - 기존 pkl 파일도 읽기 가능 (호환성 유지)
 - Thread-local 연결 풀링으로 성능 최적화
+- 쓰기 작업은 글로벌 Lock으로 동시성 보호
 """
 import os
 import pickle
@@ -19,6 +20,9 @@ from utils.logger import setup_logger
 
 # DuckDB 파일 경로
 DB_PATH = Path(__file__).parent.parent / "cache" / "market_data_v2.duckdb"
+
+# 글로벌 쓰기 Lock (DuckDB는 단일 Writer만 허용)
+_write_lock = threading.Lock()
 
 
 class DataCache:
@@ -129,45 +133,54 @@ class DataCache:
             return False
 
     def _save_to_duckdb(self, stock_code: str, date_str: str, df_minute: pd.DataFrame) -> bool:
-        """DuckDB에 저장 (종목별 테이블)"""
-        try:
-            table_name = self._get_table_name(stock_code)
-            con = duckdb.connect(str(DB_PATH))
-
-            # 테이블 생성 (없으면)
-            self._create_table_if_not_exists(con, stock_code)
-
-            # DataFrame 준비 (인덱스 리셋으로 중복 방지)
-            df_to_save = df_minute.copy().reset_index(drop=True)
-            df_to_save['trade_date'] = date_str
-            df_to_save['idx'] = range(len(df_to_save))
-
-            # 트랜잭션으로 DELETE + INSERT 원자적 실행
-            con.execute("BEGIN TRANSACTION")
+        """DuckDB에 저장 (종목별 테이블) - 글로벌 Lock으로 동시성 보호"""
+        # 글로벌 Lock 획득 (DuckDB는 단일 Writer만 허용)
+        with _write_lock:
             try:
-                # 기존 데이터 삭제
-                con.execute(f"""
-                    DELETE FROM {table_name} WHERE trade_date = ?
-                """, [date_str])
+                table_name = self._get_table_name(stock_code)
+                con = duckdb.connect(str(DB_PATH))
 
-                # 삽입
-                con.execute(f"""
-                    INSERT INTO {table_name}
-                    SELECT trade_date, idx, date, time, close, open, high, low, volume, amount, datetime
-                    FROM df_to_save
-                """)
-                con.execute("COMMIT")
-            except Exception as inner_e:
-                con.execute("ROLLBACK")
-                raise inner_e
+                # WAL 모드 활성화 (동시 읽기 성능 향상)
+                try:
+                    con.execute("PRAGMA wal_autocheckpoint=1000")
+                except:
+                    pass  # DuckDB 버전에 따라 지원 안될 수 있음
 
-            con.close()
-            self.logger.debug(f"[{stock_code}] DuckDB 저장 완료 ({len(df_minute)}개)")
-            return True
+                # 테이블 생성 (없으면)
+                self._create_table_if_not_exists(con, stock_code)
 
-        except Exception as e:
-            self.logger.warning(f"DuckDB 저장 실패, pkl로 폴백: {e}")
-            return self._save_to_pkl(stock_code, date_str, df_minute)
+                # DataFrame 준비 (인덱스 리셋으로 중복 방지)
+                df_to_save = df_minute.copy().reset_index(drop=True)
+                df_to_save['trade_date'] = date_str
+                df_to_save['idx'] = range(len(df_to_save))
+
+                # 트랜잭션으로 DELETE + INSERT 원자적 실행
+                con.execute("BEGIN TRANSACTION")
+                try:
+                    # 기존 데이터 삭제
+                    con.execute(f"""
+                        DELETE FROM {table_name} WHERE trade_date = ?
+                    """, [date_str])
+
+                    # 삽입
+                    con.execute(f"""
+                        INSERT INTO {table_name}
+                        SELECT trade_date, idx, date, time, close, open, high, low, volume, amount, datetime
+                        FROM df_to_save
+                    """)
+                    con.execute("COMMIT")
+                except Exception as inner_e:
+                    con.execute("ROLLBACK")
+                    raise inner_e
+                finally:
+                    con.close()
+
+                self.logger.debug(f"[{stock_code}] DuckDB 저장 완료 ({len(df_minute)}개)")
+                return True
+
+            except Exception as e:
+                self.logger.warning(f"DuckDB 저장 실패, pkl로 폴백: {e}")
+                return self._save_to_pkl(stock_code, date_str, df_minute)
 
     def _save_to_pkl(self, stock_code: str, date_str: str, df_minute: pd.DataFrame) -> bool:
         """pkl 파일로 저장 (폴백)"""
@@ -237,30 +250,33 @@ class DataCache:
         return df_minute
 
     def clear_cache(self, stock_code: str = None, date_str: str = None):
-        """캐시 정리 (종목별 테이블)"""
+        """캐시 정리 (종목별 테이블) - 글로벌 Lock으로 동시성 보호"""
         try:
             if self.use_duckdb:
-                con = duckdb.connect(str(DB_PATH))
-                if stock_code and date_str:
-                    table_name = self._get_table_name(stock_code)
-                    # 테이블 존재 여부 확인
-                    tables = con.execute("SELECT table_name FROM information_schema.tables WHERE table_name = ?", [table_name]).fetchall()
-                    if tables:
-                        con.execute(f"DELETE FROM {table_name} WHERE trade_date = ?", [date_str])
-                    self.logger.info(f"DuckDB 데이터 삭제: {stock_code}_{date_str}")
-                elif stock_code:
-                    table_name = self._get_table_name(stock_code)
-                    tables = con.execute("SELECT table_name FROM information_schema.tables WHERE table_name = ?", [table_name]).fetchall()
-                    if tables:
-                        con.execute(f"DROP TABLE {table_name}")
-                    self.logger.info(f"DuckDB 테이블 삭제: {table_name}")
-                else:
-                    # 모든 minute_ 테이블 삭제
-                    tables = con.execute("SELECT table_name FROM information_schema.tables WHERE table_name LIKE 'minute_%'").fetchall()
-                    for (table_name,) in tables:
-                        con.execute(f"DROP TABLE {table_name}")
-                    self.logger.info(f"DuckDB 전체 분봉 테이블 삭제 ({len(tables)}개)")
-                con.close()
+                with _write_lock:
+                    con = duckdb.connect(str(DB_PATH))
+                    try:
+                        if stock_code and date_str:
+                            table_name = self._get_table_name(stock_code)
+                            # 테이블 존재 여부 확인
+                            tables = con.execute("SELECT table_name FROM information_schema.tables WHERE table_name = ?", [table_name]).fetchall()
+                            if tables:
+                                con.execute(f"DELETE FROM {table_name} WHERE trade_date = ?", [date_str])
+                            self.logger.info(f"DuckDB 데이터 삭제: {stock_code}_{date_str}")
+                        elif stock_code:
+                            table_name = self._get_table_name(stock_code)
+                            tables = con.execute("SELECT table_name FROM information_schema.tables WHERE table_name = ?", [table_name]).fetchall()
+                            if tables:
+                                con.execute(f"DROP TABLE {table_name}")
+                            self.logger.info(f"DuckDB 테이블 삭제: {table_name}")
+                        else:
+                            # 모든 minute_ 테이블 삭제
+                            tables = con.execute("SELECT table_name FROM information_schema.tables WHERE table_name LIKE 'minute_%'").fetchall()
+                            for (table_name,) in tables:
+                                con.execute(f"DROP TABLE {table_name}")
+                            self.logger.info(f"DuckDB 전체 분봉 테이블 삭제 ({len(tables)}개)")
+                    finally:
+                        con.close()
 
             # pkl 파일도 삭제
             if stock_code and date_str:
@@ -419,56 +435,65 @@ class DailyDataCache:
             return False
 
     def _save_to_duckdb(self, stock_code: str, df_daily: pd.DataFrame) -> bool:
-        """DuckDB에 저장 (종목별 테이블)"""
-        try:
-            table_name = self._get_table_name(stock_code)
-            con = duckdb.connect(str(DB_PATH))
-
-            # 테이블 생성 (없으면)
-            self._create_table_if_not_exists(con, stock_code)
-
-            # DataFrame에서 필요한 컬럼만 선택
-            cols = ['stck_bsop_date', 'stck_clpr', 'stck_oprc', 'stck_hgpr', 'stck_lwpr',
-                    'acml_vol', 'acml_tr_pbmn', 'flng_cls_code', 'prtt_rate', 'mod_yn',
-                    'prdy_vrss_sign', 'prdy_vrss', 'revl_issu_reas']
-
-            df_to_save = df_daily.copy()
-            # 없는 컬럼은 빈 문자열로 추가
-            for col in cols:
-                if col not in df_to_save.columns:
-                    df_to_save[col] = ''
-
-            # 트랜잭션으로 MERGE (중복 제거 + 과거 데이터 보존)
-            con.execute("BEGIN TRANSACTION")
+        """DuckDB에 저장 (종목별 테이블) - 글로벌 Lock으로 동시성 보호"""
+        # 글로벌 Lock 획득 (DuckDB는 단일 Writer만 허용)
+        with _write_lock:
             try:
-                # 기존 날짜 데이터는 삭제 (업데이트)
-                con.execute(f"""
-                    DELETE FROM {table_name}
-                    WHERE stck_bsop_date IN (
-                        SELECT DISTINCT stck_bsop_date FROM df_to_save
-                    )
-                """)
+                table_name = self._get_table_name(stock_code)
+                con = duckdb.connect(str(DB_PATH))
 
-                # 신규 데이터 삽입
-                con.execute(f"""
-                    INSERT INTO {table_name}
-                    SELECT stck_bsop_date, stck_clpr, stck_oprc, stck_hgpr, stck_lwpr,
-                           acml_vol, acml_tr_pbmn, flng_cls_code, prtt_rate, mod_yn,
-                           prdy_vrss_sign, prdy_vrss, revl_issu_reas
-                    FROM df_to_save
-                """)
-                con.execute("COMMIT")
-            except Exception as inner_e:
-                con.execute("ROLLBACK")
-                raise inner_e
+                # WAL 모드 활성화 (동시 읽기 성능 향상)
+                try:
+                    con.execute("PRAGMA wal_autocheckpoint=1000")
+                except:
+                    pass  # DuckDB 버전에 따라 지원 안될 수 있음
 
-            con.close()
-            self.logger.debug(f"[{stock_code}] 일봉 DuckDB 저장 완료 ({len(df_daily)}개)")
-            return True
+                # 테이블 생성 (없으면)
+                self._create_table_if_not_exists(con, stock_code)
 
-        except Exception as e:
-            self.logger.warning(f"일봉 DuckDB 저장 실패: {e}")
-            return False
+                # DataFrame에서 필요한 컬럼만 선택
+                cols = ['stck_bsop_date', 'stck_clpr', 'stck_oprc', 'stck_hgpr', 'stck_lwpr',
+                        'acml_vol', 'acml_tr_pbmn', 'flng_cls_code', 'prtt_rate', 'mod_yn',
+                        'prdy_vrss_sign', 'prdy_vrss', 'revl_issu_reas']
+
+                df_to_save = df_daily.copy()
+                # 없는 컬럼은 빈 문자열로 추가
+                for col in cols:
+                    if col not in df_to_save.columns:
+                        df_to_save[col] = ''
+
+                # 트랜잭션으로 MERGE (중복 제거 + 과거 데이터 보존)
+                con.execute("BEGIN TRANSACTION")
+                try:
+                    # 기존 날짜 데이터는 삭제 (업데이트)
+                    con.execute(f"""
+                        DELETE FROM {table_name}
+                        WHERE stck_bsop_date IN (
+                            SELECT DISTINCT stck_bsop_date FROM df_to_save
+                        )
+                    """)
+
+                    # 신규 데이터 삽입
+                    con.execute(f"""
+                        INSERT INTO {table_name}
+                        SELECT stck_bsop_date, stck_clpr, stck_oprc, stck_hgpr, stck_lwpr,
+                               acml_vol, acml_tr_pbmn, flng_cls_code, prtt_rate, mod_yn,
+                               prdy_vrss_sign, prdy_vrss, revl_issu_reas
+                        FROM df_to_save
+                    """)
+                    con.execute("COMMIT")
+                except Exception as inner_e:
+                    con.execute("ROLLBACK")
+                    raise inner_e
+                finally:
+                    con.close()
+
+                self.logger.debug(f"[{stock_code}] 일봉 DuckDB 저장 완료 ({len(df_daily)}개)")
+                return True
+
+            except Exception as e:
+                self.logger.warning(f"일봉 DuckDB 저장 실패: {e}")
+                return False
 
     def _save_to_pkl(self, stock_code: str, df_daily: pd.DataFrame) -> bool:
         """pkl 파일로 저장 (폴백)"""

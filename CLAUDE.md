@@ -152,6 +152,22 @@ cache/
 
 **설계 패턴**: Composition (위임) 패턴 사용 - 기존 public API 유지하면서 내부 로직만 헬퍼 클래스로 분리
 
+### DB 관리 개선 (2026-02-03)
+
+데이터베이스 동시성 및 안정성 개선:
+
+| 문제 | 해결 방법 | 파일 |
+|------|----------|------|
+| DuckDB 동시 쓰기 충돌 | 글로벌 Lock + WAL 모드 | `utils/data_cache.py` |
+| SQLite 병렬성 낮음 | WAL 모드 + 30초 타임아웃 | `db/database_manager.py` |
+| 손익 계산 일관성 | BEGIN IMMEDIATE 트랜잭션 | `db/database_manager.py` |
+
+**주요 변경사항:**
+- `_write_lock`: DuckDB 쓰기 작업 직렬화 (동시 쓰기 오류 방지)
+- `PRAGMA journal_mode=WAL`: 동시 읽기/쓰기 성능 향상
+- `PRAGMA synchronous=NORMAL`: 성능과 안정성 균형
+- `BEGIN IMMEDIATE`: 매도 시 매수 조회→손익 계산→저장 원자성 보장
+
 ---
 
 ## 분석 방법

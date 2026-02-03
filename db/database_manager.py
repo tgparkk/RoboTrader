@@ -39,22 +39,48 @@ class PriceRecord:
 
 
 class DatabaseManager:
-    """데이터베이스 관리자"""
-    
+    """데이터베이스 관리자
+
+    - WAL 모드로 동시 읽기/쓰기 성능 향상
+    - 30초 타임아웃으로 데드락 방지
+    """
+
+    # 연결 기본 설정
+    SQLITE_TIMEOUT = 30  # 초
+
     def __init__(self, db_path: str = None):
         self.logger = setup_logger(__name__)
-        
+
         # 데이터베이스 파일 경로 설정
         if db_path is None:
             db_dir = Path(__file__).parent.parent / "data"
             db_dir.mkdir(exist_ok=True)
             db_path = db_dir / "robotrader.db"
-        
+
         self.db_path = str(db_path)
         self.logger.info(f"데이터베이스 초기화: {self.db_path}")
-        
+
+        # WAL 모드 활성화 (최초 1회)
+        self._enable_wal_mode()
+
         # 테이블 생성
         self._create_tables()
+
+    def _enable_wal_mode(self):
+        """WAL 모드 활성화 (동시 읽기/쓰기 성능 향상)"""
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=self.SQLITE_TIMEOUT)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")  # 성능과 안정성 균형
+            conn.execute("PRAGMA cache_size=-64000")   # 64MB 캐시
+            conn.close()
+            self.logger.info("SQLite WAL 모드 활성화 완료")
+        except Exception as e:
+            self.logger.warning(f"WAL 모드 활성화 실패 (무시): {e}")
+
+    def _get_connection(self) -> sqlite3.Connection:
+        """타임아웃이 설정된 연결 반환"""
+        return sqlite3.connect(self.db_path, timeout=self.SQLITE_TIMEOUT)
 
     def _get_today_range_strings(self) -> tuple:
         """KST 기준 오늘의 시작과 내일 시작 시간 문자열(YYYY-MM-DD HH:MM:SS)을 반환."""
@@ -613,40 +639,48 @@ class DatabaseManager:
     def save_real_sell(self, stock_code: str, stock_name: str, price: float,
                        quantity: int, strategy: str = '', reason: str = '',
                        buy_record_id: Optional[int] = None, timestamp: datetime = None) -> bool:
-        """실거래 매도 기록 저장 (손익 계산 포함)"""
+        """실거래 매도 기록 저장 (손익 계산 포함) - 단일 트랜잭션으로 원자성 보장"""
         try:
             if timestamp is None:
                 timestamp = now_kst()
-            buy_price = None
-            if buy_record_id:
-                with sqlite3.connect(self.db_path) as conn:
-                    cursor = conn.cursor()
-                    cursor.execute('''
-                        SELECT price FROM real_trading_records 
-                        WHERE id = ? AND action = 'BUY'
-                    ''', (buy_record_id,))
-                    row = cursor.fetchone()
-                    if row:
-                        buy_price = float(row[0])
-            profit_loss = 0.0
-            profit_rate = 0.0
-            if buy_price and buy_price > 0:
-                profit_loss = (price - buy_price) * quantity
-                profit_rate = (price - buy_price) / buy_price * 100.0
-            with sqlite3.connect(self.db_path) as conn:
+
+            with self._get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute('''
-                    INSERT INTO real_trading_records 
-                    (stock_code, stock_name, action, quantity, price, timestamp, strategy, reason, 
-                     profit_loss, profit_rate, buy_record_id, created_at)
-                    VALUES (?, ?, 'SELL', ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    stock_code, stock_name, quantity, price,
-                    timestamp.strftime('%Y-%m-%d %H:%M:%S'), strategy, reason,
-                    profit_loss, profit_rate, buy_record_id,
-                    now_kst().strftime('%Y-%m-%d %H:%M:%S')
-                ))
-                conn.commit()
+                # BEGIN IMMEDIATE: 즉시 쓰기 잠금 획득하여 데이터 일관성 보장
+                cursor.execute("BEGIN IMMEDIATE")
+                try:
+                    buy_price = None
+                    if buy_record_id:
+                        cursor.execute('''
+                            SELECT price FROM real_trading_records
+                            WHERE id = ? AND action = 'BUY'
+                        ''', (buy_record_id,))
+                        row = cursor.fetchone()
+                        if row:
+                            buy_price = float(row[0])
+
+                    profit_loss = 0.0
+                    profit_rate = 0.0
+                    if buy_price and buy_price > 0:
+                        profit_loss = (price - buy_price) * quantity
+                        profit_rate = (price - buy_price) / buy_price * 100.0
+
+                    cursor.execute('''
+                        INSERT INTO real_trading_records
+                        (stock_code, stock_name, action, quantity, price, timestamp, strategy, reason,
+                         profit_loss, profit_rate, buy_record_id, created_at)
+                        VALUES (?, ?, 'SELL', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        stock_code, stock_name, quantity, price,
+                        timestamp.strftime('%Y-%m-%d %H:%M:%S'), strategy, reason,
+                        profit_loss, profit_rate, buy_record_id,
+                        now_kst().strftime('%Y-%m-%d %H:%M:%S')
+                    ))
+                    conn.commit()
+                except Exception as inner_e:
+                    conn.rollback()
+                    raise inner_e
+
                 self.logger.info(
                     f"✅ 실거래 매도 기록 저장: {stock_code} {quantity}주 @{price:,.0f} 손익 {profit_loss:+,.0f}원 ({profit_rate:+.2f}%)"
                 )
@@ -704,49 +738,55 @@ class DatabaseManager:
             self.logger.error(f"가상 매수 기록 저장 실패: {e}")
             return None
     
-    def save_virtual_sell(self, stock_code: str, stock_name: str, price: float, 
-                         quantity: int, strategy: str, reason: str, 
+    def save_virtual_sell(self, stock_code: str, stock_name: str, price: float,
+                         quantity: int, strategy: str, reason: str,
                          buy_record_id: int, timestamp: datetime = None) -> bool:
-        """가상 매도 기록 저장"""
+        """가상 매도 기록 저장 - 단일 트랜잭션으로 원자성 보장"""
         try:
             if timestamp is None:
                 timestamp = now_kst()
-            
-            with sqlite3.connect(self.db_path) as conn:
+
+            with self._get_connection() as conn:
                 cursor = conn.cursor()
-                
-                # 매수 기록 조회
-                cursor.execute('''
-                    SELECT price FROM virtual_trading_records 
-                    WHERE id = ? AND action = 'BUY'
-                ''', (buy_record_id,))
-                
-                buy_result = cursor.fetchone()
-                if not buy_result:
-                    self.logger.error(f"매수 기록을 찾을 수 없음: ID {buy_record_id}")
-                    return False
-                
-                buy_price = buy_result[0]
-                
-                # 손익 계산
-                profit_loss = (price - buy_price) * quantity
-                profit_rate = ((price - buy_price) / buy_price) * 100
-                
-                cursor.execute('''
-                    INSERT INTO virtual_trading_records 
-                    (stock_code, stock_name, action, quantity, price, timestamp, strategy, reason, 
-                     is_test, profit_loss, profit_rate, buy_record_id, created_at)
-                    VALUES (?, ?, 'SELL', ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
-                ''', (stock_code, stock_name, quantity, price, timestamp.strftime('%Y-%m-%d %H:%M:%S'), 
-                      strategy, reason, profit_loss, profit_rate, buy_record_id, now_kst().strftime('%Y-%m-%d %H:%M:%S')))
-                
-                conn.commit()
-                
+                # BEGIN IMMEDIATE: 즉시 쓰기 잠금 획득하여 데이터 일관성 보장
+                cursor.execute("BEGIN IMMEDIATE")
+                try:
+                    # 매수 기록 조회
+                    cursor.execute('''
+                        SELECT price FROM virtual_trading_records
+                        WHERE id = ? AND action = 'BUY'
+                    ''', (buy_record_id,))
+
+                    buy_result = cursor.fetchone()
+                    if not buy_result:
+                        conn.rollback()
+                        self.logger.error(f"매수 기록을 찾을 수 없음: ID {buy_record_id}")
+                        return False
+
+                    buy_price = buy_result[0]
+
+                    # 손익 계산
+                    profit_loss = (price - buy_price) * quantity
+                    profit_rate = ((price - buy_price) / buy_price) * 100
+
+                    cursor.execute('''
+                        INSERT INTO virtual_trading_records
+                        (stock_code, stock_name, action, quantity, price, timestamp, strategy, reason,
+                         is_test, profit_loss, profit_rate, buy_record_id, created_at)
+                        VALUES (?, ?, 'SELL', ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+                    ''', (stock_code, stock_name, quantity, price, timestamp.strftime('%Y-%m-%d %H:%M:%S'),
+                          strategy, reason, profit_loss, profit_rate, buy_record_id, now_kst().strftime('%Y-%m-%d %H:%M:%S')))
+
+                    conn.commit()
+                except Exception as inner_e:
+                    conn.rollback()
+                    raise inner_e
+
                 profit_sign = "+" if profit_loss >= 0 else ""
                 self.logger.info(f"📉 가상 매도 기록 저장: {stock_code}({stock_name}) {quantity}주 @{price:,.0f}원 - "
                                f"손익: {profit_sign}{profit_loss:,.0f}원 ({profit_rate:+.2f}%) - {strategy}")
                 return True
-                
+
         except Exception as e:
             self.logger.error(f"가상 매도 기록 저장 실패: {e}")
             return False
