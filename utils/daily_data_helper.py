@@ -54,8 +54,20 @@ def ensure_daily_data_for_stock(stock_code: str, api_manager=None) -> bool:
         )
 
         if df is not None and not df.empty:
-            daily_cache.save_data(stock_code, df)
-            logger.info(f"✅ 일봉 데이터 수집 완료: {stock_code} ({len(df)}일)")
+            # 장중에는 저장하지 않음 (동시 접근 충돌 방지)
+            # 장 마감 후 post_market_data_saver에서 일괄 저장
+            from datetime import time as dt_time
+            now_time = datetime.now().time()
+            market_open = dt_time(9, 0)
+            market_close = dt_time(15, 30)
+
+            if now_time < market_open or now_time > market_close:
+                # 장 시간 외에만 저장
+                daily_cache.save_data(stock_code, df)
+                logger.info(f"✅ 일봉 데이터 수집 및 저장 완료: {stock_code} ({len(df)}일)")
+            else:
+                # 장중에는 메모리 캐시만 사용 (저장 생략)
+                logger.info(f"✅ 일봉 데이터 수집 완료 (장중 저장 생략): {stock_code} ({len(df)}일)")
             return True
         else:
             logger.warning(f"⚠️ 일봉 데이터 없음: {stock_code}")

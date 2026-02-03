@@ -574,6 +574,9 @@ class IntradayStockManager:
                     self._data_saved_today = True  # 하루에 한 번만 저장
                     self.logger.info(f"✅ {close_hour}:{close_minute:02d} 장 마감 데이터 저장 완료")
 
+                # 장 마감 후에는 분봉 조회 중단 (불필요한 API 호출 방지)
+                return
+
             with self._lock:
                 stock_codes = list(self.selected_stocks.keys())
 

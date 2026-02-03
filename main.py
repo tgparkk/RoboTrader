@@ -367,45 +367,54 @@ class DayTradingBot:
                 # 실시간 환경에서는 메모리에 있는 데이터만 사용 (캐시 파일 체크 불필요)
                 return
             
-            # 🆕 3분봉 변환 시 완성된 봉만 자동 필터링됨 (TimeFrameConverter에서 처리)
-            from core.timeframe_converter import TimeFrameConverter
+            # 🆕 전략에 따라 1분봉 또는 3분봉 사용
+            from config.strategy_settings import StrategySettings
 
-            data_3min = TimeFrameConverter.convert_to_3min_data(combined_data)
+            if StrategySettings.ACTIVE_STRATEGY == 'price_position':
+                # price_position 전략: 1분봉 직접 사용 (더 정밀한 진입)
+                analysis_data = combined_data
+                self.logger.debug(f"📊 {stock_code} price_position 전략: 1분봉 {len(analysis_data)}개 사용")
+            else:
+                # pullback 전략: 3분봉 변환 후 사용
+                from core.timeframe_converter import TimeFrameConverter
+                data_3min = TimeFrameConverter.convert_to_3min_data(combined_data)
 
-            if data_3min is None or len(data_3min) < 5:
-                self.logger.debug(f"❌ {stock_code} 3분봉 데이터 부족: {len(data_3min) if data_3min is not None else 0}개 (최소 5개 필요)")
-                return
+                if data_3min is None or len(data_3min) < 5:
+                    self.logger.debug(f"❌ {stock_code} 3분봉 데이터 부족: {len(data_3min) if data_3min is not None else 0}개 (최소 5개 필요)")
+                    return
 
-            # 🆕 3분봉 품질 검증: 경고만 표시 (시뮬레이션과 동일하게 차단하지 않음)
-            if not data_3min.empty and len(data_3min) >= 2:
-                data_3min_copy = data_3min.copy()
-                data_3min_copy['datetime'] = pd.to_datetime(data_3min_copy['datetime'])
+                # 3분봉 품질 검증: 경고만 표시 (시뮬레이션과 동일하게 차단하지 않음)
+                if not data_3min.empty and len(data_3min) >= 2:
+                    data_3min_copy = data_3min.copy()
+                    data_3min_copy['datetime'] = pd.to_datetime(data_3min_copy['datetime'])
 
-                # 1. 시간 간격 검증 (3분봉 연속성)
-                time_diffs = data_3min_copy['datetime'].diff().dt.total_seconds().fillna(0) / 60
-                invalid_gaps = time_diffs[1:][(time_diffs[1:] != 3.0) & (time_diffs[1:] != 0.0)]
+                    # 1. 시간 간격 검증 (3분봉 연속성)
+                    time_diffs = data_3min_copy['datetime'].diff().dt.total_seconds().fillna(0) / 60
+                    invalid_gaps = time_diffs[1:][(time_diffs[1:] != 3.0) & (time_diffs[1:] != 0.0)]
 
-                if len(invalid_gaps) > 0:
-                    gap_indices = invalid_gaps.index.tolist()
-                    gap_times = [data_3min_copy.loc[idx, 'datetime'].strftime('%H:%M') for idx in gap_indices]
-                    self.logger.warning(f"⚠️ {stock_code} 3분봉 불연속 구간 발견: {', '.join(gap_times)} (간격: {invalid_gaps.values} 분) - 경고만, 진행")
+                    if len(invalid_gaps) > 0:
+                        gap_indices = invalid_gaps.index.tolist()
+                        gap_times = [data_3min_copy.loc[idx, 'datetime'].strftime('%H:%M') for idx in gap_indices]
+                        self.logger.warning(f"⚠️ {stock_code} 3분봉 불연속 구간 발견: {', '.join(gap_times)} (간격: {invalid_gaps.values} 분) - 경고만, 진행")
 
-                # 2. 🆕 각 3분봉의 구성 분봉 개수 검증 (HTS 분봉 누락 감지)
-                if 'candle_count' in data_3min_copy.columns:
-                    incomplete_candles = data_3min_copy[data_3min_copy['candle_count'] < 3]
-                    if not incomplete_candles.empty:
-                        for idx, row in incomplete_candles.iterrows():
-                            candle_time = row['datetime'].strftime('%H:%M')
-                            count = int(row['candle_count'])
-                            self.logger.warning(f"⚠️ {stock_code} 3분봉 내부 누락: {candle_time} ({count}/3개 분봉) - HTS 분봉 누락 가능성")
+                    # 2. 각 3분봉의 구성 분봉 개수 검증 (HTS 분봉 누락 감지)
+                    if 'candle_count' in data_3min_copy.columns:
+                        incomplete_candles = data_3min_copy[data_3min_copy['candle_count'] < 3]
+                        if not incomplete_candles.empty:
+                            for idx, row in incomplete_candles.iterrows():
+                                candle_time = row['datetime'].strftime('%H:%M')
+                                count = int(row['candle_count'])
+                                self.logger.warning(f"⚠️ {stock_code} 3분봉 내부 누락: {candle_time} ({count}/3개 분봉) - HTS 분봉 누락 가능성")
 
-                # 3. 09:00 시작 확인
-                first_time = data_3min_copy['datetime'].iloc[0]
-                if first_time.hour == 9 and first_time.minute not in [0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30]:
-                    self.logger.warning(f"⚠️ {stock_code} 첫 3분봉이 정규 시간이 아님: {first_time.strftime('%H:%M')} (09:00, 09:03, 09:06... 중 하나여야 함) - 경고만, 진행")
+                    # 3. 09:00 시작 확인
+                    first_time = data_3min_copy['datetime'].iloc[0]
+                    if first_time.hour == 9 and first_time.minute not in [0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30]:
+                        self.logger.warning(f"⚠️ {stock_code} 첫 3분봉이 정규 시간이 아님: {first_time.strftime('%H:%M')} (09:00, 09:03, 09:06... 중 하나여야 함) - 경고만, 진행")
 
-            # 매매 판단 엔진으로 매수 신호 확인 (완성된 3분봉 데이터 사용)
-            buy_signal, buy_reason, buy_info = await self.decision_engine.analyze_buy_decision(trading_stock, data_3min)
+                analysis_data = data_3min
+
+            # 매매 판단 엔진으로 매수 신호 확인
+            buy_signal, buy_reason, buy_info = await self.decision_engine.analyze_buy_decision(trading_stock, analysis_data)
             
             self.logger.debug(f"💡 {stock_code} 매수 판단 결과: signal={buy_signal}, reason='{buy_reason}'")
             if buy_signal and buy_info:
@@ -571,17 +580,9 @@ class DayTradingBot:
 
                 # 🆕 장중 종목 실시간 데이터 업데이트 (매분 13~45초 사이에 실행)
                 # 13~45초 구간에서는 이전 실행으로부터 최소 13초 이상 간격만 유지
+                # 장 마감 후 분봉 조회는 불필요 (데이터 저장은 intraday_stock_manager에서 15:30에 완료)
                 if 13 <= current_time.second <= 45 and (current_time - last_intraday_update).total_seconds() >= 13:
-                    # 장중이거나 장마감 후 10분 구간에서는 실행 (데이터 저장 위해) - 동적 시간 적용
-                    market_hours = MarketHours.get_market_hours('KRX', current_time)
-                    market_close = market_hours['market_close']
-                    close_hour = market_close.hour
-                    close_minute = market_close.minute
-
-                    is_after_close_window = (current_time.hour == close_hour and
-                                            close_minute <= current_time.minute <= close_minute + 10)
-
-                    if is_market_open() or is_after_close_window:
+                    if is_market_open():
                         await self._update_intraday_data()
                         last_intraday_update = current_time
                 
@@ -978,17 +979,18 @@ class DayTradingBot:
             if updated_stocks:
                 self.logger.info(f"🔄 데이터 재확인 완료: {len(updated_stocks)}개 종목 업데이트됨")
 
-            # 🆕 3분봉 완성 + 10초 후 시점 체크
-            # 3분봉 완성 시점: 매 3분마다 (09:00, 09:03, 09:06, ...)
-            # 매수 판단 허용 시점: 각 3분봉 완성 후 10~59초 사이의 첫 번째 호출만
-            minute_in_3min_cycle = current_time.minute % 3
+            # 🆕 n분봉 완성 + 10초 후 시점 체크 (전략 설정 기반)
+            from config.strategy_settings import get_candle_interval
+            candle_interval = get_candle_interval()
+
+            minute_in_cycle = current_time.minute % candle_interval
             current_second = current_time.second
 
-            # 3분봉 사이클의 첫 번째 분(0, 3, 6, 9...)이고 10초 이후일 때만 매수 판단
-            is_3min_candle_completed = (minute_in_3min_cycle == 0 and current_second >= 10)
+            # n분봉 사이클의 첫 번째 분이고 10초 이후일 때만 매수 판단
+            is_candle_completed = (minute_in_cycle == 0 and current_second >= 10)
 
-            if not is_3min_candle_completed:
-                self.logger.debug(f"⏱️ 3분봉 미완성 또는 10초 미경과: {current_time.strftime('%H:%M:%S')} - 매수 판단 건너뜀")
+            if not is_candle_completed:
+                self.logger.debug(f"⏱️ {candle_interval}분봉 미완성 또는 10초 미경과: {current_time.strftime('%H:%M:%S')} - 매수 판단 건너뜀")
                 return
 
             # 🆕 데이터 업데이트 직후 매수 판단 실행 (3분봉 완성 + 10초 후)
@@ -1010,7 +1012,7 @@ class DayTradingBot:
                 buy_candidates = selected_stocks + completed_stocks
 
                 if buy_candidates:
-                    self.logger.info(f"🎯 3분봉 완성 후 매수 판단 실행: {current_time.strftime('%H:%M:%S')} - {len(buy_candidates)}개 종목")
+                    self.logger.info(f"🎯 {candle_interval}분봉 완성 후 매수 판단 실행: {current_time.strftime('%H:%M:%S')} - {len(buy_candidates)}개 종목")
 
                     for trading_stock in buy_candidates:
                         await self._analyze_buy_decision(trading_stock, available_funds)
