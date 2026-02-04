@@ -31,7 +31,7 @@ class PricePositionStrategy:
         'max_pct_from_open': 4.0,      # 시가 대비 최대 상승률 (%)
         'entry_start_hour': 10,         # 진입 시작 시간
         'entry_end_hour': 12,           # 진입 종료 시간
-        'allowed_weekdays': [0, 2, 4],  # 허용 요일 (0=월, 2=수, 4=금)
+        'allowed_weekdays': [0, 2, 3, 4],  # 허용 요일 (0=월, 2=수, 3=목, 4=금) - 화요일만 제외
 
         # 손익 설정
         'stop_loss_pct': -2.5,          # 손절 (%)

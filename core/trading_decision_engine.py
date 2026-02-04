@@ -350,8 +350,8 @@ class TradingDecisionEngine:
                             self.logger.error(f"❌ {stock_code} ML 필터 오류: {e} - 신호 허용")
                             # ML 오류 시 신호 허용
 
-                    # 🆕 고급 필터 적용 (승률 개선 필터)
-                    if self.use_advanced_filter and self.advanced_filter_manager:
+                    # 🆕 고급 필터 적용 (pullback 전략 전용 - price_position 전략은 제외)
+                    if self.use_advanced_filter and self.advanced_filter_manager and self.active_strategy != 'price_position':
                         try:
                             from utils.korean_time import now_kst
                             signal_time = now_kst()
@@ -413,6 +413,14 @@ class TradingDecisionEngine:
                     # 🆕 목표 수익률 저장
                     if hasattr(trading_stock, 'target_profit_rate'):
                         trading_stock.target_profit_rate = price_info.get('target_profit', 0.03)
+
+                    # 🔧 price_position 전략: 고급 필터 통과 후 거래 기록 (버그 수정 2026-02-04)
+                    if self.active_strategy == 'price_position':
+                        trade_date = now_kst().strftime('%Y%m%d')
+                        if trade_date not in TradingDecisionEngine._price_position_daily_trades:
+                            TradingDecisionEngine._price_position_daily_trades[trade_date] = set()
+                        TradingDecisionEngine._price_position_daily_trades[trade_date].add(stock_code)
+                        self.logger.debug(f"📝 {stock_code} price_position 거래 기록 추가 ({len(TradingDecisionEngine._price_position_daily_trades[trade_date])}/5)")
 
                     # 매수 신호 승인
                     final_reason = f"눌림목캔들패턴: {reason} (ML: {ml_prob:.1%})"
@@ -888,17 +896,17 @@ class TradingDecisionEngine:
             if not can_enter:
                 return False, reason, None
 
-            # 3분봉 확정 확인
-            if not self._is_candle_confirmed(data):
-                return False, "3분봉 미확정", None
+            # n분봉 확정 확인 (설정된 캔들 간격 사용)
+            candle_interval = pp_settings.CANDLE_INTERVAL
+            if not self._is_nmin_candle_confirmed(data, candle_interval):
+                return False, f"{candle_interval}분봉 미확정", None
 
             # 매수 신호 승인!
-            # 거래 기록
-            if trade_date not in TradingDecisionEngine._price_position_daily_trades:
-                TradingDecisionEngine._price_position_daily_trades[trade_date] = set()
-            TradingDecisionEngine._price_position_daily_trades[trade_date].add(stock_code)
+            # 🔧 거래 기록은 고급 필터 통과 후로 이동 (버그 수정 2026-02-04)
+            # 이전: 여기서 기록 → 고급 필터 차단 시에도 기록 남음 → "최대 5종목 도달" 오류
+            # 이후: analyze_buy_decision에서 고급 필터 통과 후 기록
 
-            # 가격 정보 생성
+            # 가격 정보 생성 (trade_date 포함하여 나중에 기록할 수 있도록)
             price_info = {
                 'buy_price': current_price,
                 'entry_low': day_open * 0.975,  # 시가 -2.5% (손절 기준)
@@ -973,8 +981,45 @@ class TradingDecisionEngine:
                     return False  # 매수 신호 차단
 
             return is_confirmed
-            
+
         except Exception as e:
             self.logger.debug(f"3분봉 확정 확인 오류: {e}")
             return False
-    
+
+    def _is_nmin_candle_confirmed(self, data, interval_minutes: int) -> bool:
+        """n분봉 확정 여부 확인 (범용)"""
+        try:
+            if data is None or data.empty or 'datetime' not in data.columns:
+                return False
+
+            from utils.korean_time import now_kst, KST
+            import pandas as pd
+
+            current_time = now_kst()
+            last_candle_time = pd.to_datetime(data['datetime'].iloc[-1])
+
+            # timezone 통일
+            if last_candle_time.tz is None:
+                last_candle_time = last_candle_time.tz_localize(KST)
+            elif last_candle_time.tz != KST:
+                last_candle_time = last_candle_time.tz_convert(KST)
+
+            # n분봉: 라벨 + n분 경과 후 확정
+            candle_end_time = last_candle_time + pd.Timedelta(minutes=interval_minutes)
+            is_confirmed = current_time >= candle_end_time
+
+            if is_confirmed:
+                time_diff_sec = (current_time - candle_end_time).total_seconds()
+                self.logger.debug(f"📊 {interval_minutes}분봉 확정: {last_candle_time.strftime('%H:%M')} (확정 후 {time_diff_sec:.1f}초)")
+
+                # 5분 이상 지연된 캔들은 신호 무효
+                if time_diff_sec > 300:
+                    self.logger.warning(f"⚠️ {interval_minutes}분봉 지연 초과 ({time_diff_sec/60:.1f}분)")
+                    return False
+
+            return is_confirmed
+
+        except Exception as e:
+            self.logger.debug(f"{interval_minutes}분봉 확정 확인 오류: {e}")
+            return False
+

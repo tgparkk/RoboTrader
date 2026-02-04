@@ -64,6 +64,10 @@ class DayTradingBot:
             intraday_manager=self.intraday_manager
         )  # 🆕 매매 판단 엔진
 
+        # 🔧 price_position 전략 일별 거래 기록 초기화 (버그 수정 2026-02-04)
+        TradingDecisionEngine.reset_daily_trades()
+        self.logger.info("🔄 price_position 일별 거래 기록 초기화 완료")
+
         # 🆕 TradingStockManager에 decision_engine 연결 (쿨다운 설정용)
         self.trading_manager.set_decision_engine(self.decision_engine)
 
