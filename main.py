@@ -462,9 +462,12 @@ class DayTradingBot:
                 
                 # [리얼매매 코드 - 활성화]
                 try:
-                    # 3분 단위로 정규화된 캔들 시점을 전달하여 중복 신호 방지
-                    raw_candle_time = data_3min['datetime'].iloc[-1]
-                    minute_normalized = (raw_candle_time.minute // 3) * 3
+                    # 전략에 따라 캔들 시점 정규화 (중복 신호 방지)
+                    raw_candle_time = analysis_data['datetime'].iloc[-1]
+                    if StrategySettings.ACTIVE_STRATEGY == 'price_position':
+                        minute_normalized = raw_candle_time.minute  # 1분 단위
+                    else:
+                        minute_normalized = (raw_candle_time.minute // 3) * 3  # 3분 단위
                     current_candle_time = raw_candle_time.replace(minute=minute_normalized, second=0, microsecond=0)
                     await self.decision_engine.execute_real_buy(
                         trading_stock,
