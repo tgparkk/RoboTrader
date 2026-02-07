@@ -78,6 +78,9 @@ class IntradayStockManager:
         # 장 마감 후 데이터 저장기
         self.data_saver = PostMarketDataSaver()
 
+        # 재수집 쿨다운 (종목코드 → 마지막 재수집 시도 시각)
+        self._recollection_cooldown: Dict[str, datetime] = {}
+
         # 헬퍼 클래스 초기화 (리팩토링)
         from core.historical_data_collector import HistoricalDataCollector
         from core.realtime_data_updater import RealtimeDataUpdater
@@ -647,12 +650,19 @@ class IntradayStockManager:
                         if quality_check['has_issues']:
                             quality_issues.extend([f"{stock_code}: {issue}" for issue in quality_check['issues']])
 
-                            # 🆕 분봉 누락 감지 시 즉시 전체 재수집
+                            # 분봉 누락 감지 시 전체 재수집 (쿨다운 적용)
                             for issue in quality_check['issues']:
                                 if '분봉 누락' in issue:
+                                    # 쿨다운 확인: 같은 종목 3분 이내 재수집 방지
+                                    last_attempt = self._recollection_cooldown.get(stock_code)
+                                    if last_attempt and (now_kst() - last_attempt).total_seconds() < 180:
+                                        self.logger.debug(f"⏳ {stock_code} 재수집 쿨다운 중 ({issue})")
+                                        break
+
+                                    self._recollection_cooldown[stock_code] = now_kst()
                                     self.logger.warning(f"⚠️ {stock_code} 분봉 누락 감지, 전체 재수집 시도: {issue}")
                                     try:
-                                        # 🔥 핵심: selected_time을 현재 시간으로 업데이트하여 재수집 시 현재까지 데이터 수집
+                                        # selected_time을 현재 시간으로 업데이트하여 재수집 시 현재까지 데이터 수집
                                         with self._lock:
                                             if stock_code in self.selected_stocks:
                                                 current_time = now_kst()

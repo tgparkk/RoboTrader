@@ -195,21 +195,39 @@ class RealtimeDataUpdater:
                 self.logger.debug(f"[실패] {stock_code} 데이터 부족: {data_count}/15")
                 return False
 
-            # 시작 시간 체크 (시장 시작시간 확인)
+            # 시작 시간 체크 (장 시작 5분 이내 데이터 존재 확인)
+            expected_start_min = market_open.minute
+
             if 'time' in combined_data.columns:
                 start_time_str = str(combined_data.iloc[0]['time']).zfill(6)
                 start_hour = int(start_time_str[:2])
+                start_min = int(start_time_str[2:4])
 
                 if start_hour != expected_start_hour:
                     self.logger.debug(f"[실패] {stock_code} 시작 시간 문제: {start_time_str} ({expected_start_hour}시 아님)")
+                    return False
+
+                # 장 시작 5분 이내 데이터가 있어야 함 (예: 09:05 이전)
+                if start_min > expected_start_min + 5:
+                    self.logger.debug(
+                        f"[실패] {stock_code} 초반 데이터 누락: 첫 봉 {start_time_str} "
+                        f"(장 시작 {expected_start_hour:02d}:{expected_start_min:02d} 후 {start_min - expected_start_min}분)"
+                    )
                     return False
 
             elif 'datetime' in combined_data.columns:
                 start_dt = combined_data.iloc[0]['datetime']
                 if hasattr(start_dt, 'hour'):
                     start_hour = start_dt.hour
+                    start_min = start_dt.minute if hasattr(start_dt, 'minute') else 0
                     if start_hour != expected_start_hour:
                         self.logger.debug(f"[실패] {stock_code} 시작 시간 문제: {start_hour}시 ({expected_start_hour}시 아님)")
+                        return False
+                    if start_min > expected_start_min + 5:
+                        self.logger.debug(
+                            f"[실패] {stock_code} 초반 데이터 누락: 첫 봉 {start_hour:02d}:{start_min:02d} "
+                            f"(장 시작 후 {start_min - expected_start_min}분)"
+                        )
                         return False
 
             return True

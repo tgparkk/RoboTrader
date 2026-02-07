@@ -7,7 +7,7 @@
 
 가격 위치 기반 전략 (price_position):
 - 시가 대비 2~4% 상승 구간 진입
-- 월/수/금요일만 거래 (화/목 회피)
+- 월/수/목/금요일 거래 (화요일만 회피)
 - 10시~12시 진입
 - 손절 -2.5%, 익절 +3.5%
 - 시뮬레이션 결과: 승률 59.7%, 월 +87만원 (1000만원 기준)
@@ -28,6 +28,9 @@ class StrategySettings:
     # 가격 위치 기반 전략 설정 (price_position)
     # ========================================
     class PricePosition:
+        # 캔들 간격 (분)
+        CANDLE_INTERVAL = 1          # 1분봉 사용
+
         # 진입 조건
         MIN_PCT_FROM_OPEN = 2.0      # 시가 대비 최소 상승률 (%)
         MAX_PCT_FROM_OPEN = 4.0      # 시가 대비 최대 상승률 (%)
@@ -35,8 +38,8 @@ class StrategySettings:
         ENTRY_END_HOUR = 12          # 진입 종료 시간 (12시)
 
         # 허용 요일 (0=월, 1=화, 2=수, 3=목, 4=금)
-        # 화요일(1), 목요일(3) 회피
-        ALLOWED_WEEKDAYS = [0, 2, 4]  # 월, 수, 금
+        # 화요일(1)만 회피
+        ALLOWED_WEEKDAYS = [0, 2, 3, 4]  # 월, 수, 목, 금
 
         # 손익 설정 (trading_config.json의 설정을 따름)
         # stop_loss_ratio: 0.025 (-2.5%)
@@ -50,8 +53,18 @@ class StrategySettings:
     # 눌림목 캔들패턴 전략 설정 (pullback)
     # ========================================
     class Pullback:
+        # 캔들 간격 (분)
+        CANDLE_INTERVAL = 3          # 3분봉 사용
+
         # 기존 설정은 advanced_filter_settings.py 참조
-        pass
+
+
+def get_candle_interval() -> int:
+    """현재 활성 전략의 캔들 간격(분) 반환"""
+    if StrategySettings.ACTIVE_STRATEGY == 'price_position':
+        return StrategySettings.PricePosition.CANDLE_INTERVAL
+    else:
+        return StrategySettings.Pullback.CANDLE_INTERVAL
 
 
 # 설정 검증

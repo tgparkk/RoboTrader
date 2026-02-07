@@ -13,6 +13,8 @@ from core.timeframe_converter import TimeFrameConverter
 class TradingDecisionEngine:
     # 가격 위치 전략 일별 거래 기록 (클래스 변수)
     _price_position_daily_trades: Dict[str, set] = {}
+    # 종목별 당일 시가 캐시 (클래스 변수) - {(stock_code, date): open_price}
+    _day_open_cache: Dict[tuple, float] = {}
     """
     매매 판단 엔진
     
@@ -204,6 +206,37 @@ class TradingDecisionEngine:
             self.use_ml_filter = False
             self.ml_predictor = None
     
+    def _get_day_open_price(self, stock_code: str, trade_date: str, data) -> Optional[float]:
+        """
+        종목의 당일 시가(장 시작 가격) 조회
+
+        09:00 캔들의 open 값을 사용. 시가는 불변값이므로 캐시하여 재사용.
+        data.iloc[0]에 의존하지 않고, 09:00~09:03 구간의 첫 캔들을 명시적으로 찾음.
+        """
+        cache_key = (stock_code, trade_date)
+
+        # 캐시에 있으면 즉시 반환
+        if cache_key in TradingDecisionEngine._day_open_cache:
+            return TradingDecisionEngine._day_open_cache[cache_key]
+
+        day_open = None
+
+        # 09:00~09:03 구간 캔들에서 시가 추출 (09:00 3분봉 = 장 시작 캔들)
+        if 'time' in data.columns:
+            time_col = data['time'].astype(str).str.zfill(6)
+            early_candles = data[time_col <= '090300']
+            if len(early_candles) > 0:
+                day_open = self._safe_float_convert(early_candles.iloc[0]['open'])
+
+        if day_open and day_open > 0:
+            TradingDecisionEngine._day_open_cache[cache_key] = day_open
+            return day_open
+
+        # 09:00 시가 없음 → 매매 제외 (잘못된 시가로 매매하면 안 됨)
+        first_time = str(data.iloc[0].get('time', '?')).zfill(6) if len(data) > 0 else '?'
+        self.logger.warning(f"⚠️ {stock_code} 09:00~09:03 시가 데이터 없음 (첫 봉: {first_time}) - 매매 제외")
+        return None
+
     def _safe_float_convert(self, value):
         """쉼표가 포함된 문자열을 안전하게 float로 변환"""
         if pd.isna(value) or value is None:
@@ -315,7 +348,6 @@ class TradingDecisionEngine:
                                 # 🆕 실시간 패턴 데이터 로깅 (시뮬과 비교용)
                                 try:
                                     from core.pattern_data_logger import PatternDataLogger
-                                    from utils.korean_time import now_kst
 
                                     pattern_logger = PatternDataLogger()  # 실시간 로깅
 
@@ -353,7 +385,6 @@ class TradingDecisionEngine:
                     # 🆕 고급 필터 적용 (pullback 전략 전용 - price_position 전략은 제외)
                     if self.use_advanced_filter and self.advanced_filter_manager and self.active_strategy != 'price_position':
                         try:
-                            from utils.korean_time import now_kst
                             signal_time = now_kst()
 
                             # 🆕 combined_data (3분봉)에서 직접 OHLCV 시퀀스 추출 (시뮬과 동일한 방식)
@@ -870,9 +901,9 @@ class TradingDecisionEngine:
                 if current_trades_today >= pp_settings.MAX_DAILY_POSITIONS:
                     return False, f"당일 최대 {pp_settings.MAX_DAILY_POSITIONS}종목 도달", None
 
-            # 시가 계산 (첫 번째 캔들)
-            day_open = self._safe_float_convert(data.iloc[0]['open'])
-            if day_open <= 0:
+            # 시가 계산 (09:00 캔들의 open = 장 시작 가격, 불변값)
+            day_open = self._get_day_open_price(stock_code, trade_date, data)
+            if day_open is None or day_open <= 0:
                 return False, "시가 데이터 없음", None
 
             # 현재가 (마지막 캔들)
@@ -937,11 +968,16 @@ class TradingDecisionEngine:
 
     @classmethod
     def reset_daily_trades(cls, trade_date: str = None):
-        """일별 거래 기록 초기화 (가격위치전략용)"""
+        """일별 거래 기록 및 시가 캐시 초기화 (가격위치전략용)"""
         if trade_date:
             cls._price_position_daily_trades.pop(trade_date, None)
+            # 해당 날짜의 시가 캐시도 제거
+            keys_to_remove = [k for k in cls._day_open_cache if k[1] == trade_date]
+            for k in keys_to_remove:
+                del cls._day_open_cache[k]
         else:
             cls._price_position_daily_trades.clear()
+            cls._day_open_cache.clear()
 
     def _is_candle_confirmed(self, data_3min) -> bool:
         """3분봉 확정 여부 확인 (signal_replay.py와 완전히 동일한 방식)"""

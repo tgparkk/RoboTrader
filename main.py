@@ -571,6 +571,7 @@ class DayTradingBot:
             last_api_refresh = now_kst()
             last_market_check = now_kst()
             last_intraday_update = now_kst()  # 🆕 장중 데이터 업데이트 시간
+            post_market_data_saved_date = None  # 장 마감 후 데이터 저장 완료 날짜
             # last_chart_generation = datetime(2000, 1, 1, tzinfo=KST)  # 🆕 장 마감 후 차트 생성 시간 (주석처리)
             # chart_generation_count = 0  # 🆕 차트 생성 횟수 카운터 (주석처리)
             # last_chart_reset_date = now_kst().date()  # 🆕 차트 카운터 리셋 기준 날짜 (주석처리)
@@ -587,12 +588,28 @@ class DayTradingBot:
 
                 # 🆕 장중 종목 실시간 데이터 업데이트 (매분 13~45초 사이에 실행)
                 # 13~45초 구간에서는 이전 실행으로부터 최소 13초 이상 간격만 유지
-                # 장 마감 후 분봉 조회는 불필요 (데이터 저장은 intraday_stock_manager에서 15:30에 완료)
+                # 장 마감 후 분봉 조회는 불필요 (데이터 저장은 아래 별도 블록에서 처리)
                 if 13 <= current_time.second <= 45 and (current_time - last_intraday_update).total_seconds() >= 13:
                     if is_market_open():
                         await self._update_intraday_data()
                         last_intraday_update = current_time
-                
+
+                # 장 마감 후 데이터 저장 (장 마감 1~15분 후 1회 실행)
+                if current_time.weekday() < 5:
+                    current_date = current_time.date()
+                    if post_market_data_saved_date != current_date:
+                        market_hours_info = MarketHours.get_market_hours('KRX', current_time)
+                        close_time = market_hours_info['market_close']
+                        minutes_after_close = (current_time.hour * 60 + current_time.minute) - (close_time.hour * 60 + close_time.minute)
+                        if 1 <= minutes_after_close <= 15:
+                            try:
+                                self.logger.info("🏁 장 마감 후 데이터 저장 시작...")
+                                self.intraday_manager.data_saver.save_all_data(self.intraday_manager)
+                                post_market_data_saved_date = current_date
+                                self.logger.info("✅ 장 마감 후 데이터 저장 완료")
+                            except Exception as e:
+                                self.logger.error(f"❌ 장 마감 후 데이터 저장 실패: {e}")
+
                 # 장마감 청산 로직 제거: 15:00 시장가 매도로 대체됨
                 
                 # 🆕 차트 생성 카운터 매일 리셋 (주석처리)

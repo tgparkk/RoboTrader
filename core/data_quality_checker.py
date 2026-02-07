@@ -9,6 +9,7 @@ from typing import Dict, List, Any
 from utils.logger import setup_logger
 from utils.korean_time import now_kst
 from core.intraday_data_utils import validate_today_data
+from config.market_hours import MarketHours
 
 
 class DataQualityChecker:
@@ -97,11 +98,29 @@ class DataQualityChecker:
             return {'has_issues': True, 'issues': [f'품질검사 오류: {str(e)[:30]}']}
 
     def _check_time_continuity(self, data: List[Dict]) -> List[str]:
-        """시간 순서 및 연속성 검사"""
+        """시간 순서 및 연속성 검사 (장 시작 갭 포함)"""
         issues = []
 
         if len(data) >= 2:
             times = [row['time'] for row in data]
+
+            # 장 시작 시간 대비 첫 캔들 갭 확인
+            try:
+                first_time_str = str(times[0]).zfill(6)
+                first_hour = int(first_time_str[:2])
+                first_min = int(first_time_str[2:4])
+
+                current_time = now_kst()
+                market_hours = MarketHours.get_market_hours('KRX', current_time)
+                market_open = market_hours['market_open']
+
+                if first_hour == market_open.hour and first_min > market_open.minute + 5:
+                    open_str = f'{market_open.hour:02d}{market_open.minute:02d}00'
+                    issues.append(f'분봉 누락: {open_str}->{first_time_str}')
+                    return issues  # 장 시작 갭 → 즉시 반환하여 재수집 트리거
+            except Exception:
+                pass
+
             # 순서 확인
             if times != sorted(times):
                 issues.append('시간 순서 오류')
