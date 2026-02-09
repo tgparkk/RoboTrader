@@ -895,11 +895,14 @@ class TradingDecisionEngine:
                     if stock_code in TradingDecisionEngine._price_position_daily_trades[trade_date]:
                         return False, "당일 이미 거래함", None
 
-            # 당일 최대 보유 종목 수 체크
-            if trade_date in TradingDecisionEngine._price_position_daily_trades:
-                current_trades_today = len(TradingDecisionEngine._price_position_daily_trades[trade_date])
-                if current_trades_today >= pp_settings.MAX_DAILY_POSITIONS:
-                    return False, f"당일 최대 {pp_settings.MAX_DAILY_POSITIONS}종목 도달", None
+            # 동시 보유 종목 수 체크 (POSITIONED + BUY_PENDING)
+            if self.trading_manager:
+                from core.models import StockState
+                positioned = self.trading_manager.get_stocks_by_state(StockState.POSITIONED)
+                buy_pending = self.trading_manager.get_stocks_by_state(StockState.BUY_PENDING)
+                current_holding = len(positioned) + len(buy_pending)
+                if current_holding >= pp_settings.MAX_DAILY_POSITIONS:
+                    return False, f"동시 보유 최대 {pp_settings.MAX_DAILY_POSITIONS}종목 도달 (현재 {current_holding})", None
 
             # 시가 계산 (09:00 캔들의 open = 장 시작 가격, 불변값)
             day_open = self._get_day_open_price(stock_code, trade_date, data)
@@ -931,6 +934,22 @@ class TradingDecisionEngine:
             candle_interval = pp_settings.CANDLE_INTERVAL
             if not self._is_nmin_candle_confirmed(data, candle_interval):
                 return False, f"{candle_interval}분봉 미확정", None
+
+            # 고급 진입 필터 (변동성, 모멘텀)
+            adv_config = {}
+            if hasattr(pp_settings, 'MAX_PRE_VOLATILITY'):
+                adv_config['max_pre_volatility'] = pp_settings.MAX_PRE_VOLATILITY
+            if hasattr(pp_settings, 'MAX_PRE20_MOMENTUM'):
+                adv_config['max_pre20_momentum'] = pp_settings.MAX_PRE20_MOMENTUM
+
+            if adv_config:
+                # 설정값을 전략 객체에 반영
+                self.price_position_strategy.config.update(adv_config)
+                adv_ok, adv_reason = self.price_position_strategy.check_advanced_conditions(
+                    df=data, candle_idx=len(data) - 1
+                )
+                if not adv_ok:
+                    return False, f"고급필터: {adv_reason}", None
 
             # 매수 신호 승인!
             # 🔧 거래 기록은 고급 필터 통과 후로 이동 (버그 수정 2026-02-04)

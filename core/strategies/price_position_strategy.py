@@ -4,12 +4,9 @@
 데이터 분석 기반으로 발견된 수익 패턴:
 - 시가 대비 2~4% 상승 구간에서 진입
 - 월/수/금요일만 거래 (화/목 회피)
-- 10시~12시 사이 진입
+- 10시~11시 사이 진입
 - 손절 -2.5%, 익절 +3.5%
-
-분석 결과:
-- 승률: 58.5%
-- 손익비: 1.4:1
+- 진입 전 변동성 > 0.8% 제외, 20봉 모멘텀 > +2% 제외
 """
 
 from typing import Dict, Any, Optional, Tuple
@@ -30,8 +27,8 @@ class PricePositionStrategy:
         'min_pct_from_open': 2.0,      # 시가 대비 최소 상승률 (%)
         'max_pct_from_open': 4.0,      # 시가 대비 최대 상승률 (%)
         'entry_start_hour': 10,         # 진입 시작 시간
-        'entry_end_hour': 12,           # 진입 종료 시간
-        'allowed_weekdays': [0, 2, 3, 4],  # 허용 요일 (0=월, 2=수, 3=목, 4=금) - 화요일만 제외
+        'entry_end_hour': 11,           # 진입 종료 시간
+        'allowed_weekdays': [0, 2, 4],  # 허용 요일 (0=월, 2=수, 4=금) - 화/목 제외
 
         # 손익 설정
         'stop_loss_pct': -2.5,          # 손절 (%)
@@ -39,6 +36,10 @@ class PricePositionStrategy:
 
         # 거래 제한
         'one_trade_per_stock_per_day': True,  # 하루에 종목당 1회만 거래
+
+        # 고급 진입 필터
+        'max_pre_volatility': 0.8,      # 진입 전 10봉 변동성 상한 (%)
+        'max_pre20_momentum': 2.0,      # 진입 전 20봉 모멘텀 상한 (%) - 급등 추격 방지
     }
 
     def __init__(self, config: Optional[Dict[str, Any]] = None, logger=None):
@@ -136,6 +137,43 @@ class PricePositionStrategy:
                     return False, "당일 이미 거래함"
 
         return True, f"진입 조건 충족 (시가+{pct_from_open:.1f}%)"
+
+    def check_advanced_conditions(
+        self,
+        df: pd.DataFrame,
+        candle_idx: int,
+    ) -> Tuple[bool, str]:
+        """
+        고급 진입 필터 (캔들 데이터 기반)
+
+        Args:
+            df: 분봉 데이터프레임
+            candle_idx: 현재 캔들 인덱스
+
+        Returns:
+            (통과 여부, 사유 메시지)
+        """
+        # 진입 전 10봉 변동성 체크
+        max_vol = self.config.get('max_pre_volatility')
+        if max_vol is not None:
+            pre_start = max(0, candle_idx - 10)
+            pre_candles = df.iloc[pre_start:candle_idx]
+            if len(pre_candles) > 0:
+                pre_volatility = ((pre_candles['high'] - pre_candles['low']) / pre_candles['low'] * 100).mean()
+                if pre_volatility > max_vol:
+                    return False, f"진입전 변동성 {pre_volatility:.2f}% > {max_vol}%"
+
+        # 진입 전 20봉 모멘텀 체크
+        max_mom = self.config.get('max_pre20_momentum')
+        if max_mom is not None:
+            pre20_start = max(0, candle_idx - 20)
+            pre20_candles = df.iloc[pre20_start:candle_idx]
+            if len(pre20_candles) >= 2:
+                pre20_momentum = (pre20_candles.iloc[-1]['close'] / pre20_candles.iloc[0]['open'] - 1) * 100
+                if pre20_momentum > max_mom:
+                    return False, f"20봉 모멘텀 {pre20_momentum:+.2f}% > +{max_mom}%"
+
+        return True, "고급 필터 통과"
 
     def record_trade(self, stock_code: str, trade_date: str):
         """거래 기록"""

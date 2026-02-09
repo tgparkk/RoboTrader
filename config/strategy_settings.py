@@ -7,10 +7,10 @@
 
 가격 위치 기반 전략 (price_position):
 - 시가 대비 2~4% 상승 구간 진입
-- 월/수/목/금요일 거래 (화요일만 회피)
-- 10시~12시 진입
+- 월/수/금요일 거래 (화/목 회피)
+- 10시~11시 진입
 - 손절 -2.5%, 익절 +3.5%
-- 시뮬레이션 결과: 승률 59.7%, 월 +87만원 (1000만원 기준)
+- 진입 전 변동성 > 0.8% 제외, 20봉 모멘텀 > +2% 제외
 """
 
 
@@ -35,11 +35,15 @@ class StrategySettings:
         MIN_PCT_FROM_OPEN = 2.0      # 시가 대비 최소 상승률 (%)
         MAX_PCT_FROM_OPEN = 4.0      # 시가 대비 최대 상승률 (%)
         ENTRY_START_HOUR = 10        # 진입 시작 시간 (10시)
-        ENTRY_END_HOUR = 12          # 진입 종료 시간 (12시)
+        ENTRY_END_HOUR = 11          # 진입 종료 시간 (11시)
 
         # 허용 요일 (0=월, 1=화, 2=수, 3=목, 4=금)
-        # 화요일(1)만 회피
-        ALLOWED_WEEKDAYS = [0, 2, 3, 4]  # 월, 수, 목, 금
+        # 화요일(1), 목요일(3) 회피
+        ALLOWED_WEEKDAYS = [0, 2, 4]  # 월, 수, 금
+
+        # 고급 진입 필터
+        MAX_PRE_VOLATILITY = 0.8     # 진입 전 10봉 변동성 상한 (%)
+        MAX_PRE20_MOMENTUM = 2.0     # 진입 전 20봉 모멘텀 상한 (%) - 급등 추격 방지
 
         # 손익 설정 (trading_config.json의 설정을 따름)
         # stop_loss_ratio: 0.025 (-2.5%)
@@ -47,7 +51,7 @@ class StrategySettings:
 
         # 거래 제한
         ONE_TRADE_PER_STOCK_PER_DAY = True  # 하루에 종목당 1회만 거래
-        MAX_DAILY_POSITIONS = 5              # 하루 최대 동시 보유 종목 수
+        MAX_DAILY_POSITIONS = 5              # 최대 동시 보유 종목 수 (청산 시 새 매수 가능)
 
     # ========================================
     # 눌림목 캔들패턴 전략 설정 (pullback)

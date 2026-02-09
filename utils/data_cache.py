@@ -35,6 +35,9 @@ class DataCache:
 
     # 스레드별 DuckDB 연결 저장소
     _thread_local = threading.local()
+    # 모든 스레드의 read-only 연결 추적 (쓰기 전 일괄 닫기용)
+    _all_connections = []
+    _connections_lock = threading.Lock()
 
     def __init__(self, cache_dir: str = "cache/minute_data", use_duckdb: bool = True):
         self.logger = setup_logger(__name__)
@@ -58,10 +61,37 @@ class DataCache:
         """스레드별 DuckDB 연결 반환 (재사용)
 
         각 스레드마다 하나의 연결을 유지하여 연결 생성 오버헤드 제거
+        닫힌 연결은 자동 재생성
         """
         if not hasattr(self._thread_local, 'connection') or self._thread_local.connection is None:
-            self._thread_local.connection = duckdb.connect(str(DB_PATH), read_only=True)
+            conn = duckdb.connect(str(DB_PATH), read_only=True)
+            self._thread_local.connection = conn
+            with DataCache._connections_lock:
+                DataCache._all_connections.append(conn)
+        else:
+            # 닫힌 연결 감지 시 재생성
+            try:
+                self._thread_local.connection.execute("SELECT 1")
+            except Exception:
+                conn = duckdb.connect(str(DB_PATH), read_only=True)
+                self._thread_local.connection = conn
+                with DataCache._connections_lock:
+                    DataCache._all_connections.append(conn)
         return self._thread_local.connection
+
+    @classmethod
+    def close_all_connections(cls):
+        """모든 스레드의 read-only 연결 닫기 (DuckDB 쓰기 전 호출 필수)"""
+        with cls._connections_lock:
+            for conn in cls._all_connections:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            cls._all_connections.clear()
+        # 현재 스레드의 참조도 정리
+        if hasattr(cls._thread_local, 'connection'):
+            cls._thread_local.connection = None
 
     def _get_table_name(self, stock_code: str) -> str:
         """종목별 테이블명 생성"""
@@ -356,6 +386,9 @@ class DailyDataCache:
 
     # 스레드별 DuckDB 연결 저장소
     _thread_local = threading.local()
+    # 모든 스레드의 read-only 연결 추적 (쓰기 전 일괄 닫기용)
+    _all_connections = []
+    _connections_lock = threading.Lock()
 
     def __init__(self, cache_dir: str = "cache/daily", use_duckdb: bool = True):
         self.logger = setup_logger(__name__)
@@ -367,10 +400,37 @@ class DailyDataCache:
         """스레드별 DuckDB 연결 반환 (재사용)
 
         각 스레드마다 하나의 연결을 유지하여 연결 생성 오버헤드 제거
+        닫힌 연결은 자동 재생성
         """
         if not hasattr(self._thread_local, 'connection') or self._thread_local.connection is None:
-            self._thread_local.connection = duckdb.connect(str(DB_PATH), read_only=True)
+            conn = duckdb.connect(str(DB_PATH), read_only=True)
+            self._thread_local.connection = conn
+            with DailyDataCache._connections_lock:
+                DailyDataCache._all_connections.append(conn)
+        else:
+            # 닫힌 연결 감지 시 재생성
+            try:
+                self._thread_local.connection.execute("SELECT 1")
+            except Exception:
+                conn = duckdb.connect(str(DB_PATH), read_only=True)
+                self._thread_local.connection = conn
+                with DailyDataCache._connections_lock:
+                    DailyDataCache._all_connections.append(conn)
         return self._thread_local.connection
+
+    @classmethod
+    def close_all_connections(cls):
+        """모든 스레드의 read-only 연결 닫기 (DuckDB 쓰기 전 호출 필수)"""
+        with cls._connections_lock:
+            for conn in cls._all_connections:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            cls._all_connections.clear()
+        # 현재 스레드의 참조도 정리
+        if hasattr(cls._thread_local, 'connection'):
+            cls._thread_local.connection = None
 
     def _get_table_name(self, stock_code: str) -> str:
         """종목별 테이블명 생성"""
