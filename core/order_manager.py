@@ -478,9 +478,20 @@ class OrderManager:
                         self.logger.warning(f"⚠️ 실제 미체결 플래그로 체결 판정 보류: {order_id}")
                         return
                     
+                    # 체결가 갱신 (시장가 주문의 경우 체결 후 실제 가격으로 업데이트)
+                    if status_data:
+                        fill_price_str = status_data.get('avg_prvs') or status_data.get('ccld_unpr') or '0'
+                        try:
+                            fill_price = float(str(fill_price_str).replace(',', '').strip() or '0')
+                            if fill_price > 0:
+                                self.logger.info(f"💰 체결가 갱신: {order_id} ({order.stock_code}) {order.price} → {fill_price}")
+                                order.price = fill_price
+                        except (ValueError, TypeError):
+                            pass
+
                     order.status = OrderStatus.FILLED
                     self._move_to_completed(order_id)
-                    self.logger.info(f"✅ 주문 완전 체결 확정: {order_id} ({order.stock_code}) - {filled_qty}주")
+                    self.logger.info(f"✅ 주문 완전 체결 확정: {order_id} ({order.stock_code}) - {filled_qty}주 @ {order.price}")
                     
                     # 🆕 TradingStockManager에 즉시 알림 (콜백)
                     if self.trading_manager:
@@ -502,8 +513,17 @@ class OrderManager:
                 elif filled_qty > 0 and remaining_qty > 0:
                     # 부분 체결 확인
                     if filled_qty + remaining_qty == order.quantity:
+                        # 부분 체결 시에도 체결가 갱신
+                        if status_data:
+                            fill_price_str = status_data.get('avg_prvs') or status_data.get('ccld_unpr') or '0'
+                            try:
+                                fill_price = float(str(fill_price_str).replace(',', '').strip() or '0')
+                                if fill_price > 0:
+                                    order.price = fill_price
+                            except (ValueError, TypeError):
+                                pass
                         order.status = OrderStatus.PARTIAL
-                        self.logger.info(f"🔄 주문 부분 체결: {order_id} - {filled_qty}/{order.quantity} (잔여 {remaining_qty})")
+                        self.logger.info(f"🔄 주문 부분 체결: {order_id} - {filled_qty}/{order.quantity} (잔여 {remaining_qty}) @ {order.price}")
                     else:
                         self.logger.warning(f"⚠️ 수량 불일치: 체결({filled_qty}) + 잔여({remaining_qty}) ≠ 주문({order.quantity})")
                 else:
