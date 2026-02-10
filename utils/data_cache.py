@@ -167,6 +167,10 @@ class DataCache:
         # 글로벌 Lock 획득 (DuckDB는 단일 Writer만 허용)
         with _write_lock:
             try:
+                # read-only 연결 정리 (DuckDB는 같은 파일에 다른 config 동시 연결 불허)
+                DataCache.close_all_connections()
+                DailyDataCache.close_all_connections()
+
                 table_name = self._get_table_name(stock_code)
                 con = duckdb.connect(str(DB_PATH))
 
@@ -499,6 +503,10 @@ class DailyDataCache:
         # 글로벌 Lock 획득 (DuckDB는 단일 Writer만 허용)
         with _write_lock:
             try:
+                # read-only 연결 정리 (DuckDB는 같은 파일에 다른 config 동시 연결 불허)
+                DataCache.close_all_connections()
+                DailyDataCache.close_all_connections()
+
                 table_name = self._get_table_name(stock_code)
                 con = duckdb.connect(str(DB_PATH))
 
