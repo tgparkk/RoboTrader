@@ -663,9 +663,27 @@ class TradingStockManager:
                 trading_stock = self.trading_stocks[order.stock_code]
 
                 # 🆕 추가: 이미 POSITIONED 상태라면 중복 처리 방지
+                # 단, DB에 매수 기록이 없으면 저장 (긴급동기화가 먼저 실행된 경우)
                 if (order.order_type == OrderType.BUY and
                     trading_stock.state == StockState.POSITIONED):
-                    self.logger.debug(f"⚠️ {order.stock_code} 이미 POSITIONED 상태 (중복 콜백 방지)")
+                    try:
+                        from db.database_manager import DatabaseManager
+                        db = DatabaseManager()
+                        existing_buy = db.get_last_open_real_buy(order.stock_code)
+                        if not existing_buy:
+                            db.save_real_buy(
+                                stock_code=order.stock_code,
+                                stock_name=trading_stock.stock_name,
+                                price=float(order.price),
+                                quantity=int(order.quantity),
+                                strategy=trading_stock.selection_reason,
+                                reason="체결(동기화보완)"
+                            )
+                            self.logger.info(f"✅ {order.stock_code} 매수 기록 보완 저장 (동기화 후 콜백)")
+                        else:
+                            self.logger.debug(f"⚠️ {order.stock_code} 이미 POSITIONED + DB기록 있음 (중복 콜백 방지)")
+                    except Exception as db_err:
+                        self.logger.warning(f"⚠️ {order.stock_code} 매수 기록 보완 실패: {db_err}")
                     return
 
                 # 🆕 레이스 컨디션 방지: 이미 처리된 주문인지 확인

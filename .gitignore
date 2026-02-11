@@ -162,4 +162,4 @@ signal_replay_log/
 signal_replay_log_ml/
 
 # Pattern data logs
-pattern_data_log/
+pattern_data_log/nul  

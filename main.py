@@ -1147,6 +1147,24 @@ class DayTradingBot:
 
                                 self.logger.info(f"✅ {code} 미관리 종목 복구 완료")
 
+                                # 매수 기록이 DB에 없으면 저장
+                                try:
+                                    from db.database_manager import DatabaseManager
+                                    db = DatabaseManager()
+                                    existing_buy = db.get_last_open_real_buy(code)
+                                    if not existing_buy:
+                                        db.save_real_buy(
+                                            stock_code=code,
+                                            stock_name=stock_name,
+                                            price=float(avg_price),
+                                            quantity=int(quantity),
+                                            strategy="미관리종목복구",
+                                            reason="긴급동기화"
+                                        )
+                                        self.logger.info(f"✅ {code} 매수 기록 보완 저장 (긴급동기화)")
+                                except Exception as db_err:
+                                    self.logger.warning(f"⚠️ {code} 매수 기록 보완 실패: {db_err}")
+
                                 # missing_positions에도 추가하여 통합 처리
                                 missing_positions.append((code, balance_stock, ts))
 
