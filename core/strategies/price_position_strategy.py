@@ -25,14 +25,14 @@ class PricePositionStrategy:
     DEFAULT_CONFIG = {
         # 진입 조건
         'min_pct_from_open': 2.0,      # 시가 대비 최소 상승률 (%)
-        'max_pct_from_open': 4.0,      # 시가 대비 최대 상승률 (%)
-        'entry_start_hour': 10,         # 진입 시작 시간
+        'max_pct_from_open': 3.0,      # 시가 대비 최대 상승률 (%) — 4.0에서 하향, 과열 종목 제외
+        'entry_start_hour': 9,          # 진입 시작 시간 — 10시에서 9시로 확대
         'entry_end_hour': 11,           # 진입 종료 시간
         'allowed_weekdays': [0, 2, 4],  # 허용 요일 (0=월, 2=수, 4=금) - 화/목 제외
 
         # 손익 설정
-        'stop_loss_pct': -2.5,          # 손절 (%)
-        'take_profit_pct': 3.5,         # 익절 (%)
+        'stop_loss_pct': -3.0,          # 손절 (%) — -2.5에서 확대, 스탑헌팅 방지
+        'take_profit_pct': 5.0,         # 익절 (%) — 3.5에서 확대, 수익 극대화
 
         # 거래 제한
         'one_trade_per_stock_per_day': True,  # 하루에 종목당 1회만 거래
