@@ -173,18 +173,16 @@ class VirtualTradingManager:
             
             # 중복 매도 방지: 해당 매수 기록이 이미 매도되었는지 확인
             try:
-                import sqlite3
-                with sqlite3.connect(self.db_manager.db_path) as conn:
-                    cursor = conn.cursor()
-                    cursor.execute('''
-                        SELECT COUNT(*) FROM virtual_trading_records 
-                        WHERE buy_record_id = ? AND action = 'SELL'
-                    ''', (buy_record_id,))
-                    
-                    sell_count = cursor.fetchone()[0]
-                    if sell_count > 0:
-                        self.logger.warning(f"⚠️ 중복 매도 방지: {stock_code} 매수기록 ID {buy_record_id}는 이미 {sell_count}번 매도됨")
-                        return False
+                conn = self.db_manager._get_connection()
+                result = conn.execute('''
+                    SELECT COUNT(*) FROM virtual_trading_records 
+                    WHERE buy_record_id = ? AND action = 'SELL'
+                ''', (buy_record_id,)).fetchone()
+                
+                sell_count = result[0]
+                if sell_count > 0:
+                    self.logger.warning(f"⚠️ 중복 매도 방지: {stock_code} 매수기록 ID {buy_record_id}는 이미 {sell_count}번 매도됨")
+                    return False
             except Exception as check_error:
                 self.logger.error(f"❌ 중복 매도 검사 오류: {check_error}")
                 return False

@@ -245,18 +245,15 @@ class TradeExecutor:
             strategy = None
             if buy_record_id and self.db_manager:
                 try:
-                    import sqlite3
-                    with sqlite3.connect(self.db_manager.db_path) as conn:
-                        cursor = conn.cursor()
-                        cursor.execute('''
-                            SELECT strategy FROM virtual_trading_records
-                            WHERE id = ? AND action = 'BUY'
-                        ''', (buy_record_id,))
+                    conn = self.db_manager._get_connection()
+                    result = conn.execute('''
+                        SELECT strategy FROM virtual_trading_records
+                        WHERE id = ? AND action = 'BUY'
+                    ''', (buy_record_id,)).fetchone()
 
-                        result = cursor.fetchone()
-                        if result:
-                            strategy = result[0]
-                            self.logger.debug(f"📊 {stock_code} 매수 기록에서 전략명 조회: {strategy}")
+                    if result:
+                        strategy = result[0]
+                        self.logger.debug(f"📊 {stock_code} 매수 기록에서 전략명 조회: {strategy}")
                 except Exception as e:
                     self.logger.error(f"❌ 매수 기록 전략명 조회 오류: {e}")
 

@@ -1,59 +1,47 @@
 @echo off
 chcp 65001 > nul
 echo ========================================
-echo    RoboTrader 주식 단타 거래 시스템
+echo    RoboTrader Trading System
 echo ========================================
 
-:: 현재 디렉토리로 이동
 cd /d "%~dp0"
 
-:: Python 가상환경 확인 및 생성
 if not exist "venv" (
-    echo 가상환경이 없습니다. 생성 중...
+    echo Creating virtual environment...
     python -m venv venv
     if errorlevel 1 (
-        echo Python이 설치되지 않았거나 경로에 없습니다.
-        echo Python을 설치하고 PATH에 추가한 후 다시 실행해주세요.
+        echo Python not found. Please install Python and add to PATH.
         pause
         exit /b 1
     )
 )
 
-:: 가상환경 활성화
-echo 가상환경 활성화 중...
+echo Activating venv...
 call venv\Scripts\activate.bat
 
-:: pip 업그레이드
-echo pip 업그레이드 중...
+echo Upgrading pip...
 python -m pip install --upgrade pip
 
-:: 의존성 패키지 설치 (UTF-8 인코딩 강제)
-echo 의존성 패키지 설치 확인 중...
+echo Installing dependencies...
 set PYTHONUTF8=1
 pip install -r requirements.txt --no-cache-dir
 
-:: 설정 파일 확인
 if not exist "config\key.ini" (
     echo.
-    echo ❌ 설정 파일이 없습니다!
-    echo config\key.ini 파일을 생성하고 API 키를 설정해주세요.
-    echo config\key.ini.example 파일을 참고하세요.
+    echo ERROR: config\key.ini not found!
     echo.
     pause
     exit /b 1
 )
 
-:: 로그 디렉토리 생성
 if not exist "logs" mkdir logs
 
-:: 프로그램 실행
 echo.
-echo 🚀 RoboTrader 시작 중...
-echo 종료하려면 Ctrl+C를 누르세요.
+echo Starting RoboTrader...
+echo Press Ctrl+C to stop.
 echo.
 python main.py
 
-:: 종료 메시지
 echo.
-echo RoboTrader가 종료되었습니다.
+echo RoboTrader stopped.
 pause

@@ -115,11 +115,13 @@ def parse_replay_log(log_path: Path) -> list:
 
 def apply_daily_filter(features: dict, filter_option: str) -> bool:
     """일봉 필터 적용 (True = 통과, False = 차단)"""
-    if features is None:
-        return False
-
+    # 'none' 옵션은 일봉 데이터 유무와 관계없이 모두 통과
     if filter_option == 'none':
         return True
+
+    # 다른 필터는 일봉 데이터 필요
+    if features is None:
+        return False
     elif filter_option == 'prev_day_up':
         return features.get('prev_day_change', -999) >= 0.0
     elif filter_option == 'consecutive_1day':

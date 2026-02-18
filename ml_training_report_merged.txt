@@ -1,0 +1,33 @@
+======================================================================
+병합 데이터셋 ML 모델 학습 리포트
+======================================================================
+
+학습 일시: 2025-12-27 16:24:40.074300
+데이터: ml_dataset_merged.csv
+모델: ml_model_merged.pkl
+
+총 데이터: 587건
+AUC Score: 0.7508
+
+Feature Importance (Top 20):
+                         feature  importance
+        support_avg_volume_ratio  230.706190
+                    uptrend_gain  218.464927
+                     decline_pct  216.969621
+              support_avg_volume  200.888190
+volume_ratio_breakout_to_uptrend  198.122258
+ volume_ratio_support_to_uptrend  197.409530
+                      confidence  187.807369
+            uptrend_total_volume  182.027298
+ volume_ratio_decline_to_uptrend  158.728270
+     price_gain_to_decline_ratio  140.354300
+                 breakout_volume  127.021990
+              uptrend_max_volume  115.191630
+              decline_avg_volume  110.531137
+                 uptrend_candles  105.466130
+                  breakout_range   99.792720
+                 decline_candles   61.815330
+                   breakout_body   50.551660
+                 time_in_minutes   33.035090
+                uptrend_avg_body   30.069872
+                 support_candles   28.819260

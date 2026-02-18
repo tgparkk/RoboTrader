@@ -67,7 +67,21 @@
       "Bash(pip show:*)",
       "Bash(pip install:*)",
       "Bash(tasklist:*)",
-      "Bash(cmd /c \"tasklist /FI \"\"IMAGENAME eq python.exe\"\"\")"
+      "Bash(cmd /c \"tasklist /FI \"\"IMAGENAME eq python.exe\"\"\")",
+      "Bash(set PYTHONUNBUFFERED=1)",
+      "Bash(D:)",
+      "Bash(tree:*)",
+      "Bash(cd:*)",
+      "Bash(powershell:*)",
+      "Bash(chcp:*)",
+      "Bash(cmd /c \"chcp 65001 >nul & python analyze_today_trades.py\")",
+      "Bash(cmd /c \"chcp 65001 >nul && set PYTHONIOENCODING=utf-8 && python analyze_today_trades.py\")",
+      "Bash(git -C d:/GIT/RoboTrader status)",
+      "Bash(git -C d:/GIT/RoboTrader diff config/strategy_settings.py core/strategies/price_position_strategy.py core/trading_decision_engine.py simulate_price_position_strategy.py)",
+      "Bash(git -C d:/GIT/RoboTrader log --oneline -5)",
+      "Bash(git -C d:/GIT/RoboTrader add config/strategy_settings.py core/strategies/price_position_strategy.py core/trading_decision_engine.py simulate_price_position_strategy.py main.py utils/data_cache.py)",
+      "Bash(git -C d:/GIT/RoboTrader commit -m \"$\\(cat <<''EOF''\nimprove: 전략 필터 강화 및 DuckDB 연결 관리 개선\n\n- 목요일 제외 \\(승률 31% → 제거\\), 진입시간 10~11시로 축소\n- 진입 전 변동성 >0.8% 및 20봉 모멘텀 >+2% 필터 추가\n- 시뮬레이션에 동시보유 제한 및 고급 필터 동기화\n- 실거래 엔진에 동시보유 카운트 방식 변경 \\(누적→동시\\)\n- DuckDB read-only 연결 일괄 정리 후 장마감 저장\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git -C d:/GIT/RoboTrader push)"
     ],
     "deny": [],
     "ask": []

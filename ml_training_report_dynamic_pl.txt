@@ -1,0 +1,28 @@
+======================================================================
+동적 손익비 ML 모델 학습 리포트
+======================================================================
+
+학습 일시: 2025-12-28 02:31:22.426202
+데이터: ml_dataset_dynamic_pl.csv
+모델: ml_model_dynamic_pl.pkl
+
+총 데이터: 575건
+AUC Score: 0.5282
+
+Feature Importance (Top 15):
+                         feature  importance
+                 breakout_volume   65.397200
+              support_avg_volume   42.974150
+                uptrend_avg_body   39.299990
+                    uptrend_gain   37.362380
+                   breakout_body   34.102120
+                 uptrend_candles   24.922840
+            uptrend_total_volume   21.841969
+              uptrend_max_volume   19.798510
+ volume_ratio_support_to_uptrend   19.647230
+                target_stop_loss   17.291610
+ volume_ratio_decline_to_uptrend   17.224450
+                          minute   13.945560
+                 time_in_minutes   12.976750
+                  breakout_range   11.707340
+volume_ratio_breakout_to_uptrend   10.454860
