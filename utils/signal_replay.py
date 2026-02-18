@@ -81,9 +81,9 @@ def _get_daily_cache():
     return _daily_cache
 
 def load_daily_data(stock_code: str) -> Optional[pd.DataFrame]:
-    """일봉 데이터 로드 (DuckDB 우선, pkl 폴백)"""
+    """일봉 데이터 로드 (PG 우선, pkl 폴백)"""
     try:
-        # DuckDB에서 먼저 시도
+        # PG에서 먼저 시도
         daily_cache = _get_daily_cache()
         data = daily_cache.load_data(stock_code)
 
@@ -1445,7 +1445,7 @@ def main():
 
             # 과거 날짜인 경우 캐시 먼저 확인
             if date_str != today_str:
-                # DuckDB에서 먼저 시도
+                # PG 캐시에서 먼저 시도
                 from utils.data_cache import DataCache
                 minute_cache = DataCache()
                 cached_data = minute_cache.load_data(stock_code, date_str)
@@ -1503,7 +1503,7 @@ def main():
                             df_1min = loop.run_until_complete(dp.get_historical_chart_data(stock_code, date_str))
                             logger.info(f"✅ [{stock_code}] API 데이터 수신 완료")
 
-                            # API로 조회한 데이터를 DuckDB에 캐시 저장
+                            # API로 조회한 데이터를 PG에 캐시 저장
                             if df_1min is not None and not df_1min.empty:
                                 minute_cache.save_data(stock_code, date_str, df_1min)
 
@@ -1519,7 +1519,7 @@ def main():
                                     if hasattr(start_dt, 'strftime') and hasattr(end_dt, 'strftime'):
                                         time_info = f" ({start_dt.strftime('%H%M%S')}~{end_dt.strftime('%H%M%S')})"
 
-                                logger.info(f"💾 [{stock_code}] DuckDB 캐시 저장 완료: {len(df_1min)}건{time_info}")
+                                logger.info(f"💾 [{stock_code}] PG 캐시 저장 완료: {len(df_1min)}건{time_info}")
                         finally:
                             loop.close()
                     except Exception as e:

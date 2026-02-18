@@ -3,7 +3,6 @@
 1분봉/일봉 데이터를 PostgreSQL 기반으로 캐싱하여 관리 편의성 향상
 
 - PostgreSQL을 기본 저장소로 사용 (단일 테이블: minute_candles, daily_candles)
-- 기존 DuckDB 파일도 읽기 가능 (폴백, read_only=True)
 - 기존 pkl 파일도 읽기 가능 (호환성 유지)
 - Connection pool 기반 성능 최적화
 """
@@ -15,16 +14,6 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 from utils.logger import setup_logger
-
-# DuckDB 폴백용 (읽기 전용)
-try:
-    import duckdb
-    DUCKDB_AVAILABLE = True
-except ImportError:
-    DUCKDB_AVAILABLE = False
-
-# DuckDB 파일 경로 (폴백 읽기용)
-DUCKDB_PATH = Path(__file__).parent.parent / "cache" / "market_data_v2.duckdb"
 
 # PostgreSQL connection pool
 import psycopg2
@@ -131,53 +120,20 @@ class DataCache:
     """PostgreSQL 기반 분봉 데이터 캐시 관리자
 
     - 기본적으로 PostgreSQL에서 데이터를 읽고 씀
-    - PostgreSQL에 데이터가 없으면 DuckDB → pkl 순으로 폴백 로드
+    - PostgreSQL에 데이터가 없으면 pkl 폴백 로드
     """
-
-    # DuckDB 폴백용 스레드별 연결 (읽기 전용)
-    _thread_local = threading.local()
-    _all_connections = []
-    _connections_lock = threading.Lock()
 
     def __init__(self, cache_dir: str = "cache/minute_data", use_duckdb: bool = True):
         self.logger = setup_logger(__name__)
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.use_duckdb_fallback = use_duckdb and DUCKDB_AVAILABLE and DUCKDB_PATH.exists()
 
         _ensure_tables_once()
 
-    def _get_duckdb_connection(self):
-        """DuckDB 폴백 읽기 전용 연결 (스레드별)"""
-        if not self.use_duckdb_fallback:
-            return None
-        if not hasattr(self._thread_local, 'connection') or self._thread_local.connection is None:
-            conn = duckdb.connect(str(DUCKDB_PATH), read_only=True)
-            self._thread_local.connection = conn
-            with DataCache._connections_lock:
-                DataCache._all_connections.append(conn)
-        else:
-            try:
-                self._thread_local.connection.execute("SELECT 1")
-            except Exception:
-                conn = duckdb.connect(str(DUCKDB_PATH), read_only=True)
-                self._thread_local.connection = conn
-                with DataCache._connections_lock:
-                    DataCache._all_connections.append(conn)
-        return self._thread_local.connection
-
     @classmethod
     def close_all_connections(cls):
-        """모든 DuckDB 폴백 연결 닫기"""
-        with cls._connections_lock:
-            for conn in cls._all_connections:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-            cls._all_connections.clear()
-        if hasattr(cls._thread_local, 'connection'):
-            cls._thread_local.connection = None
+        """호환성 유지용 (no-op)"""
+        pass
 
     def _get_cache_file(self, stock_code: str, date_str: str) -> Path:
         """캐시 파일 경로 생성 (pkl 폴백용)"""
@@ -202,20 +158,6 @@ class DataCache:
                 pool.putconn(conn)
         except Exception:
             pass
-
-        # DuckDB 폴백
-        if self.use_duckdb_fallback:
-            try:
-                table_name = f"minute_{stock_code}"
-                con = self._get_duckdb_connection()
-                if con:
-                    tables = con.execute("SELECT table_name FROM information_schema.tables WHERE table_name = ?", [table_name]).fetchall()
-                    if tables:
-                        count = con.execute(f"SELECT COUNT(*) FROM {table_name} WHERE trade_date = ?", [date_str]).fetchone()[0]
-                        if count > 0:
-                            return True
-            except Exception:
-                pass
 
         # pkl 폴백
         cache_file = self._get_cache_file(stock_code, date_str)
@@ -307,12 +249,6 @@ class DataCache:
             if df is not None:
                 return df
 
-            # DuckDB 폴백
-            if self.use_duckdb_fallback:
-                df = self._load_from_duckdb(stock_code, date_str)
-                if df is not None:
-                    return df
-
             # pkl 폴백
             return self._load_from_pkl(stock_code, date_str)
 
@@ -345,36 +281,6 @@ class DataCache:
                 pool.putconn(conn)
         except Exception as e:
             self.logger.debug(f"PG 로드 실패: {e}")
-            return None
-
-    def _load_from_duckdb(self, stock_code: str, date_str: str) -> Optional[pd.DataFrame]:
-        """DuckDB에서 로드 (폴백, 읽기전용)"""
-        try:
-            table_name = f"minute_{stock_code}"
-            con = self._get_duckdb_connection()
-            if con is None:
-                return None
-
-            tables = con.execute("SELECT table_name FROM information_schema.tables WHERE table_name = ?", [table_name]).fetchall()
-            if not tables:
-                return None
-
-            df = con.execute(f"""
-                SELECT idx, date, time, close, open, high, low, volume, amount, datetime
-                FROM {table_name}
-                WHERE trade_date = ?
-                ORDER BY idx
-            """, [date_str]).fetchdf()
-
-            if df.empty:
-                return None
-
-            df.set_index('idx', inplace=True)
-            self.logger.debug(f"[{stock_code}] DuckDB에서 로드 ({len(df)}개)")
-            return df
-
-        except Exception as e:
-            self.logger.debug(f"DuckDB 로드 실패: {e}")
             return None
 
     def _load_from_pkl(self, stock_code: str, date_str: str) -> Optional[pd.DataFrame]:
@@ -468,53 +374,20 @@ class DailyDataCache:
     """PostgreSQL 기반 일봉 데이터 캐시 관리자
 
     - 기본적으로 PostgreSQL에서 데이터를 읽고 씀
-    - DuckDB/pkl 폴백 지원
+    - pkl 폴백 지원
     """
-
-    # DuckDB 폴백용
-    _thread_local = threading.local()
-    _all_connections = []
-    _connections_lock = threading.Lock()
 
     def __init__(self, cache_dir: str = "cache/daily", use_duckdb: bool = True):
         self.logger = setup_logger(__name__)
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.use_duckdb_fallback = use_duckdb and DUCKDB_AVAILABLE and DUCKDB_PATH.exists()
 
         _ensure_tables_once()
 
-    def _get_duckdb_connection(self):
-        """DuckDB 폴백 읽기 전용 연결 (스레드별)"""
-        if not self.use_duckdb_fallback:
-            return None
-        if not hasattr(self._thread_local, 'connection') or self._thread_local.connection is None:
-            conn = duckdb.connect(str(DUCKDB_PATH), read_only=True)
-            self._thread_local.connection = conn
-            with DailyDataCache._connections_lock:
-                DailyDataCache._all_connections.append(conn)
-        else:
-            try:
-                self._thread_local.connection.execute("SELECT 1")
-            except Exception:
-                conn = duckdb.connect(str(DUCKDB_PATH), read_only=True)
-                self._thread_local.connection = conn
-                with DailyDataCache._connections_lock:
-                    DailyDataCache._all_connections.append(conn)
-        return self._thread_local.connection
-
     @classmethod
     def close_all_connections(cls):
-        """모든 DuckDB 폴백 연결 닫기"""
-        with cls._connections_lock:
-            for conn in cls._all_connections:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-            cls._all_connections.clear()
-        if hasattr(cls._thread_local, 'connection'):
-            cls._thread_local.connection = None
+        """호환성 유지용 (no-op)"""
+        pass
 
     def _get_cache_file(self, stock_code: str, date_str: str) -> Path:
         """캐시 파일 경로 생성 (pkl 폴백용)"""
@@ -536,20 +409,6 @@ class DailyDataCache:
                 pool.putconn(conn)
         except Exception:
             pass
-
-        # DuckDB 폴백
-        if self.use_duckdb_fallback:
-            try:
-                table_name = f"daily_{stock_code}"
-                con = self._get_duckdb_connection()
-                if con:
-                    tables = con.execute("SELECT table_name FROM information_schema.tables WHERE table_name = ?", [table_name]).fetchall()
-                    if tables:
-                        count = con.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
-                        if count >= min_records:
-                            return True
-            except Exception:
-                pass
 
         return False
 
@@ -643,12 +502,6 @@ class DailyDataCache:
             if df is not None:
                 return df
 
-            # DuckDB 폴백
-            if self.use_duckdb_fallback:
-                df = self._load_from_duckdb(stock_code)
-                if df is not None:
-                    return df
-
             # pkl 폴백
             return self._load_from_pkl(stock_code)
 
@@ -682,30 +535,6 @@ class DailyDataCache:
                 pool.putconn(conn)
         except Exception as e:
             self.logger.debug(f"일봉 PG 로드 실패: {e}")
-            return None
-
-    def _load_from_duckdb(self, stock_code: str) -> Optional[pd.DataFrame]:
-        """DuckDB에서 로드 (폴백, 읽기전용)"""
-        try:
-            table_name = f"daily_{stock_code}"
-            con = self._get_duckdb_connection()
-            if con is None:
-                return None
-
-            tables = con.execute("SELECT table_name FROM information_schema.tables WHERE table_name = ?", [table_name]).fetchall()
-            if not tables:
-                return None
-
-            df = con.execute(f"SELECT * FROM {table_name} ORDER BY stck_bsop_date").fetchdf()
-
-            if df.empty:
-                return None
-
-            self.logger.debug(f"[{stock_code}] 일봉 DuckDB에서 로드 ({len(df)}개)")
-            return df
-
-        except Exception as e:
-            self.logger.debug(f"일봉 DuckDB 로드 실패: {e}")
             return None
 
     def _load_from_pkl(self, stock_code: str) -> Optional[pd.DataFrame]:

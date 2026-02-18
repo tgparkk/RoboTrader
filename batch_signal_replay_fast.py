@@ -230,7 +230,7 @@ def process_single_stock(
     try:
         df_1min = None
 
-        # DuckDB 캐시에서 데이터 로드 시도
+        # PG 캐시에서 데이터 로드 시도
         cached_data = ctx.minute_cache.load_data(stock_code, date_str)
 
         if cached_data is not None and not cached_data.empty:
