@@ -797,11 +797,10 @@ class DayTradingBot:
     async def _restore_todays_candidates(self):
         """DB에서 오늘 날짜의 후보 종목 복원"""
         try:
-            import sqlite3
             from pathlib import Path
             
-            # DB 경로
-            db_path = Path(__file__).parent / "data" / "robotrader.db"
+            # DB 경로 (DuckDB)
+            db_path = Path(__file__).parent / "db" / "robotrader_trades.duckdb"
             if not db_path.exists():
                 self.logger.info("📊 DB 파일 없음 - 후보 종목 복원 건너뜀")
                 return
@@ -809,16 +808,18 @@ class DayTradingBot:
             # 오늘 날짜
             today = now_kst().strftime('%Y-%m-%d')
             
-            with sqlite3.connect(str(db_path)) as conn:
-                cursor = conn.cursor()
-                cursor.execute('''
+            import duckdb
+            conn = duckdb.connect(str(db_path), read_only=True)
+            try:
+                result = conn.execute('''
                     SELECT DISTINCT stock_code, stock_name, score, reasons 
                     FROM candidate_stocks 
-                    WHERE DATE(selection_date) = ?
+                    WHERE CAST(selection_date AS DATE) = ?
                     ORDER BY score DESC
                 ''', (today,))
-                
-                rows = cursor.fetchall()
+                rows = result.fetchall()
+            finally:
+                conn.close()
             
             if not rows:
                 self.logger.info(f"📊 오늘({today}) 후보 종목 없음")

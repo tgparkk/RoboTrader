@@ -163,3 +163,11 @@ signal_replay_log_ml/
 
 # Pattern data logs
 pattern_data_log/nul  
+nul
+nul
+*.duckdb
+
+# DuckDB files
+*.duckdb
+*.duckdb.wal
+nul
