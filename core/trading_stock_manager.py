@@ -4,7 +4,6 @@
 import asyncio
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Any
-import threading
 from collections import defaultdict
 
 from .models import TradingStock, StockState, OrderType, OrderStatus, Order
@@ -52,8 +51,8 @@ class TradingStockManager:
             state: {} for state in StockState
         }
         
-        # 동기화
-        self._lock = threading.RLock()
+        # 동기화 (asyncio.Lock for async context)
+        self._lock = asyncio.Lock()
         
         # 모니터링 설정
         self.is_monitoring = False
@@ -94,7 +93,7 @@ class TradingStockManager:
             bool: 추가 성공 여부
         """
         try:
-            with self._lock:
+            async with self._lock:
                 current_time = now_kst()
                 
                 # 이미 존재하는 종목인지 확인
@@ -151,7 +150,7 @@ class TradingStockManager:
                 return True
             else:
                 # 실패 시 제거
-                with self._lock:
+                async with self._lock:
                     self._unregister_stock(stock_code)
                 return False
                 
@@ -176,7 +175,7 @@ class TradingStockManager:
             bool: 주문 성공 여부
         """
         try:
-            with self._lock:
+            async with self._lock:
                 if stock_code not in self.trading_stocks:
                     self.logger.warning(f"⚠️ {stock_code}: 관리 중이지 않은 종목")
                     return False
@@ -213,7 +212,7 @@ class TradingStockManager:
             order_id = await self.order_manager.place_buy_order(stock_code, quantity, price)
             
             if order_id:
-                with self._lock:
+                async with self._lock:
                     trading_stock = self.trading_stocks[stock_code]
                     trading_stock.add_order(order_id)
 
@@ -223,7 +222,7 @@ class TradingStockManager:
                 return True
             else:
                 # 주문 실패 시 원래 상태로 되돌림 (SELECTED 또는 COMPLETED)
-                with self._lock:
+                async with self._lock:
                     trading_stock = self.trading_stocks[stock_code]
                     # 🆕 매수 진행 플래그 리셋
                     trading_stock.is_buying = False
@@ -236,13 +235,13 @@ class TradingStockManager:
         except Exception as e:
             self.logger.error(f"❌ {stock_code} 매수 주문 오류: {e}")
             # 오류 시 원래 상태로 되돌림
-            with self._lock:
+            async with self._lock:
                 if stock_code in self.trading_stocks:
                     original_state = StockState.COMPLETED if "재거래" in reason else StockState.SELECTED
                     self._change_stock_state(stock_code, original_state, f"매수 주문 오류: {e}")
             return False
     
-    def move_to_sell_candidate(self, stock_code: str, reason: str = "") -> bool:
+    async def move_to_sell_candidate(self, stock_code: str, reason: str = "") -> bool:
         """
         포지션 종목을 매도 후보로 변경
         
@@ -254,7 +253,7 @@ class TradingStockManager:
             bool: 변경 성공 여부
         """
         try:
-            with self._lock:
+            async with self._lock:
                 if stock_code not in self.trading_stocks:
                     self.logger.warning(f"⚠️ {stock_code}: 관리 중이지 않은 종목")
                     return False
@@ -296,7 +295,7 @@ class TradingStockManager:
             bool: 주문 성공 여부
         """
         try:
-            with self._lock:
+            async with self._lock:
                 if stock_code not in self.trading_stocks:
                     self.logger.warning(f"⚠️ {stock_code}: 관리 중이지 않은 종목")
                     return False
@@ -315,7 +314,7 @@ class TradingStockManager:
             order_id = await self.order_manager.place_sell_order(stock_code, quantity, price, market=market)
             
             if order_id:
-                with self._lock:
+                async with self._lock:
                     trading_stock = self.trading_stocks[stock_code]
                     trading_stock.add_order(order_id)
                 
@@ -323,14 +322,14 @@ class TradingStockManager:
                 return True
             else:
                 # 주문 실패 시 매도 후보로 되돌림
-                with self._lock:
+                async with self._lock:
                     self._change_stock_state(stock_code, StockState.SELL_CANDIDATE, "매도 주문 실패")
                 return False
                 
         except Exception as e:
             self.logger.error(f"❌ {stock_code} 매도 주문 오류: {e}")
             # 오류 시 매도 후보로 되돌림
-            with self._lock:
+            async with self._lock:
                 if stock_code in self.trading_stocks:
                     self._change_stock_state(stock_code, StockState.SELL_CANDIDATE, f"매도 주문 오류: {e}")
             return False
@@ -404,7 +403,7 @@ class TradingStockManager:
                     
                     if order.status == OrderStatus.FILLED:
                         # 매수 완료 - 포지션 상태로 변경
-                        with self._lock:
+                        async with self._lock:
                             trading_stock.set_position(order.quantity, order.price)
                             trading_stock.clear_current_order()
                             # 🆕 매수 시간 기록
@@ -436,7 +435,7 @@ class TradingStockManager:
                         
                     elif order.status in [OrderStatus.CANCELLED, OrderStatus.FAILED]:
                         # 매수 실패 - 매수 후보로 되돌림
-                        with self._lock:
+                        async with self._lock:
                             trading_stock.clear_current_order()
                             # 매수 실패 시 원래 상태로 복귀
                             original_state = StockState.COMPLETED if "재거래" in trading_stock.selection_reason else StockState.SELECTED
@@ -491,7 +490,7 @@ class TradingStockManager:
                         except Exception as db_err:
                             self.logger.warning(f"⚠️ 실거래 매도 기록 저장 실패: {db_err}")
 
-                        with self._lock:
+                        async with self._lock:
                             trading_stock.clear_position()
                             trading_stock.clear_current_order()
                             self._change_stock_state(
@@ -508,7 +507,7 @@ class TradingStockManager:
                         
                     elif order.status in [OrderStatus.CANCELLED, OrderStatus.FAILED]:
                         # 매도 실패 - 매도 후보로 되돌림
-                        with self._lock:
+                        async with self._lock:
                             trading_stock.clear_current_order()
                             self._change_stock_state(
                                 trading_stock.stock_code, 
@@ -629,7 +628,7 @@ class TradingStockManager:
     
     def get_stocks_by_state(self, state: StockState) -> List[TradingStock]:
         """특정 상태의 종목들 조회"""
-        with self._lock:
+        if True:  # no lock needed for reads in asyncio
             return list(self.stocks_by_state[state].values())
     
     def get_trading_stock(self, stock_code: str) -> Optional[TradingStock]:
@@ -639,7 +638,7 @@ class TradingStockManager:
     def update_current_order(self, stock_code: str, new_order_id: str) -> None:
         """정정 등으로 새 주문이 생성되었을 때 현재 주문ID를 최신값으로 동기화"""
         try:
-            with self._lock:
+            if True:  # no lock needed for simple update in asyncio
                 if stock_code in self.trading_stocks:
                     trading_stock = self.trading_stocks[stock_code]
                     trading_stock.current_order_id = new_order_id
@@ -655,7 +654,7 @@ class TradingStockManager:
             
             self.logger.info(f"🔔 주문 체결 콜백 수신: {order.order_id} - {order.stock_code} ({order.order_type.value})")
             
-            with self._lock:
+            async with self._lock:
                 if order.stock_code not in self.trading_stocks:
                     self.logger.warning(f"⚠️ 체결 콜백: 관리되지 않는 종목 {order.stock_code}")
                     return
@@ -784,7 +783,7 @@ class TradingStockManager:
     def get_portfolio_summary(self) -> Dict[str, Any]:
         """포트폴리오 전체 현황"""
         try:
-            with self._lock:
+            if True:  # no lock needed for reads in asyncio
                 summary = {
                     'total_stocks': len(self.trading_stocks),
                     'by_state': {},
@@ -863,10 +862,10 @@ class TradingStockManager:
         }
     
     
-    def remove_stock(self, stock_code: str, reason: str = "") -> bool:
+    async def remove_stock(self, stock_code: str, reason: str = "") -> bool:
         """종목 제거"""
         try:
-            with self._lock:
+            async with self._lock:
                 if stock_code not in self.trading_stocks:
                     return False
                 
@@ -898,7 +897,7 @@ class TradingStockManager:
         try:
             stock_code = order.stock_code
             
-            with self._lock:
+            async with self._lock:
                 if stock_code not in self.trading_stocks:
                     self.logger.warning(f"⚠️ 타임아웃 처리할 종목 없음: {stock_code}")
                     return

@@ -548,7 +548,7 @@ class DayTradingBot:
                     self.logger.debug(f"🔍 포지션 정보: {trading_stock.position.quantity}주 @{trading_stock.position.avg_price:,.0f}원")
                 
                 # 매도 후보로 변경
-                success = self.trading_manager.move_to_sell_candidate(stock_code, sell_reason)
+                success = await self.trading_manager.move_to_sell_candidate(stock_code, sell_reason)
                 if success:
                     # [실제 매도 주문 실행 - 활성화]
                     try:
@@ -707,7 +707,7 @@ class DayTradingBot:
                             sell_price = float(price_obj.current_price)
                     sell_price = self._round_to_tick(sell_price)
                     # 상태 전환 후 시장가 매도 주문 실행
-                    moved = self.trading_manager.move_to_sell_candidate(stock_code, "장마감 일괄청산")
+                    moved = await self.trading_manager.move_to_sell_candidate(stock_code, "장마감 일괄청산")
                     if moved:
                         await self.trading_manager.execute_sell_order(
                             stock_code, quantity, sell_price, "장마감 일괄청산", market=True
@@ -758,7 +758,7 @@ class DayTradingBot:
                     current_price = 0.0  # 시장가는 0원으로 주문
 
                     # 상태를 매도 대기로 변경 후 시장가 매도 주문
-                    moved = self.trading_manager.move_to_sell_candidate(stock_code, f"{eod_hour}:{eod_minute:02d} 시장가 일괄매도")
+                    moved = await self.trading_manager.move_to_sell_candidate(stock_code, f"{eod_hour}:{eod_minute:02d} 시장가 일괄매도")
                     if moved:
                         await self.trading_manager.execute_sell_order(
                             stock_code, quantity, current_price, f"{eod_hour}:{eod_minute:02d} 시장가 일괄매도", market=True
