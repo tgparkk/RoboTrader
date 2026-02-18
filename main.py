@@ -194,18 +194,42 @@ class DayTradingBot:
             self.is_running = True
             self.logger.info("📈 일일 거래 사이클 시작")
             
-            # 병렬 실행할 태스크들
-            tasks = [
-                self._data_collection_task(),
-                self._order_monitoring_task(),
-                self.trading_manager.start_monitoring(),
-                self._trading_decision_task(),
-                self._system_monitoring_task(),
-                self._telegram_task()
-            ]
-            
-            # 모든 태스크 실행
-            await asyncio.gather(*tasks, return_exceptions=True)
+            # 병렬 실행할 태스크들 (이름 매핑)
+            task_factories = {
+                'data_collection': self._data_collection_task,
+                'order_monitoring': self._order_monitoring_task,
+                'stock_monitoring': self.trading_manager.start_monitoring,
+                'trading_decision': self._trading_decision_task,
+                'system_monitoring': self._system_monitoring_task,
+                'telegram': self._telegram_task,
+            }
+
+            running_tasks: dict = {}
+            for name, factory in task_factories.items():
+                running_tasks[name] = asyncio.create_task(factory(), name=name)
+
+            # 감시 루프: 죽은 태스크 감지 + 재시작
+            while self.is_running:
+                await asyncio.sleep(10)
+                for name, task in list(running_tasks.items()):
+                    if task.done():
+                        exc = task.exception() if not task.cancelled() else None
+                        if exc:
+                            self.logger.error(f"🔥 태스크 '{name}' 예외로 사망: {exc}")
+                            import traceback
+                            self.logger.error(f"상세: {''.join(traceback.format_exception(type(exc), exc, exc.__traceback__))}")
+                        else:
+                            self.logger.warning(f"⚠️ 태스크 '{name}' 종료됨 (예외 없음)")
+                        # 재시작
+                        if self.is_running and name in task_factories:
+                            self.logger.info(f"🔄 태스크 '{name}' 재시작 시도")
+                            running_tasks[name] = asyncio.create_task(task_factories[name](), name=name)
+
+            # 종료 시 모든 태스크 취소
+            for task in running_tasks.values():
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*running_tasks.values(), return_exceptions=True)
             
         except Exception as e:
             self.logger.error(f"❌ 일일 거래 사이클 실행 중 오류: {e}")
