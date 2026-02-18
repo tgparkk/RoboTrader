@@ -299,7 +299,7 @@ class DayTradingBot:
                 current_available_funds = fund_status['available_funds']
                 max_investment_per_stock = fund_status['total_funds'] * 0.1  # 종목당 최대 10%
 
-                # self.logger.debug(f"💰 현재 자금 상황: 가용={current_available_funds:,.0f}원, 종목당최대={max_investment_per_stock:,.0f}원")
+                self.logger.debug(f"💰 현재 자금 상황: 가용={current_available_funds:,.0f}원, 종목당최대={max_investment_per_stock:,.0f}원")
 
                 await self._execute_trading_decision(current_available_funds)
                 await asyncio.sleep(5)  # 5초 주기
@@ -345,7 +345,7 @@ class DayTradingBot:
 
             # 실제 거래 모드: 실제 포지션만 매도 판단
             if positioned_stocks:
-                # self.logger.debug(f"💰 매도 판단 대상 {len(positioned_stocks)}개 종목: {[f'{s.stock_code}({s.stock_name})' for s in positioned_stocks]}")
+                self.logger.debug(f"💰 매도 판단 대상 {len(positioned_stocks)}개 종목: {[f'{s.stock_code}({s.stock_name})' for s in positioned_stocks]}")
                 for trading_stock in positioned_stocks:
                     # 실제 포지션인지 확인
                     if trading_stock.position and trading_stock.position.quantity > 0:
@@ -353,7 +353,7 @@ class DayTradingBot:
                     else:
                         self.logger.warning(f"⚠️ {trading_stock.stock_code} 포지션 정보 없음 (매도 판단 건너뜀)")
             else:
-                # self.logger.debug("📊 매도 판단 대상 종목 없음 (POSITIONED 상태 종목 없음)")
+                self.logger.debug("📊 매도 판단 대상 종목 없음 (POSITIONED 상태 종목 없음)")
 
         except Exception as e:
             self.logger.error(f"❌ 매매 판단 시스템 오류: {e}")
@@ -389,7 +389,7 @@ class DayTradingBot:
             # 분봉 데이터 가져오기
             combined_data = self.intraday_manager.get_combined_chart_data(stock_code)
             if combined_data is None:
-                # self.logger.debug(f"❌ {stock_code} 1분봉 데이터 없음 (None)")
+                self.logger.debug(f"❌ {stock_code} 1분봉 데이터 없음 (None)")
                 return
             if len(combined_data) < 15:
                 self.logger.debug(f"❌ {stock_code} 1분봉 데이터 부족: {len(combined_data)}개 (최소 15개 필요) - 실시간 데이터 대기 중")

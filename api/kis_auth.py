@@ -55,7 +55,7 @@ _base_headers = {
 def save_token(my_token: str, my_expired: str) -> None:
     """토큰 저장"""
     valid_date = datetime.strptime(my_expired, '%Y-%m-%d %H:%M:%S')
-    # logger.debug(f'토큰 저장: {valid_date}')
+    logger.debug(f'토큰 저장: {valid_date}')
 
     with open(TOKEN_FILE_PATH, 'w', encoding='utf-8') as f:
         f.write(f'token: {my_token}\n')
@@ -77,7 +77,7 @@ def read_token() -> Optional[str]:
         if exp_dt > now_dt:
             return tkg_tmp['token']
         else:
-            # logger.debug(f'토큰 만료: {tkg_tmp["valid-date"]}')
+            logger.debug(f'토큰 만료: {tkg_tmp["valid-date"]}')
             return None
 
     except Exception as e:
@@ -186,7 +186,7 @@ def auth(svr: str = 'prod', product: str = '01') -> bool:
             return False
     else:
         my_token = saved_token
-        # logger.debug('✅ 기존 토큰 사용')
+        logger.debug('✅ 기존 토큰 사용')
 
     # 환경 설정
     changeTREnv(f"Bearer {my_token}", svr, product)

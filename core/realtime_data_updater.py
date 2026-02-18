@@ -158,7 +158,7 @@ class RealtimeDataUpdater:
         """
         try:
             if combined_data is None or combined_data.empty:
-                # self.logger.debug(f"[실패] {stock_code} 데이터 없음")
+                self.logger.debug(f"[실패] {stock_code} 데이터 없음")
                 return False
 
             # 1. 당일 데이터인지 먼저 확인
@@ -174,7 +174,7 @@ class RealtimeDataUpdater:
             if 'date' in combined_data.columns:
                 today_data = combined_data[combined_data['date'].astype(str) == today_str].copy()
                 if today_data.empty:
-                    # self.logger.debug(f"[실패] {stock_code} 당일 데이터 없음 (전일 데이터만 존재)")
+                    self.logger.debug(f"[실패] {stock_code} 당일 데이터 없음 (전일 데이터만 존재)")
                     return False
                 combined_data = today_data
             elif 'datetime' in combined_data.columns:
@@ -182,7 +182,7 @@ class RealtimeDataUpdater:
                     combined_data['date_str'] = pd.to_datetime(combined_data['datetime']).dt.strftime('%Y%m%d')
                     today_data = combined_data[combined_data['date_str'] == today_str].copy()
                     if today_data.empty:
-                        # self.logger.debug(f"[실패] {stock_code} 당일 데이터 없음 (전일 데이터만 존재)")
+                        self.logger.debug(f"[실패] {stock_code} 당일 데이터 없음 (전일 데이터만 존재)")
                         return False
                     combined_data = today_data.drop('date_str', axis=1)
                 except Exception:
