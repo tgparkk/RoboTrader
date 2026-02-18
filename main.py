@@ -825,24 +825,13 @@ class DayTradingBot:
             # 오늘 날짜
             today = now_kst().strftime('%Y-%m-%d')
             
-            # PostgreSQL에서 조회
-            import psycopg2
-            from config.settings import PG_HOST, PG_PORT, PG_DATABASE, PG_USER, PG_PASSWORD
-            conn = psycopg2.connect(
-                host=PG_HOST, port=PG_PORT, database=PG_DATABASE,
-                user=PG_USER, password=PG_PASSWORD
-            )
-            try:
-                cur = conn.cursor()
-                cur.execute('''
-                    SELECT DISTINCT stock_code, stock_name, score, reasons 
-                    FROM candidate_stocks 
-                    WHERE CAST(selection_date AS DATE) = %s
-                    ORDER BY score DESC
-                ''', (today,))
-                rows = cur.fetchall()
-            finally:
-                conn.close()
+            # PostgreSQL에서 조회 (connection pool 사용)
+            rows = self.db_manager._fetchall('''
+                SELECT DISTINCT stock_code, stock_name, score, reasons 
+                FROM candidate_stocks 
+                WHERE CAST(selection_date AS DATE) = %s
+                ORDER BY score DESC
+            ''', (today,))
             
             if not rows:
                 self.logger.info(f"📊 오늘({today}) 후보 종목 없음")

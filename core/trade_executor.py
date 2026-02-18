@@ -245,11 +245,10 @@ class TradeExecutor:
             strategy = None
             if buy_record_id and self.db_manager:
                 try:
-                    conn = self.db_manager._get_connection()
-                    result = conn.execute('''
+                    result = self.db_manager._fetchone('''
                         SELECT strategy FROM virtual_trading_records
-                        WHERE id = ? AND action = 'BUY'
-                    ''', (buy_record_id,)).fetchone()
+                        WHERE id = %s AND action = 'BUY'
+                    ''', (buy_record_id,))
 
                     if result:
                         strategy = result[0]

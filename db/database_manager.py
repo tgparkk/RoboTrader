@@ -48,7 +48,7 @@ class DatabaseManager:
     """
 
     _instance: Optional['DatabaseManager'] = None
-    _pool: Optional[psycopg2.pool.SimpleConnectionPool] = None
+    _pool: Optional[psycopg2.pool.ThreadedConnectionPool] = None
 
     def __init__(self, db_path: str = None):
         self.logger = setup_logger(__name__)
@@ -73,7 +73,7 @@ class DatabaseManager:
         """Connection pool 초기화 (싱글톤)"""
         if DatabaseManager._pool is None or DatabaseManager._pool.closed:
             try:
-                DatabaseManager._pool = psycopg2.pool.SimpleConnectionPool(
+                DatabaseManager._pool = psycopg2.pool.ThreadedConnectionPool(
                     minconn=1,
                     maxconn=5,
                     host=self._pg_host,
@@ -100,7 +100,7 @@ class DatabaseManager:
             DatabaseManager._pool.putconn(conn)
 
     def _execute(self, query: str, params: tuple = None):
-        """쿼리 실행 헬퍼 — 결과를 반환하는 래퍼"""
+        """쿼리 실행 헬퍼 — INSERT/UPDATE/DELETE용 (결과 반환 없음)"""
         conn = self._get_connection()
         try:
             cur = conn.cursor()
@@ -109,7 +109,38 @@ class DatabaseManager:
             else:
                 cur.execute(query)
             conn.commit()
-            return cur
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            self._put_connection(conn)
+
+    def _fetchone(self, query: str, params: tuple = None):
+        """쿼리 실행 후 fetchone 결과 반환"""
+        conn = self._get_connection()
+        try:
+            cur = conn.cursor()
+            if params:
+                cur.execute(query, params)
+            else:
+                cur.execute(query)
+            return cur.fetchone()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            self._put_connection(conn)
+
+    def _fetchall(self, query: str, params: tuple = None):
+        """쿼리 실행 후 fetchall 결과 반환"""
+        conn = self._get_connection()
+        try:
+            cur = conn.cursor()
+            if params:
+                cur.execute(query, params)
+            else:
+                cur.execute(query)
+            return cur.fetchall()
         except Exception:
             conn.rollback()
             raise
@@ -134,7 +165,7 @@ class DatabaseManager:
         """해당 종목의 실거래 기준, 오늘 발생한 손실 매도 건수 반환."""
         try:
             start_str, next_str = self._get_today_range_strings()
-            result = self._execute(
+            row = self._fetchone(
                 '''
                 SELECT COUNT(1)
                 FROM real_trading_records
@@ -145,7 +176,6 @@ class DatabaseManager:
                 ''',
                 (stock_code, start_str, next_str),
             )
-            row = result.fetchone()
             return int(row[0]) if row and row[0] is not None else 0
         except Exception as e:
             self.logger.error(f"실거래 당일 손실 카운트 조회 실패({stock_code}): {e}")
@@ -482,14 +512,14 @@ class DatabaseManager:
             start_datetime = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 00:00:00"
             end_datetime = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 23:59:59"
 
-            result = self._execute('''
+            row = self._fetchone('''
                 SELECT COUNT(1) FROM stock_prices
                 WHERE stock_code = %s
                 AND date_time >= %s
                 AND date_time <= %s
             ''', (stock_code, start_datetime, end_datetime))
 
-            count = result.fetchone()[0]
+            count = row[0]
             return count > 0
 
         except Exception as e:
@@ -620,8 +650,8 @@ class DatabaseManager:
             stats = {}
             for table in ['candidate_stocks', 'stock_prices', 'trading_records', 'virtual_trading_records', 'real_trading_records']:
                 try:
-                    result = self._execute(f'SELECT COUNT(*) FROM {table}')
-                    stats[table] = result.fetchone()[0]
+                    row = self._fetchone(f'SELECT COUNT(*) FROM {table}')
+                    stats[table] = row[0]
                 except Exception:
                     stats[table] = 0
             return stats
@@ -723,7 +753,7 @@ class DatabaseManager:
     def get_last_open_real_buy(self, stock_code: str) -> Optional[int]:
         """해당 종목의 미매칭 매수(가장 최근) ID 조회"""
         try:
-            result = self._execute('''
+            row = self._fetchone('''
                 SELECT b.id
                 FROM real_trading_records b
                 WHERE b.stock_code = %s AND b.action = 'BUY'
@@ -734,7 +764,6 @@ class DatabaseManager:
                 ORDER BY b.timestamp DESC
                 LIMIT 1
             ''', (stock_code,))
-            row = result.fetchone()
             return int(row[0]) if row else None
         except Exception as e:
             self.logger.error(f"실거래 미매칭 매수 조회 실패: {e}")
