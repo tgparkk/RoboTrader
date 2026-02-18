@@ -247,9 +247,10 @@ class DayTradingBot:
 
                 # 🚨 장마감 시간 시장가 일괄매도 체크 (한 번만 실행) - 동적 시간 적용
                 if MarketHours.is_eod_liquidation_time('KRX', current_time):
-                    if not hasattr(self, '_eod_liquidation_done'):
+                    today_date = current_time.date()
+                    if self._last_eod_liquidation_date != today_date:
                         await self._execute_end_of_day_liquidation()
-                        self._eod_liquidation_done = True
+                        self._last_eod_liquidation_date = today_date
 
                     # 청산 시간 이후에는 매매 판단 건너뛰고 모니터링만 계속
                     # (장마감 후 데이터 저장을 위해 루프 계속 실행)
