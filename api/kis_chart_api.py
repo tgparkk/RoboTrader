@@ -838,7 +838,7 @@ async def get_full_trading_day_data_async(stock_code: str, target_date: str = ""
                 if isinstance(result, pd.DataFrame) and not result.empty:
                     valid_data_frames.append(result)
                     s, e = needed_segments[i]
-                    logger.debug(f"  ✅ 구간 {s}~{e}: {len(result)}건")
+                    # logger.debug(f"  ✅ 구간 {s}~{e}: {len(result)}건")
 
             if valid_data_frames:
                 combined_df = pd.concat(valid_data_frames, ignore_index=True)

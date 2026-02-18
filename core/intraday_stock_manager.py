@@ -333,7 +333,7 @@ class IntradayStockManager:
                 return None
             elif realtime_data.empty:
                 combined_data = historical_data.copy()
-                self.logger.debug(f"📊 {stock_code} 과거 데이터만 사용: {len(combined_data)}건 (realtime_data 아직 없음)")
+                # self.logger.debug(f"📊 {stock_code} 과거 데이터만 사용: {len(combined_data)}건 (realtime_data 아직 없음)")
                 
                 # 데이터 부족 시 자동 수집 시도
                 if len(combined_data) < 15:

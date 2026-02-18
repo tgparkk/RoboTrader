@@ -263,7 +263,7 @@ class DataCache:
                 return None
 
             df.set_index('idx', inplace=True)
-            self.logger.debug(f"[{stock_code}] DuckDB에서 로드 ({len(df)}개)")
+            # self.logger.debug(f"[{stock_code}] DuckDB에서 로드 ({len(df)}개)")
             return df
 
         except Exception as e:
@@ -607,7 +607,7 @@ class DailyDataCache:
             if df.empty:
                 return None
 
-            self.logger.debug(f"[{stock_code}] 일봉 DuckDB에서 로드 ({len(df)}개)")
+            # self.logger.debug(f"[{stock_code}] 일봉 DuckDB에서 로드 ({len(df)}개)")
             return df
 
         except Exception as e:

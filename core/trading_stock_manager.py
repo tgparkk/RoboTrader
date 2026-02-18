@@ -355,7 +355,7 @@ class TradingStockManager:
     async def _monitor_stock_states(self):
         """종목 상태 모니터링"""
         try:
-            self.logger.debug("🔄 종목 상태 모니터링 실행")
+            # self.logger.debug("🔄 종목 상태 모니터링 실행")
             
             # 주문 완료 확인
             await self._check_order_completions()
