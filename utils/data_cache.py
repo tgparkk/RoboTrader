@@ -1,41 +1,141 @@
 """
 데이터 캐싱 유틸리티
-1분봉 데이터를 DuckDB 기반으로 캐싱하여 관리 편의성 향상
+1분봉/일봉 데이터를 PostgreSQL 기반으로 캐싱하여 관리 편의성 향상
 
-- DuckDB를 기본 저장소로 사용
+- PostgreSQL을 기본 저장소로 사용 (단일 테이블: minute_candles, daily_candles)
+- 기존 DuckDB 파일도 읽기 가능 (폴백, read_only=True)
 - 기존 pkl 파일도 읽기 가능 (호환성 유지)
-- Thread-local 연결 풀링으로 성능 최적화
-- 쓰기 작업은 글로벌 Lock으로 동시성 보호
+- Connection pool 기반 성능 최적화
 """
 import os
 import pickle
 import pandas as pd
-import duckdb
 import threading
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 from utils.logger import setup_logger
 
+# DuckDB 폴백용 (읽기 전용)
+try:
+    import duckdb
+    DUCKDB_AVAILABLE = True
+except ImportError:
+    DUCKDB_AVAILABLE = False
 
-# DuckDB 파일 경로
-DB_PATH = Path(__file__).parent.parent / "cache" / "market_data_v2.duckdb"
+# DuckDB 파일 경로 (폴백 읽기용)
+DUCKDB_PATH = Path(__file__).parent.parent / "cache" / "market_data_v2.duckdb"
 
-# 글로벌 쓰기 Lock (DuckDB는 단일 Writer만 허용)
-_write_lock = threading.Lock()
+# PostgreSQL connection pool
+import psycopg2
+import psycopg2.extras
+import psycopg2.pool
+
+_pg_pool = None
+_pg_pool_lock = threading.Lock()
+
+
+def _get_pg_pool():
+    """PostgreSQL connection pool 획득 (싱글톤)"""
+    global _pg_pool
+    if _pg_pool is None or _pg_pool.closed:
+        with _pg_pool_lock:
+            if _pg_pool is None or _pg_pool.closed:
+                from config.settings import PG_HOST, PG_PORT, PG_DATABASE, PG_USER, PG_PASSWORD
+                _pg_pool = psycopg2.pool.SimpleConnectionPool(
+                    minconn=1,
+                    maxconn=5,
+                    host=PG_HOST,
+                    port=PG_PORT,
+                    database=PG_DATABASE,
+                    user=PG_USER,
+                    password=PG_PASSWORD,
+                    connect_timeout=10,
+                )
+    return _pg_pool
+
+
+def _ensure_cache_tables():
+    """캐시 테이블 생성 (최초 1회)"""
+    pool = _get_pg_pool()
+    conn = pool.getconn()
+    try:
+        cur = conn.cursor()
+
+        # 분봉 캐시 테이블 (단일 테이블)
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS minute_candles (
+                stock_code VARCHAR NOT NULL,
+                trade_date VARCHAR NOT NULL,
+                idx INTEGER NOT NULL,
+                date VARCHAR,
+                time VARCHAR,
+                close DOUBLE PRECISION,
+                open DOUBLE PRECISION,
+                high DOUBLE PRECISION,
+                low DOUBLE PRECISION,
+                volume DOUBLE PRECISION,
+                amount DOUBLE PRECISION,
+                datetime TIMESTAMP,
+                PRIMARY KEY (stock_code, trade_date, idx)
+            )
+        ''')
+        cur.execute('CREATE INDEX IF NOT EXISTS idx_minute_candles_code_date ON minute_candles(stock_code, trade_date)')
+
+        # 일봉 캐시 테이블 (단일 테이블)
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS daily_candles (
+                stock_code VARCHAR NOT NULL,
+                stck_bsop_date VARCHAR NOT NULL,
+                stck_clpr VARCHAR,
+                stck_oprc VARCHAR,
+                stck_hgpr VARCHAR,
+                stck_lwpr VARCHAR,
+                acml_vol VARCHAR,
+                acml_tr_pbmn VARCHAR,
+                flng_cls_code VARCHAR,
+                prtt_rate VARCHAR,
+                mod_yn VARCHAR,
+                prdy_vrss_sign VARCHAR,
+                prdy_vrss VARCHAR,
+                revl_issu_reas VARCHAR,
+                PRIMARY KEY (stock_code, stck_bsop_date)
+            )
+        ''')
+        cur.execute('CREATE INDEX IF NOT EXISTS idx_daily_candles_code ON daily_candles(stock_code)')
+
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        pool.putconn(conn)
+
+
+# 초기화 플래그
+_tables_ensured = False
+_tables_lock = threading.Lock()
+
+
+def _ensure_tables_once():
+    """테이블 생성 1회만 실행"""
+    global _tables_ensured
+    if not _tables_ensured:
+        with _tables_lock:
+            if not _tables_ensured:
+                _ensure_cache_tables()
+                _tables_ensured = True
 
 
 class DataCache:
-    """DuckDB 기반 데이터 캐시 관리자
+    """PostgreSQL 기반 분봉 데이터 캐시 관리자
 
-    - 기본적으로 DuckDB에서 데이터를 읽고 씀
-    - DuckDB에 데이터가 없으면 pkl 파일에서 폴백 로드 (호환성)
-    - Thread-local 연결 풀링으로 성능 최적화
+    - 기본적으로 PostgreSQL에서 데이터를 읽고 씀
+    - PostgreSQL에 데이터가 없으면 DuckDB → pkl 순으로 폴백 로드
     """
 
-    # 스레드별 DuckDB 연결 저장소
+    # DuckDB 폴백용 스레드별 연결 (읽기 전용)
     _thread_local = threading.local()
-    # 모든 스레드의 read-only 연결 추적 (쓰기 전 일괄 닫기용)
     _all_connections = []
     _connections_lock = threading.Lock()
 
@@ -43,37 +143,24 @@ class DataCache:
         self.logger = setup_logger(__name__)
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.use_duckdb = use_duckdb and DB_PATH.exists()
+        self.use_duckdb_fallback = use_duckdb and DUCKDB_AVAILABLE and DUCKDB_PATH.exists()
 
-        if self.use_duckdb:
-            self._init_db()
+        _ensure_tables_once()
 
-    def _init_db(self):
-        """DuckDB 연결 확인 (종목별 테이블 구조 사용)"""
-        try:
-            con = duckdb.connect(str(DB_PATH), read_only=True)
-            con.close()
-        except Exception as e:
-            self.logger.warning(f"DuckDB 초기화 실패, pkl 모드로 전환: {e}")
-            self.use_duckdb = False
-
-    def _get_connection(self):
-        """스레드별 DuckDB 연결 반환 (재사용)
-
-        각 스레드마다 하나의 연결을 유지하여 연결 생성 오버헤드 제거
-        닫힌 연결은 자동 재생성
-        """
+    def _get_duckdb_connection(self):
+        """DuckDB 폴백 읽기 전용 연결 (스레드별)"""
+        if not self.use_duckdb_fallback:
+            return None
         if not hasattr(self._thread_local, 'connection') or self._thread_local.connection is None:
-            conn = duckdb.connect(str(DB_PATH), read_only=True)
+            conn = duckdb.connect(str(DUCKDB_PATH), read_only=True)
             self._thread_local.connection = conn
             with DataCache._connections_lock:
                 DataCache._all_connections.append(conn)
         else:
-            # 닫힌 연결 감지 시 재생성
             try:
                 self._thread_local.connection.execute("SELECT 1")
             except Exception:
-                conn = duckdb.connect(str(DB_PATH), read_only=True)
+                conn = duckdb.connect(str(DUCKDB_PATH), read_only=True)
                 self._thread_local.connection = conn
                 with DataCache._connections_lock:
                     DataCache._all_connections.append(conn)
@@ -81,7 +168,7 @@ class DataCache:
 
     @classmethod
     def close_all_connections(cls):
-        """모든 스레드의 read-only 연결 닫기 (DuckDB 쓰기 전 호출 필수)"""
+        """모든 DuckDB 폴백 연결 닫기"""
         with cls._connections_lock:
             for conn in cls._all_connections:
                 try:
@@ -89,58 +176,45 @@ class DataCache:
                 except Exception:
                     pass
             cls._all_connections.clear()
-        # 현재 스레드의 참조도 정리
         if hasattr(cls._thread_local, 'connection'):
             cls._thread_local.connection = None
-
-    def _get_table_name(self, stock_code: str) -> str:
-        """종목별 테이블명 생성"""
-        return f"minute_{stock_code}"
-
-    def _create_table_if_not_exists(self, con: duckdb.DuckDBPyConnection, stock_code: str):
-        """종목별 테이블 생성"""
-        table_name = self._get_table_name(stock_code)
-        con.execute(f"""
-            CREATE TABLE IF NOT EXISTS {table_name} (
-                trade_date VARCHAR NOT NULL,
-                idx INTEGER NOT NULL,
-                date VARCHAR,
-                time VARCHAR,
-                close DOUBLE,
-                open DOUBLE,
-                high DOUBLE,
-                low DOUBLE,
-                volume DOUBLE,
-                amount DOUBLE,
-                datetime TIMESTAMP,
-                PRIMARY KEY (trade_date, idx)
-            )
-        """)
-        con.execute(f"CREATE INDEX IF NOT EXISTS idx_{table_name}_date ON {table_name}(trade_date)")
 
     def _get_cache_file(self, stock_code: str, date_str: str) -> Path:
         """캐시 파일 경로 생성 (pkl 폴백용)"""
         return self.cache_dir / f"{stock_code}_{date_str}.pkl"
 
     def has_data(self, stock_code: str, date_str: str) -> bool:
-        """캐시된 데이터 존재 여부 확인 - 연결 풀링 사용"""
-        if self.use_duckdb:
+        """캐시된 데이터 존재 여부 확인"""
+        # PostgreSQL 확인
+        try:
+            pool = _get_pg_pool()
+            conn = pool.getconn()
             try:
-                table_name = self._get_table_name(stock_code)
-                con = self._get_connection()  # 재사용되는 연결
-                # 테이블 존재 여부 확인
-                tables = con.execute("SELECT table_name FROM information_schema.tables WHERE table_name = ?", [table_name]).fetchall()
-                if not tables:
-                    return False
-
-                count = con.execute(f"""
-                    SELECT COUNT(*) FROM {table_name}
-                    WHERE trade_date = ?
-                """, [date_str]).fetchone()[0]
-                # con.close() 제거 - 연결 유지
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT COUNT(*) FROM minute_candles WHERE stock_code = %s AND trade_date = %s",
+                    (stock_code, date_str)
+                )
+                count = cur.fetchone()[0]
                 if count > 0:
                     return True
-            except:
+            finally:
+                pool.putconn(conn)
+        except Exception:
+            pass
+
+        # DuckDB 폴백
+        if self.use_duckdb_fallback:
+            try:
+                table_name = f"minute_{stock_code}"
+                con = self._get_duckdb_connection()
+                if con:
+                    tables = con.execute("SELECT table_name FROM information_schema.tables WHERE table_name = ?", [table_name]).fetchall()
+                    if tables:
+                        count = con.execute(f"SELECT COUNT(*) FROM {table_name} WHERE trade_date = ?", [date_str]).fetchone()[0]
+                        if count > 0:
+                            return True
+            except Exception:
                 pass
 
         # pkl 폴백
@@ -148,73 +222,74 @@ class DataCache:
         return cache_file.exists()
 
     def save_data(self, stock_code: str, date_str: str, df_minute: pd.DataFrame) -> bool:
-        """1분봉 데이터를 DuckDB에 저장"""
+        """1분봉 데이터를 PostgreSQL에 저장"""
         try:
             if df_minute is None or df_minute.empty:
                 return True
 
-            if self.use_duckdb:
-                return self._save_to_duckdb(stock_code, date_str, df_minute)
-            else:
-                return self._save_to_pkl(stock_code, date_str, df_minute)
+            return self._save_to_pg(stock_code, date_str, df_minute)
 
         except Exception as e:
             self.logger.error(f"캐시 저장 실패 ({stock_code}, {date_str}): {e}")
             return False
 
-    def _save_to_duckdb(self, stock_code: str, date_str: str, df_minute: pd.DataFrame) -> bool:
-        """DuckDB에 저장 (종목별 테이블) - 글로벌 Lock으로 동시성 보호"""
-        # 글로벌 Lock 획득 (DuckDB는 단일 Writer만 허용)
-        with _write_lock:
-            try:
-                # read-only 연결 정리 (DuckDB는 같은 파일에 다른 config 동시 연결 불허)
-                DataCache.close_all_connections()
-                DailyDataCache.close_all_connections()
+    def _save_to_pg(self, stock_code: str, date_str: str, df_minute: pd.DataFrame) -> bool:
+        """PostgreSQL에 저장"""
+        pool = _get_pg_pool()
+        conn = pool.getconn()
+        try:
+            cur = conn.cursor()
 
-                table_name = self._get_table_name(stock_code)
-                con = duckdb.connect(str(DB_PATH))
+            # 기존 데이터 삭제
+            cur.execute("DELETE FROM minute_candles WHERE stock_code = %s AND trade_date = %s",
+                        (stock_code, date_str))
 
-                # WAL 모드 활성화 (동시 읽기 성능 향상)
-                try:
-                    con.execute("PRAGMA wal_autocheckpoint=1000")
-                except:
-                    pass  # DuckDB 버전에 따라 지원 안될 수 있음
+            # DataFrame 준비
+            df_to_save = df_minute.copy().reset_index(drop=True)
 
-                # 테이블 생성 (없으면)
-                self._create_table_if_not_exists(con, stock_code)
+            rows = []
+            for idx, row in df_to_save.iterrows():
+                dt_val = row.get('datetime', None)
+                if dt_val is not None and hasattr(dt_val, 'strftime'):
+                    dt_str = dt_val.strftime('%Y-%m-%d %H:%M:%S')
+                else:
+                    dt_str = str(dt_val) if dt_val is not None else None
 
-                # DataFrame 준비 (인덱스 리셋으로 중복 방지)
-                df_to_save = df_minute.copy().reset_index(drop=True)
-                df_to_save['trade_date'] = date_str
-                df_to_save['idx'] = range(len(df_to_save))
+                rows.append((
+                    stock_code,
+                    date_str,
+                    int(idx),
+                    str(row.get('date', '')) if pd.notna(row.get('date', None)) else None,
+                    str(row.get('time', '')) if pd.notna(row.get('time', None)) else None,
+                    float(row.get('close', 0)) if pd.notna(row.get('close', 0)) else 0,
+                    float(row.get('open', 0)) if pd.notna(row.get('open', 0)) else 0,
+                    float(row.get('high', 0)) if pd.notna(row.get('high', 0)) else 0,
+                    float(row.get('low', 0)) if pd.notna(row.get('low', 0)) else 0,
+                    float(row.get('volume', 0)) if pd.notna(row.get('volume', 0)) else 0,
+                    float(row.get('amount', 0)) if pd.notna(row.get('amount', 0)) else 0,
+                    dt_str,
+                ))
 
-                # 트랜잭션으로 DELETE + INSERT 원자적 실행
-                con.execute("BEGIN TRANSACTION")
-                try:
-                    # 기존 데이터 삭제
-                    con.execute(f"""
-                        DELETE FROM {table_name} WHERE trade_date = ?
-                    """, [date_str])
+            if rows:
+                psycopg2.extras.execute_batch(
+                    cur,
+                    '''INSERT INTO minute_candles
+                    (stock_code, trade_date, idx, date, time, close, open, high, low, volume, amount, datetime)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
+                    rows,
+                    page_size=500,
+                )
 
-                    # 삽입
-                    con.execute(f"""
-                        INSERT INTO {table_name}
-                        SELECT trade_date, idx, date, time, close, open, high, low, volume, amount, datetime
-                        FROM df_to_save
-                    """)
-                    con.execute("COMMIT")
-                except Exception as inner_e:
-                    con.execute("ROLLBACK")
-                    raise inner_e
-                finally:
-                    con.close()
+            conn.commit()
+            self.logger.debug(f"[{stock_code}] PG 저장 완료 ({len(df_minute)}개)")
+            return True
 
-                self.logger.debug(f"[{stock_code}] DuckDB 저장 완료 ({len(df_minute)}개)")
-                return True
-
-            except Exception as e:
-                self.logger.warning(f"DuckDB 저장 실패, pkl로 폴백: {e}")
-                return self._save_to_pkl(stock_code, date_str, df_minute)
+        except Exception as e:
+            conn.rollback()
+            self.logger.warning(f"PG 저장 실패, pkl로 폴백: {e}")
+            return self._save_to_pkl(stock_code, date_str, df_minute)
+        finally:
+            pool.putconn(conn)
 
     def _save_to_pkl(self, stock_code: str, date_str: str, df_minute: pd.DataFrame) -> bool:
         """pkl 파일로 저장 (폴백)"""
@@ -227,8 +302,13 @@ class DataCache:
     def load_data(self, stock_code: str, date_str: str) -> Optional[pd.DataFrame]:
         """캐시된 1분봉 데이터 로드"""
         try:
-            # DuckDB에서 먼저 시도
-            if self.use_duckdb:
+            # PostgreSQL 먼저
+            df = self._load_from_pg(stock_code, date_str)
+            if df is not None:
+                return df
+
+            # DuckDB 폴백
+            if self.use_duckdb_fallback:
                 df = self._load_from_duckdb(stock_code, date_str)
                 if df is not None:
                     return df
@@ -240,13 +320,41 @@ class DataCache:
             self.logger.error(f"캐시 로드 실패 ({stock_code}, {date_str}): {e}")
             return None
 
-    def _load_from_duckdb(self, stock_code: str, date_str: str) -> Optional[pd.DataFrame]:
-        """DuckDB에서 로드 (종목별 테이블) - 연결 풀링 사용"""
+    def _load_from_pg(self, stock_code: str, date_str: str) -> Optional[pd.DataFrame]:
+        """PostgreSQL에서 로드"""
         try:
-            table_name = self._get_table_name(stock_code)
-            con = self._get_connection()  # 재사용되는 연결
+            pool = _get_pg_pool()
+            conn = pool.getconn()
+            try:
+                df = pd.read_sql_query(
+                    '''SELECT idx, date, time, close, open, high, low, volume, amount, datetime
+                    FROM minute_candles
+                    WHERE stock_code = %s AND trade_date = %s
+                    ORDER BY idx''',
+                    conn,
+                    params=(stock_code, date_str)
+                )
 
-            # 테이블 존재 여부 확인
+                if df.empty:
+                    return None
+
+                df.set_index('idx', inplace=True)
+                self.logger.debug(f"[{stock_code}] PG에서 로드 ({len(df)}개)")
+                return df
+            finally:
+                pool.putconn(conn)
+        except Exception as e:
+            self.logger.debug(f"PG 로드 실패: {e}")
+            return None
+
+    def _load_from_duckdb(self, stock_code: str, date_str: str) -> Optional[pd.DataFrame]:
+        """DuckDB에서 로드 (폴백, 읽기전용)"""
+        try:
+            table_name = f"minute_{stock_code}"
+            con = self._get_duckdb_connection()
+            if con is None:
+                return None
+
             tables = con.execute("SELECT table_name FROM information_schema.tables WHERE table_name = ?", [table_name]).fetchall()
             if not tables:
                 return None
@@ -257,7 +365,6 @@ class DataCache:
                 WHERE trade_date = ?
                 ORDER BY idx
             """, [date_str]).fetchdf()
-            # con.close() 제거 - 연결 유지
 
             if df.empty:
                 return None
@@ -284,33 +391,28 @@ class DataCache:
         return df_minute
 
     def clear_cache(self, stock_code: str = None, date_str: str = None):
-        """캐시 정리 (종목별 테이블) - 글로벌 Lock으로 동시성 보호"""
+        """캐시 정리"""
         try:
-            if self.use_duckdb:
-                with _write_lock:
-                    con = duckdb.connect(str(DB_PATH))
-                    try:
-                        if stock_code and date_str:
-                            table_name = self._get_table_name(stock_code)
-                            # 테이블 존재 여부 확인
-                            tables = con.execute("SELECT table_name FROM information_schema.tables WHERE table_name = ?", [table_name]).fetchall()
-                            if tables:
-                                con.execute(f"DELETE FROM {table_name} WHERE trade_date = ?", [date_str])
-                            self.logger.info(f"DuckDB 데이터 삭제: {stock_code}_{date_str}")
-                        elif stock_code:
-                            table_name = self._get_table_name(stock_code)
-                            tables = con.execute("SELECT table_name FROM information_schema.tables WHERE table_name = ?", [table_name]).fetchall()
-                            if tables:
-                                con.execute(f"DROP TABLE {table_name}")
-                            self.logger.info(f"DuckDB 테이블 삭제: {table_name}")
-                        else:
-                            # 모든 minute_ 테이블 삭제
-                            tables = con.execute("SELECT table_name FROM information_schema.tables WHERE table_name LIKE 'minute_%'").fetchall()
-                            for (table_name,) in tables:
-                                con.execute(f"DROP TABLE {table_name}")
-                            self.logger.info(f"DuckDB 전체 분봉 테이블 삭제 ({len(tables)}개)")
-                    finally:
-                        con.close()
+            pool = _get_pg_pool()
+            conn = pool.getconn()
+            try:
+                cur = conn.cursor()
+                if stock_code and date_str:
+                    cur.execute("DELETE FROM minute_candles WHERE stock_code = %s AND trade_date = %s",
+                                (stock_code, date_str))
+                    self.logger.info(f"PG 데이터 삭제: {stock_code}_{date_str}")
+                elif stock_code:
+                    cur.execute("DELETE FROM minute_candles WHERE stock_code = %s", (stock_code,))
+                    self.logger.info(f"PG 종목 데이터 삭제: {stock_code}")
+                else:
+                    cur.execute("DELETE FROM minute_candles")
+                    self.logger.info("PG 전체 분봉 데이터 삭제")
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                pool.putconn(conn)
 
             # pkl 파일도 삭제
             if stock_code and date_str:
@@ -326,39 +428,26 @@ class DataCache:
             self.logger.error(f"캐시 정리 실패: {e}")
 
     def get_cache_size(self) -> dict:
-        """캐시 크기 정보 (종목별 테이블)"""
+        """캐시 크기 정보"""
         try:
             result = {
                 'total_tables': 0,
                 'total_records': 0,
                 'total_size_mb': 0,
                 'cache_dir': str(self.cache_dir),
-                'storage': 'unknown'
+                'storage': 'postgresql'
             }
 
-            if self.use_duckdb and DB_PATH.exists():
-                con = self._get_connection()  # 재사용되는 연결
-                # 분봉 테이블 수
-                tables = con.execute("SELECT table_name FROM information_schema.tables WHERE table_name LIKE 'minute_%'").fetchall()
-                result['total_tables'] = len(tables)
-
-                # 전체 레코드 수 (샘플링으로 추정)
-                total_records = 0
-                for (table_name,) in tables[:10]:  # 샘플 10개로 추정
-                    count = con.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
-                    total_records += count
-                if tables:
-                    result['total_records'] = int(total_records * len(tables) / min(10, len(tables)))
-
-                # con.close() 제거 - 연결 유지
-                result['total_size_mb'] = round(DB_PATH.stat().st_size / (1024 * 1024), 2)
-                result['storage'] = 'duckdb'
-            else:
-                for cache_file in self.cache_dir.glob("*.pkl"):
-                    result['total_tables'] += 1
-                    result['total_size_mb'] += cache_file.stat().st_size / (1024 * 1024)
-                result['total_size_mb'] = round(result['total_size_mb'], 2)
-                result['storage'] = 'pkl'
+            pool = _get_pg_pool()
+            conn = pool.getconn()
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT COUNT(DISTINCT stock_code) FROM minute_candles")
+                result['total_tables'] = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) FROM minute_candles")
+                result['total_records'] = cur.fetchone()[0]
+            finally:
+                pool.putconn(conn)
 
             return result
 
@@ -371,26 +460,19 @@ class DataCache:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context Manager 종료 - 스레드 로컬 연결 정리"""
-        if hasattr(self._thread_local, 'connection') and self._thread_local.connection is not None:
-            try:
-                self._thread_local.connection.close()
-                self._thread_local.connection = None
-            except Exception as e:
-                self.logger.warning(f"연결 정리 실패: {e}")
+        """Context Manager 종료"""
+        pass
 
 
 class DailyDataCache:
-    """DuckDB 기반 일봉 데이터 캐시 관리자
+    """PostgreSQL 기반 일봉 데이터 캐시 관리자
 
-    - 기본적으로 DuckDB에서 데이터를 읽고 씀
-    - DuckDB에 데이터가 없으면 pkl 파일에서 폴백 로드 (호환성)
-    - Thread-local 연결 풀링으로 성능 최적화
+    - 기본적으로 PostgreSQL에서 데이터를 읽고 씀
+    - DuckDB/pkl 폴백 지원
     """
 
-    # 스레드별 DuckDB 연결 저장소
+    # DuckDB 폴백용
     _thread_local = threading.local()
-    # 모든 스레드의 read-only 연결 추적 (쓰기 전 일괄 닫기용)
     _all_connections = []
     _connections_lock = threading.Lock()
 
@@ -398,25 +480,24 @@ class DailyDataCache:
         self.logger = setup_logger(__name__)
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.use_duckdb = use_duckdb and DB_PATH.exists()
+        self.use_duckdb_fallback = use_duckdb and DUCKDB_AVAILABLE and DUCKDB_PATH.exists()
 
-    def _get_connection(self):
-        """스레드별 DuckDB 연결 반환 (재사용)
+        _ensure_tables_once()
 
-        각 스레드마다 하나의 연결을 유지하여 연결 생성 오버헤드 제거
-        닫힌 연결은 자동 재생성
-        """
+    def _get_duckdb_connection(self):
+        """DuckDB 폴백 읽기 전용 연결 (스레드별)"""
+        if not self.use_duckdb_fallback:
+            return None
         if not hasattr(self._thread_local, 'connection') or self._thread_local.connection is None:
-            conn = duckdb.connect(str(DB_PATH), read_only=True)
+            conn = duckdb.connect(str(DUCKDB_PATH), read_only=True)
             self._thread_local.connection = conn
             with DailyDataCache._connections_lock:
                 DailyDataCache._all_connections.append(conn)
         else:
-            # 닫힌 연결 감지 시 재생성
             try:
                 self._thread_local.connection.execute("SELECT 1")
             except Exception:
-                conn = duckdb.connect(str(DB_PATH), read_only=True)
+                conn = duckdb.connect(str(DUCKDB_PATH), read_only=True)
                 self._thread_local.connection = conn
                 with DailyDataCache._connections_lock:
                     DailyDataCache._all_connections.append(conn)
@@ -424,7 +505,7 @@ class DailyDataCache:
 
     @classmethod
     def close_all_connections(cls):
-        """모든 스레드의 read-only 연결 닫기 (DuckDB 쓰기 전 호출 필수)"""
+        """모든 DuckDB 폴백 연결 닫기"""
         with cls._connections_lock:
             for conn in cls._all_connections:
                 try:
@@ -432,177 +513,190 @@ class DailyDataCache:
                 except Exception:
                     pass
             cls._all_connections.clear()
-        # 현재 스레드의 참조도 정리
         if hasattr(cls._thread_local, 'connection'):
             cls._thread_local.connection = None
-
-    def _get_table_name(self, stock_code: str) -> str:
-        """종목별 테이블명 생성"""
-        return f"daily_{stock_code}"
-
-    def _create_table_if_not_exists(self, con: duckdb.DuckDBPyConnection, stock_code: str):
-        """종목별 일봉 테이블 생성"""
-        table_name = self._get_table_name(stock_code)
-        con.execute(f"""
-            CREATE TABLE IF NOT EXISTS {table_name} (
-                stck_bsop_date VARCHAR PRIMARY KEY,
-                stck_clpr VARCHAR,
-                stck_oprc VARCHAR,
-                stck_hgpr VARCHAR,
-                stck_lwpr VARCHAR,
-                acml_vol VARCHAR,
-                acml_tr_pbmn VARCHAR,
-                flng_cls_code VARCHAR,
-                prtt_rate VARCHAR,
-                mod_yn VARCHAR,
-                prdy_vrss_sign VARCHAR,
-                prdy_vrss VARCHAR,
-                revl_issu_reas VARCHAR
-            )
-        """)
 
     def _get_cache_file(self, stock_code: str, date_str: str) -> Path:
         """캐시 파일 경로 생성 (pkl 폴백용)"""
         return self.cache_dir / f"{stock_code}_{date_str}_daily.pkl"
 
     def has_data(self, stock_code: str, min_records: int = 50) -> bool:
-        """캐시된 일봉 데이터 존재 여부 확인 (최소 레코드 수 기준) - 연결 풀링 사용"""
-        if self.use_duckdb:
+        """캐시된 일봉 데이터 존재 여부 확인 (최소 레코드 수 기준)"""
+        # PostgreSQL 확인
+        try:
+            pool = _get_pg_pool()
+            conn = pool.getconn()
             try:
-                table_name = self._get_table_name(stock_code)
-                con = self._get_connection()  # 재사용되는 연결
-                tables = con.execute("SELECT table_name FROM information_schema.tables WHERE table_name = ?", [table_name]).fetchall()
-                if not tables:
-                    return False
-
-                count = con.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
-                # con.close() 제거 - 연결 유지
+                cur = conn.cursor()
+                cur.execute("SELECT COUNT(*) FROM daily_candles WHERE stock_code = %s", (stock_code,))
+                count = cur.fetchone()[0]
                 if count >= min_records:
                     return True
-            except:
+            finally:
+                pool.putconn(conn)
+        except Exception:
+            pass
+
+        # DuckDB 폴백
+        if self.use_duckdb_fallback:
+            try:
+                table_name = f"daily_{stock_code}"
+                con = self._get_duckdb_connection()
+                if con:
+                    tables = con.execute("SELECT table_name FROM information_schema.tables WHERE table_name = ?", [table_name]).fetchall()
+                    if tables:
+                        count = con.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+                        if count >= min_records:
+                            return True
+            except Exception:
                 pass
+
         return False
 
     def save_data(self, stock_code: str, df_daily: pd.DataFrame) -> bool:
-        """일봉 데이터를 DuckDB에 저장 (전체 교체)"""
+        """일봉 데이터를 PostgreSQL에 저장"""
         try:
             if df_daily is None or df_daily.empty:
                 return True
 
-            if self.use_duckdb:
-                return self._save_to_duckdb(stock_code, df_daily)
-            else:
-                return self._save_to_pkl(stock_code, df_daily)
+            return self._save_to_pg(stock_code, df_daily)
 
         except Exception as e:
             self.logger.error(f"일봉 캐시 저장 실패 ({stock_code}): {e}")
             return False
 
-    def _save_to_duckdb(self, stock_code: str, df_daily: pd.DataFrame) -> bool:
-        """DuckDB에 저장 (종목별 테이블) - 글로벌 Lock으로 동시성 보호"""
-        # 글로벌 Lock 획득 (DuckDB는 단일 Writer만 허용)
-        with _write_lock:
-            try:
-                # read-only 연결 정리 (DuckDB는 같은 파일에 다른 config 동시 연결 불허)
-                DataCache.close_all_connections()
-                DailyDataCache.close_all_connections()
+    def _save_to_pg(self, stock_code: str, df_daily: pd.DataFrame) -> bool:
+        """PostgreSQL에 저장"""
+        pool = _get_pg_pool()
+        conn = pool.getconn()
+        try:
+            cur = conn.cursor()
 
-                table_name = self._get_table_name(stock_code)
-                con = duckdb.connect(str(DB_PATH))
+            cols = ['stck_bsop_date', 'stck_clpr', 'stck_oprc', 'stck_hgpr', 'stck_lwpr',
+                    'acml_vol', 'acml_tr_pbmn', 'flng_cls_code', 'prtt_rate', 'mod_yn',
+                    'prdy_vrss_sign', 'prdy_vrss', 'revl_issu_reas']
 
-                # WAL 모드 활성화 (동시 읽기 성능 향상)
-                try:
-                    con.execute("PRAGMA wal_autocheckpoint=1000")
-                except:
-                    pass  # DuckDB 버전에 따라 지원 안될 수 있음
+            df_to_save = df_daily.copy()
+            for col in cols:
+                if col not in df_to_save.columns:
+                    df_to_save[col] = ''
 
-                # 테이블 생성 (없으면)
-                self._create_table_if_not_exists(con, stock_code)
+            rows = []
+            dates = []
+            for _, row in df_to_save.iterrows():
+                date_val = str(row.get('stck_bsop_date', ''))
+                if not date_val:
+                    continue
+                dates.append(date_val)
+                rows.append((
+                    stock_code,
+                    date_val,
+                    str(row.get('stck_clpr', '')),
+                    str(row.get('stck_oprc', '')),
+                    str(row.get('stck_hgpr', '')),
+                    str(row.get('stck_lwpr', '')),
+                    str(row.get('acml_vol', '')),
+                    str(row.get('acml_tr_pbmn', '')),
+                    str(row.get('flng_cls_code', '')),
+                    str(row.get('prtt_rate', '')),
+                    str(row.get('mod_yn', '')),
+                    str(row.get('prdy_vrss_sign', '')),
+                    str(row.get('prdy_vrss', '')),
+                    str(row.get('revl_issu_reas', '')),
+                ))
 
-                # DataFrame에서 필요한 컬럼만 선택
-                cols = ['stck_bsop_date', 'stck_clpr', 'stck_oprc', 'stck_hgpr', 'stck_lwpr',
-                        'acml_vol', 'acml_tr_pbmn', 'flng_cls_code', 'prtt_rate', 'mod_yn',
-                        'prdy_vrss_sign', 'prdy_vrss', 'revl_issu_reas']
+            if rows:
+                # 기존 날짜 데이터 삭제
+                if dates:
+                    cur.execute(
+                        "DELETE FROM daily_candles WHERE stock_code = %s AND stck_bsop_date = ANY(%s)",
+                        (stock_code, dates)
+                    )
 
-                df_to_save = df_daily.copy()
-                # 없는 컬럼은 빈 문자열로 추가
-                for col in cols:
-                    if col not in df_to_save.columns:
-                        df_to_save[col] = ''
+                psycopg2.extras.execute_batch(
+                    cur,
+                    '''INSERT INTO daily_candles
+                    (stock_code, stck_bsop_date, stck_clpr, stck_oprc, stck_hgpr, stck_lwpr,
+                     acml_vol, acml_tr_pbmn, flng_cls_code, prtt_rate, mod_yn,
+                     prdy_vrss_sign, prdy_vrss, revl_issu_reas)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
+                    rows,
+                    page_size=500,
+                )
 
-                # 트랜잭션으로 MERGE (중복 제거 + 과거 데이터 보존)
-                con.execute("BEGIN TRANSACTION")
-                try:
-                    # 기존 날짜 데이터는 삭제 (업데이트)
-                    con.execute(f"""
-                        DELETE FROM {table_name}
-                        WHERE stck_bsop_date IN (
-                            SELECT DISTINCT stck_bsop_date FROM df_to_save
-                        )
-                    """)
+            conn.commit()
+            self.logger.debug(f"[{stock_code}] 일봉 PG 저장 완료 ({len(df_daily)}개)")
+            return True
 
-                    # 신규 데이터 삽입
-                    con.execute(f"""
-                        INSERT INTO {table_name}
-                        SELECT stck_bsop_date, stck_clpr, stck_oprc, stck_hgpr, stck_lwpr,
-                               acml_vol, acml_tr_pbmn, flng_cls_code, prtt_rate, mod_yn,
-                               prdy_vrss_sign, prdy_vrss, revl_issu_reas
-                        FROM df_to_save
-                    """)
-                    con.execute("COMMIT")
-                except Exception as inner_e:
-                    con.execute("ROLLBACK")
-                    raise inner_e
-                finally:
-                    con.close()
-
-                self.logger.debug(f"[{stock_code}] 일봉 DuckDB 저장 완료 ({len(df_daily)}개)")
-                return True
-
-            except Exception as e:
-                self.logger.warning(f"일봉 DuckDB 저장 실패: {e}")
-                return False
-
-    def _save_to_pkl(self, stock_code: str, df_daily: pd.DataFrame) -> bool:
-        """pkl 파일로 저장 (폴백)"""
-        from datetime import datetime
-        date_str = datetime.now().strftime('%Y%m%d')
-        cache_file = self._get_cache_file(stock_code, date_str)
-        with open(cache_file, 'wb') as f:
-            pickle.dump(df_daily, f, protocol=pickle.HIGHEST_PROTOCOL)
-        self.logger.debug(f"[{stock_code}] 일봉 pkl 저장 완료 ({len(df_daily)}개)")
-        return True
+        except Exception as e:
+            conn.rollback()
+            self.logger.warning(f"일봉 PG 저장 실패: {e}")
+            return False
+        finally:
+            pool.putconn(conn)
 
     def load_data(self, stock_code: str) -> Optional[pd.DataFrame]:
         """캐시된 일봉 데이터 로드"""
         try:
-            if self.use_duckdb:
+            # PostgreSQL 먼저
+            df = self._load_from_pg(stock_code)
+            if df is not None:
+                return df
+
+            # DuckDB 폴백
+            if self.use_duckdb_fallback:
                 df = self._load_from_duckdb(stock_code)
                 if df is not None:
                     return df
 
-            # pkl 폴백 (최신 파일 찾기)
+            # pkl 폴백
             return self._load_from_pkl(stock_code)
 
         except Exception as e:
             self.logger.error(f"일봉 캐시 로드 실패 ({stock_code}): {e}")
             return None
 
-    def _load_from_duckdb(self, stock_code: str) -> Optional[pd.DataFrame]:
-        """DuckDB에서 로드 - 연결 풀링 사용"""
+    def _load_from_pg(self, stock_code: str) -> Optional[pd.DataFrame]:
+        """PostgreSQL에서 로드"""
         try:
-            table_name = self._get_table_name(stock_code)
-            con = self._get_connection()  # 재사용되는 연결
+            pool = _get_pg_pool()
+            conn = pool.getconn()
+            try:
+                df = pd.read_sql_query(
+                    '''SELECT stck_bsop_date, stck_clpr, stck_oprc, stck_hgpr, stck_lwpr,
+                              acml_vol, acml_tr_pbmn, flng_cls_code, prtt_rate, mod_yn,
+                              prdy_vrss_sign, prdy_vrss, revl_issu_reas
+                    FROM daily_candles
+                    WHERE stock_code = %s
+                    ORDER BY stck_bsop_date''',
+                    conn,
+                    params=(stock_code,)
+                )
+
+                if df.empty:
+                    return None
+
+                self.logger.debug(f"[{stock_code}] 일봉 PG에서 로드 ({len(df)}개)")
+                return df
+            finally:
+                pool.putconn(conn)
+        except Exception as e:
+            self.logger.debug(f"일봉 PG 로드 실패: {e}")
+            return None
+
+    def _load_from_duckdb(self, stock_code: str) -> Optional[pd.DataFrame]:
+        """DuckDB에서 로드 (폴백, 읽기전용)"""
+        try:
+            table_name = f"daily_{stock_code}"
+            con = self._get_duckdb_connection()
+            if con is None:
+                return None
 
             tables = con.execute("SELECT table_name FROM information_schema.tables WHERE table_name = ?", [table_name]).fetchall()
             if not tables:
                 return None
 
-            df = con.execute(f"""
-                SELECT * FROM {table_name}
-                ORDER BY stck_bsop_date
-            """).fetchdf()
-            # con.close() 제거 - 연결 유지
+            df = con.execute(f"SELECT * FROM {table_name} ORDER BY stck_bsop_date").fetchdf()
 
             if df.empty:
                 return None
@@ -620,7 +714,6 @@ class DailyDataCache:
         if not pkl_files:
             return None
 
-        # 가장 최신 파일 선택
         latest_file = max(pkl_files, key=lambda f: f.stat().st_mtime)
         with open(latest_file, 'rb') as f:
             df_daily = pickle.load(f)
@@ -633,10 +726,5 @@ class DailyDataCache:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context Manager 종료 - 스레드 로컬 연결 정리"""
-        if hasattr(self._thread_local, 'connection') and self._thread_local.connection is not None:
-            try:
-                self._thread_local.connection.close()
-                self._thread_local.connection = None
-            except Exception as e:
-                self.logger.warning(f"연결 정리 실패: {e}")
+        """Context Manager 종료"""
+        pass

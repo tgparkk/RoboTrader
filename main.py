@@ -629,11 +629,11 @@ class DayTradingBot:
                         if 1 <= minutes_after_close <= 15:
                             try:
                                 self.logger.info("🏁 장 마감 후 데이터 저장 시작...")
-                                # DuckDB read-only 연결 모두 닫기 (쓰기 연결과 config 충돌 방지)
+                                # DuckDB 폴백 read-only 연결 정리
                                 from utils.data_cache import DataCache, DailyDataCache
                                 DataCache.close_all_connections()
                                 DailyDataCache.close_all_connections()
-                                self.logger.info("🔌 DuckDB read-only 연결 정리 완료")
+                                self.logger.info("🔌 DuckDB 폴백 연결 정리 완료")
                                 self.intraday_manager.data_saver.save_all_data(self.intraday_manager)
                                 post_market_data_saved_date = current_date
                                 self.logger.info("✅ 장 마감 후 데이터 저장 완료")
@@ -822,27 +822,25 @@ class DayTradingBot:
     async def _restore_todays_candidates(self):
         """DB에서 오늘 날짜의 후보 종목 복원"""
         try:
-            from pathlib import Path
-            
-            # DB 경로 (DuckDB)
-            db_path = Path(__file__).parent / "db" / "robotrader_trades.duckdb"
-            if not db_path.exists():
-                self.logger.info("📊 DB 파일 없음 - 후보 종목 복원 건너뜀")
-                return
-            
             # 오늘 날짜
             today = now_kst().strftime('%Y-%m-%d')
             
-            import duckdb
-            conn = duckdb.connect(str(db_path), read_only=True)
+            # PostgreSQL에서 조회
+            import psycopg2
+            from config.settings import PG_HOST, PG_PORT, PG_DATABASE, PG_USER, PG_PASSWORD
+            conn = psycopg2.connect(
+                host=PG_HOST, port=PG_PORT, database=PG_DATABASE,
+                user=PG_USER, password=PG_PASSWORD
+            )
             try:
-                result = conn.execute('''
+                cur = conn.cursor()
+                cur.execute('''
                     SELECT DISTINCT stock_code, stock_name, score, reasons 
                     FROM candidate_stocks 
-                    WHERE CAST(selection_date AS DATE) = ?
+                    WHERE CAST(selection_date AS DATE) = %s
                     ORDER BY score DESC
                 ''', (today,))
-                rows = result.fetchall()
+                rows = cur.fetchall()
             finally:
                 conn.close()
             

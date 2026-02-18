@@ -71,3 +71,10 @@ APP_KEY = _config['KIS_APP_KEY']
 SECRET_KEY = _config['KIS_APP_SECRET']
 ACCOUNT_NUMBER = _config['KIS_ACCOUNT_NO']
 HTS_ID = _config['KIS_HTS_ID']
+
+# PostgreSQL 접속 정보
+PG_HOST = '127.0.0.1'
+PG_PORT = 5433
+PG_DATABASE = 'robotrader'
+PG_USER = 'postgres'
+PG_PASSWORD = ''

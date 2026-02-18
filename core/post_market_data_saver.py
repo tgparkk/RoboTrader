@@ -1,7 +1,7 @@
 """
 장 마감 후 데이터 저장 전담 모듈
-- 분봉 데이터 저장 (DuckDB: cache/market_data_v2.duckdb)
-- 일봉 데이터 저장 (DuckDB: cache/market_data_v2.duckdb)
+- 분봉 데이터 저장 (PostgreSQL: minute_candles)
+- 일봉 데이터 저장 (PostgreSQL: daily_candles)
 - 텍스트 파일 저장 (디버깅용)
 """
 import pandas as pd
@@ -22,11 +22,11 @@ class PostMarketDataSaver:
         """초기화"""
         self.logger = setup_logger(__name__)
 
-        # DuckDB 캐시 매니저
+        # PostgreSQL 캐시 매니저
         self.minute_cache = DataCache()
         self.daily_cache = DailyDataCache()
 
-        self.logger.info("장 마감 후 데이터 저장기 초기화 완료 (DuckDB 모드)")
+        self.logger.info("장 마감 후 데이터 저장기 초기화 완료 (PostgreSQL 모드)")
 
     def save_minute_data_to_cache(self, intraday_manager) -> Dict[str, int]:
         """
@@ -82,7 +82,7 @@ class PostMarketDataSaver:
                         failed_count += 1
                         continue
 
-                    # DuckDB에 저장
+                    # PostgreSQL에 저장
                     if self.minute_cache.save_data(stock_code, today, combined_data):
                         saved_count += 1
                         self.logger.debug(f"💾 [{stock_code}] 분봉 캐시 저장: {len(combined_data)}건")
@@ -182,7 +182,7 @@ class PostMarketDataSaver:
 
             for stock_code in stock_codes:
                 try:
-                    # DuckDB에 이미 충분한 데이터가 있으면 스킵
+                    # PostgreSQL에 이미 충분한 데이터가 있으면 스킵
                     if self.daily_cache.has_data(stock_code, min_records=days_back):
                         self.logger.debug(f"⏭️ [{stock_code}] 일봉 데이터 이미 존재 (스킵)")
                         saved_count += 1
@@ -219,7 +219,7 @@ class PostMarketDataSaver:
                         daily_data = daily_data.tail(days_back)
                         self.logger.debug(f"📈 [{stock_code}] 일봉 데이터 {original_count}건 → {days_back}건으로 조정")
 
-                    # DuckDB에 저장
+                    # PostgreSQL에 저장
                     if self.daily_cache.save_data(stock_code, daily_data):
                         # 날짜 범위 정보
                         date_info = ""
@@ -281,15 +281,15 @@ class PostMarketDataSaver:
             self.logger.info(f"📋 대상 종목: {len(stock_codes)}개")
             self.logger.info(f"   종목 코드: {', '.join(stock_codes)}")
 
-            # 1. 분봉 데이터 저장 (DuckDB)
+            # 1. 분봉 데이터 저장 (PostgreSQL)
             self.logger.info("\n" + "=" * 80)
-            self.logger.info("1️⃣ 분봉 데이터 DuckDB 저장")
+            self.logger.info("1️⃣ 분봉 데이터 PostgreSQL 저장")
             self.logger.info("=" * 80)
             minute_result = self.save_minute_data_to_cache(intraday_manager)
 
-            # 2. 일봉 데이터 저장 (DuckDB)
+            # 2. 일봉 데이터 저장 (PostgreSQL)
             self.logger.info("\n" + "=" * 80)
-            self.logger.info("2️⃣ 일봉 데이터 DuckDB 저장")
+            self.logger.info("2️⃣ 일봉 데이터 PostgreSQL 저장")
             self.logger.info("=" * 80)
             daily_result = self.save_daily_data(stock_codes)
 
