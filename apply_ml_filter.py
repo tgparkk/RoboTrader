@@ -12,7 +12,7 @@ sys.stdout.reconfigure(encoding='utf-8')
 import pickle
 import re
 import json
-import sqlite3
+import psycopg2
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 from datetime import datetime
@@ -22,7 +22,7 @@ import pandas as pd
 def load_stock_names() -> Dict[str, str]:
     """DB에서 종목 코드-종목명 매핑 로드"""
     try:
-        conn = sqlite3.connect('data/robotrader.db')
+        conn = psycopg2.connect(host='172.23.208.1', port=5433, dbname='robotrader', user='postgres')
         cursor = conn.cursor()
 
         cursor.execute("SELECT DISTINCT stock_code, stock_name FROM candidate_stocks WHERE stock_name IS NOT NULL")

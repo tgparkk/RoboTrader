@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from utils.daily_data_helper import check_daily_data_coverage
 from utils.logger import setup_logger
-import sqlite3
+import psycopg2
 
 logger = setup_logger(__name__)
 
@@ -19,16 +19,12 @@ def main():
     print("=" * 70)
 
     # 1. 현재 candidate_stocks 확인
-    db_path = Path(__file__).parent / 'data' / 'robotrader.db'
-    if not db_path.exists():
-        print(f"⚠️ DB 파일 없음: {db_path}")
-        return
-
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.execute("""
+    conn = psycopg2.connect(host='172.23.208.1', port=5433, dbname='robotrader', user='postgres')
+    cursor = conn.cursor()
+    cursor.execute("""
         SELECT DISTINCT stock_code
         FROM candidate_stocks
-        WHERE selection_date >= date('now', '-7 days')
+        WHERE selection_date >= CURRENT_DATE - INTERVAL '7 days'
         ORDER BY selection_date DESC
         LIMIT 30
     """)

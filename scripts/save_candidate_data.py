@@ -18,7 +18,7 @@ KIS API 제한사항:
 """
 import sys
 import asyncio
-import sqlite3
+import psycopg2
 import pickle
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -98,10 +98,6 @@ class CandidateDataSaver:
             List[Dict]: 후보 종목 리스트
         """
         try:
-            if not self.db_path.exists():
-                self.logger.error(f"❌ 데이터베이스 파일 없음: {self.db_path}")
-                return []
-
             # 날짜 형식 변환 (YYYYMMDD -> YYYY-MM-DD)
             try:
                 date_obj = datetime.strptime(target_date, '%Y%m%d')
@@ -110,12 +106,11 @@ class CandidateDataSaver:
                 self.logger.error(f"❌ 잘못된 날짜 형식: {target_date} (YYYYMMDD 형식이어야 함)")
                 return []
 
-            with sqlite3.connect(self.db_path) as conn:
-                # SQLite에서 날짜 비교를 위해 DATE() 함수 사용
+            with psycopg2.connect(host='172.23.208.1', port=5433, dbname='robotrader', user='postgres') as conn:
                 query = """
                 SELECT DISTINCT stock_code, stock_name, selection_date, score, reasons
                 FROM candidate_stocks
-                WHERE DATE(selection_date) = ?
+                WHERE DATE(selection_date) = %s
                 ORDER BY selection_date, score DESC
                 """
 
@@ -161,10 +156,6 @@ class CandidateDataSaver:
             List[Dict]: 후보 종목 리스트 (날짜별로 그룹화)
         """
         try:
-            if not self.db_path.exists():
-                self.logger.error(f"❌ 데이터베이스 파일 없음: {self.db_path}")
-                return []
-
             # 날짜 형식 변환 및 검증
             try:
                 start_date_obj = datetime.strptime(start_date, '%Y%m%d')
@@ -181,14 +172,13 @@ class CandidateDataSaver:
                 self.logger.error(f"❌ 잘못된 날짜 형식: {start_date}, {end_date} (YYYYMMDD 형식이어야 함)")
                 return []
 
-            with sqlite3.connect(self.db_path) as conn:
-                # 기간별 후보 종목 조회 (날짜별로 그룹화)
+            with psycopg2.connect(host='172.23.208.1', port=5433, dbname='robotrader', user='postgres') as conn:
                 query = """
                 SELECT DISTINCT stock_code, stock_name,
-                       DATE(selection_date) as selection_date,
+                       DATE(selection_date)::text as selection_date,
                        score, reasons
                 FROM candidate_stocks
-                WHERE DATE(selection_date) BETWEEN ? AND ?
+                WHERE DATE(selection_date) BETWEEN %s AND %s
                 ORDER BY selection_date, score DESC
                 """
 

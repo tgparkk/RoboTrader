@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Any
 import pickle
-import sqlite3
+import psycopg2
 
 # 프로젝트 루트를 sys.path에 추가
 project_root = Path(__file__).parent.parent
@@ -207,7 +207,7 @@ class AnalysisDataCollector:
             pd.DataFrame: 후보 종목 데이터
         """
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with psycopg2.connect(host='172.23.208.1', port=5433, dbname='robotrader', user='postgres') as conn:
                 query = '''
                     SELECT
                         id,
@@ -218,8 +218,8 @@ class AnalysisDataCollector:
                         reasons,
                         status
                     FROM candidate_stocks
-                    WHERE DATE(selection_date) >= ?
-                    AND DATE(selection_date) <= ?
+                    WHERE DATE(selection_date) >= %s
+                    AND DATE(selection_date) <= %s
                     ORDER BY selection_date DESC, score DESC
                 '''
 

@@ -8,7 +8,7 @@ DuckDB daily_{stock_code} 테이블에 저장합니다.
 
 import sys
 import time
-import sqlite3
+import psycopg2
 import pandas as pd
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -26,9 +26,7 @@ logger = setup_logger(__name__)
 
 def get_unique_stocks_from_candidates() -> list:
     """candidate_stocks에서 고유 종목 목록 추출"""
-    db_path = Path(__file__).parent.parent / "data" / "robotrader.db"
-
-    conn = sqlite3.connect(str(db_path))
+    conn = psycopg2.connect(host='172.23.208.1', port=5433, dbname='robotrader', user='postgres')
     df = pd.read_sql_query(
         "SELECT DISTINCT stock_code FROM candidate_stocks ORDER BY stock_code",
         conn
