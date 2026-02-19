@@ -71,7 +71,7 @@ class TradingDecisionEngine:
             self.use_daily_filter = True
             self.logger.info("📊 일봉 기반 패턴 필터 초기화 완료")
         except Exception as e:
-            self.logger.warning(f"⚠️ 일봉 패턴 필터 초기화 실패: {e}")
+            self.logger.debug(f"일봉 패턴 필터 미설치 (비활성화): {e}")
             self.daily_pattern_filter = None
             self.use_daily_filter = False
 

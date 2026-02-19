@@ -81,6 +81,9 @@ class IntradayStockManager:
         # 재수집 쿨다운 (종목코드 → 마지막 재수집 시도 시각)
         self._recollection_cooldown: Dict[str, datetime] = {}
 
+        # 최대 종목 수 도달 경고 1회 제한
+        self._max_stock_warned: bool = False
+
         # 헬퍼 클래스 초기화 (리팩토링)
         from core.historical_data_collector import HistoricalDataCollector
         from core.realtime_data_updater import RealtimeDataUpdater
@@ -116,7 +119,9 @@ class IntradayStockManager:
                 
                 # 최대 관리 종목 수 체크
                 if len(self.selected_stocks) >= self.max_stocks:
-                    self.logger.warning(f"⚠️ 최대 관리 종목 수({self.max_stocks})에 도달. 추가 불가")
+                    if not self._max_stock_warned:
+                        self.logger.warning(f"⚠️ 최대 관리 종목 수({self.max_stocks})에 도달. 이후 추가 요청은 무시됩니다.")
+                        self._max_stock_warned = True
                     return False
                 
                 # 장 시간 체크
@@ -660,7 +665,7 @@ class IntradayStockManager:
                                         break
 
                                     self._recollection_cooldown[stock_code] = now_kst()
-                                    self.logger.warning(f"⚠️ {stock_code} 분봉 누락 감지, 전체 재수집 시도: {issue}")
+                                    self.logger.debug(f"⚠️ {stock_code} 분봉 누락 감지, 전체 재수집 시도: {issue}")
                                     try:
                                         # selected_time을 현재 시간으로 업데이트하여 재수집 시 현재까지 데이터 수집
                                         with self._lock:

@@ -294,7 +294,7 @@ class TelegramNotifier:
         """시스템 상태 알림"""
         message = self.templates['system_status'].format(
             time=datetime.now().strftime('%H:%M:%S'),
-            market_status=market_status,
+            market_status=market_status.replace('_', r'\_'),
             pending_orders=pending_orders,
             completed_orders=completed_orders
         )
