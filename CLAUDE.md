@@ -24,14 +24,15 @@ ACTIVE_STRATEGY = 'price_position'
 ### 진입 조건
 | 항목 | 설정값 |
 |------|--------|
-| 시가 대비 | 2% ~ 4% 상승 |
-| 거래 시간 | 10:00 ~ 12:00 |
-| 거래 요일 | 월/수/목/금 (화요일만 제외) |
+| 시가 대비 | 1% ~ 4% 상승 |
+| 거래 시간 | 9:00 ~ 12:00 |
+| 거래 요일 | 월/수/금 (화/목 제외) |
 | 일 최대 종목 | 5개 |
+| 고급 필터 | 변동성 < 1.0%, 모멘텀 < +1.5% |
 
 ### 청산 조건
-- **손절**: -2.5%
-- **익절**: +3.5%
+- **손절**: -4.0%
+- **익절**: +5.0%
 
 ### 관련 파일
 - `config/strategy_settings.py` - 전략 선택 및 설정
@@ -46,8 +47,8 @@ ACTIVE_STRATEGY = 'price_position'
 - **buy_budget_ratio**: 0.20 (건당 가용잔고의 20%)
 
 ### 손익비 (config/trading_config.json)
-- **stop_loss_ratio**: 0.025 (-2.5%)
-- **take_profit_ratio**: 0.035 (+3.5%)
+- **stop_loss_ratio**: 0.04 (-4.0%)
+- **take_profit_ratio**: 0.05 (+5.0%)
 
 ---
 
@@ -66,8 +67,8 @@ core/
 ├── strategies/
 │   └── price_position_strategy.py  # 가격 위치 전략
 
-cache/
-└── market_data_v2.duckdb    # 분봉/일봉 캐시 데이터
+db/
+└── database_manager.py         # PostgreSQL 데이터 관리
 ```
 
 ---

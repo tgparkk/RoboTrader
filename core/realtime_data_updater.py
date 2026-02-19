@@ -322,8 +322,8 @@ class RealtimeDataUpdater:
 
             if before_filter_count != len(chart_df):
                 removed = before_filter_count - len(chart_df)
-                self.logger.warning(
-                    f"[경고] {stock_code} 실시간 업데이트에서 전날 데이터 {removed}건 감지 및 제거: "
+                self.logger.debug(
+                    f"[참고] {stock_code} 전날 데이터 {removed}건 제거: "
                     f"{before_filter_count} -> {len(chart_df)}건 (요청: {target_hour})"
                 )
 
@@ -342,8 +342,8 @@ class RealtimeDataUpdater:
 
             if before_filter_count != len(chart_df):
                 removed = before_filter_count - len(chart_df)
-                self.logger.warning(
-                    f"[경고] {stock_code} 실시간 업데이트에서 전날 데이터 {removed}건 감지 및 제거: "
+                self.logger.debug(
+                    f"[참고] {stock_code} 전날 데이터 {removed}건 제거: "
                     f"{before_filter_count} -> {len(chart_df)}건 (요청: {target_hour})"
                 )
 

@@ -186,7 +186,7 @@ def auth(svr: str = 'prod', product: str = '01') -> bool:
             return False
     else:
         my_token = saved_token
-        logger.debug('✅ 기존 토큰 사용')
+        #logger.debug('✅ 기존 토큰 사용')
 
     # 환경 설정
     changeTREnv(f"Bearer {my_token}", svr, product)
@@ -196,7 +196,7 @@ def auth(svr: str = 'prod', product: str = '01') -> bool:
         _base_headers["authorization"] = _TRENV.my_token
         _base_headers["appkey"] = _TRENV.my_app
         _base_headers["appsecret"] = _TRENV.my_sec
-        logger.info("✅ KIS API 인증 헤더 설정 완료")
+        logger.debug("✅ KIS API 인증 헤더 설정 완료")
     else:
         logger.error("❌ _TRENV가 설정되지 않았습니다")
         return False

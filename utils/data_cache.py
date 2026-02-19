@@ -275,7 +275,7 @@ class DataCache:
                     return None
 
                 df.set_index('idx', inplace=True)
-                self.logger.debug(f"[{stock_code}] PG에서 로드 ({len(df)}개)")
+                #self.logger.debug(f"[{stock_code}] PG에서 로드 ({len(df)}개)")
                 return df
             finally:
                 pool.putconn(conn)
@@ -293,7 +293,7 @@ class DataCache:
         with open(cache_file, 'rb') as f:
             df_minute = pickle.load(f)
 
-        self.logger.debug(f"[{stock_code}] pkl에서 로드 ({len(df_minute)}개)")
+        #self.logger.debug(f"[{stock_code}] pkl에서 로드 ({len(df_minute)}개)")
         return df_minute
 
     def clear_cache(self, stock_code: str = None, date_str: str = None):
@@ -529,7 +529,7 @@ class DailyDataCache:
                 if df.empty:
                     return None
 
-                self.logger.debug(f"[{stock_code}] 일봉 PG에서 로드 ({len(df)}개)")
+                #self.logger.debug(f"[{stock_code}] 일봉 PG에서 로드 ({len(df)}개)")
                 return df
             finally:
                 pool.putconn(conn)
@@ -547,7 +547,7 @@ class DailyDataCache:
         with open(latest_file, 'rb') as f:
             df_daily = pickle.load(f)
 
-        self.logger.debug(f"[{stock_code}] 일봉 pkl에서 로드 ({len(df_daily)}개)")
+        #self.logger.debug(f"[{stock_code}] 일봉 pkl에서 로드 ({len(df_daily)}개)")
         return df_daily
 
     def __enter__(self):

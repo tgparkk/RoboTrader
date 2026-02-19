@@ -60,8 +60,7 @@ class HistoricalDataCollector:
                 stock_data = self.manager.selected_stocks[stock_code]
                 selected_time = stock_data.selected_time
 
-            self.logger.info(f"[수집] {stock_code} 전체 거래시간 분봉 데이터 수집 시작")
-            self.logger.info(f"   선정 시간: {selected_time.strftime('%H:%M:%S')}")
+            self.logger.debug(f"[수집] {stock_code} 전체 거래시간 분봉 데이터 수집 시작 (선정: {selected_time.strftime('%H:%M:%S')})")
 
             # 동적 시장 거래시간 가져오기
             market_hours = MarketHours.get_market_hours('KRX', selected_time)
@@ -73,7 +72,7 @@ class HistoricalDataCollector:
             target_hour = selected_time.strftime("%H%M%S")
 
             # 미래 데이터 수집 방지 - 선정 시점까지만 수집
-            self.logger.info(f"[수집] {stock_code} 과거 데이터 수집: {market_open.strftime('%H:%M')} ~ {selected_time.strftime('%H:%M:%S')}")
+            self.logger.debug(f"[수집] {stock_code} 과거 데이터 수집: {market_open.strftime('%H:%M')} ~ {selected_time.strftime('%H:%M:%S')}")
 
             historical_data = await get_full_trading_day_data_async(
                 stock_code=stock_code,
@@ -226,16 +225,10 @@ class HistoricalDataCollector:
 
             # 3분봉 변환 예상 개수 계산
             expected_3min_count = data_count // 3
-            self.logger.info(f"   예상 3분봉: {expected_3min_count}개 (최소 5개 필요)")
+            self.logger.debug(f"   예상 3분봉: {expected_3min_count}개 (최소 5개 필요)")
 
-            if expected_3min_count >= 5:
-                self.logger.info(f"   [OK] 신호 생성 조건 충족!")
-            else:
-                self.logger.warning(f"   [경고] 3분봉 데이터 부족 위험: {expected_3min_count}/5")
-
-            # 시장 시작시간부터 데이터가 시작되는지 확인
-            if start_time and start_time >= start_time_str:
-                self.logger.info(f"   [정보] 정규장 데이터: {start_time}부터")
+            if expected_3min_count < 5:
+                self.logger.debug(f"   [경고] 3분봉 데이터 부족 위험: {expected_3min_count}/5")
 
         else:
             self.logger.info(f"[정보] {stock_code} 선정 시점 이전 분봉 데이터 없음")

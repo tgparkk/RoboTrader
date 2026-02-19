@@ -153,7 +153,7 @@ class IntradayStockManager:
             
             # 🔥 과거 데이터 수집 (09:05 이전에도 시도)
             current_time = now_kst()
-            self.logger.info(f"📈 {stock_code} 과거 데이터 수집 시작... (선정시간: {current_time.strftime('%H:%M:%S')})")
+            self.logger.debug(f"📈 {stock_code} 과거 데이터 수집 시작... (선정시간: {current_time.strftime('%H:%M:%S')})")
             success = await self._collect_historical_data(stock_code)
 
             # 🆕 시장 시작 5분 이내 선정이고 데이터 부족한 경우 플래그 설정 (동적 시간 적용)
@@ -673,7 +673,7 @@ class IntradayStockManager:
                                                 current_time = now_kst()
                                                 old_time = self.selected_stocks[stock_code].selected_time
                                                 self.selected_stocks[stock_code].selected_time = current_time
-                                                self.logger.info(
+                                                self.logger.debug(
                                                     f"⏰ {stock_code} selected_time 업데이트: "
                                                     f"{old_time.strftime('%H:%M:%S')} → {current_time.strftime('%H:%M:%S')}"
                                                 )

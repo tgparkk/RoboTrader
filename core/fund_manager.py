@@ -48,12 +48,13 @@ class FundManager:
         with self._lock:
             old_total = self.total_funds
             self.total_funds = new_total
-            
+
             # 가용 자금 재계산
             self.available_funds = new_total - self.reserved_funds - self.invested_funds
-            
-            self.logger.info(f"💰 총 자금 업데이트: {old_total:,.0f}원 → {new_total:,.0f}원")
-            self.logger.info(f"💰 가용 자금: {self.available_funds:,.0f}원")
+
+            # 금액 변경 시에만 로그 출력
+            if abs(old_total - new_total) >= 1:
+                self.logger.info(f"💰 총 자금 업데이트: {old_total:,.0f}원 → {new_total:,.0f}원 (가용: {self.available_funds:,.0f}원)")
     
     def get_max_buy_amount(self, stock_code: str) -> float:
         """

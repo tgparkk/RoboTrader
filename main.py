@@ -323,14 +323,14 @@ class DayTradingBot:
             sell_pending_stocks = self.trading_manager.get_stocks_by_state(StockState.SELL_PENDING)
             completed_stocks = self.trading_manager.get_stocks_by_state(StockState.COMPLETED)
 
-            self.logger.info(
-                f"📦 종목 상태 현황:\n"
-                f"  - SELECTED: {len(selected_stocks)}개 (매수 대기)\n"
-                f"  - COMPLETED: {len(completed_stocks)}개 (재거래 가능)\n"
-                f"  - BUY_PENDING: {len(buy_pending_stocks)}개 (매수 주문 중)\n"
-                f"  - POSITIONED: {len(positioned_stocks)}개 (보유중)\n"
-                f"  - SELL_PENDING: {len(sell_pending_stocks)}개 (매도 주문 중)"
-            )
+            # 상태 변경 시에만 로그 출력 (노이즈 감소)
+            current_status = (len(selected_stocks), len(completed_stocks), len(buy_pending_stocks), len(positioned_stocks), len(sell_pending_stocks))
+            if not hasattr(self, '_last_stock_status') or self._last_stock_status != current_status:
+                self._last_stock_status = current_status
+                self.logger.info(
+                    f"📦 종목 상태 현황: SELECTED={len(selected_stocks)}, COMPLETED={len(completed_stocks)}, "
+                    f"BUY_PENDING={len(buy_pending_stocks)}, POSITIONED={len(positioned_stocks)}, SELL_PENDING={len(sell_pending_stocks)}"
+                )
 
             # 매수 주문 중인 종목 상세 정보
             if buy_pending_stocks:
@@ -369,7 +369,7 @@ class DayTradingBot:
             stock_code = trading_stock.stock_code
             stock_name = trading_stock.stock_name
 
-            self.logger.debug(f"🔍 매수 판단 시작: {stock_code}({stock_name})")
+            #self.logger.debug(f"🔍 매수 판단 시작: {stock_code}({stock_name})")
 
             # 추가 안전 검증: 현재 보유 중인 종목인지 다시 한번 확인
             positioned_stocks = self.trading_manager.get_stocks_by_state(StockState.POSITIONED)
@@ -402,7 +402,7 @@ class DayTradingBot:
             if StrategySettings.ACTIVE_STRATEGY == 'price_position':
                 # price_position 전략: 1분봉 직접 사용 (더 정밀한 진입)
                 analysis_data = combined_data
-                self.logger.debug(f"📊 {stock_code} price_position 전략: 1분봉 {len(analysis_data)}개 사용")
+                #self.logger.debug(f"📊 {stock_code} price_position 전략: 1분봉 {len(analysis_data)}개 사용")
             else:
                 # pullback 전략: 3분봉 변환 후 사용
                 from core.timeframe_converter import TimeFrameConverter
@@ -1040,6 +1040,19 @@ class DayTradingBot:
             should_stop_buy = MarketHours.should_stop_buying('KRX', current_time)
 
             if not should_stop_buy:
+                # 요일 체크: 비허용 요일이면 매수 판단 전체 건너뜀 (노이즈 감소)
+                from config.strategy_settings import StrategySettings
+                if StrategySettings.ACTIVE_STRATEGY == 'price_position':
+                    weekday = current_time.weekday()
+                    if weekday not in StrategySettings.PricePosition.ALLOWED_WEEKDAYS:
+                        weekday_names = ['월', '화', '수', '목', '금', '토', '일']
+                        if not hasattr(self, '_weekday_skip_logged'):
+                            self._weekday_skip_logged = False
+                        if not self._weekday_skip_logged:
+                            self.logger.info(f"📅 {weekday_names[weekday]}요일 - 매수 판단 건너뜀 (허용: 월/수/금)")
+                            self._weekday_skip_logged = True
+                        return
+
                 # 가용 자금 계산
                 balance_info = self.api_manager.get_account_balance()
                 if balance_info:
@@ -1095,7 +1108,7 @@ class DayTradingBot:
     async def emergency_sync_positions(self):
         """긴급 포지션 동기화 - 매수가 기준 3%/2% 고정 비율"""
         try:
-            self.logger.info("🔧 긴급 포지션 동기화 시작")
+            self.logger.debug("🔧 긴급 포지션 동기화 시작")
 
             # 실제 잔고 조회
             loop = asyncio.get_event_loop()
@@ -1104,13 +1117,13 @@ class DayTradingBot:
                 self.api_manager.get_account_balance
             )
             if not balance or not balance.positions:
-                self.logger.info("📊 보유 종목 없음")
+                self.logger.debug("📊 보유 종목 없음")
                 return
 
             held_stocks = {p['stock_code']: p for p in balance.positions if p.get('quantity', 0) > 0}
 
-            self.logger.info(f"📊 실제 계좌 보유 종목: {list(held_stocks.keys())}")
-            self.logger.info(f"📊 시스템 관리 종목: {list(self.trading_manager.trading_stocks.keys())}")
+            self.logger.debug(f"📊 실제 계좌 보유 종목: {list(held_stocks.keys())}")
+            self.logger.debug(f"📊 시스템 관리 종목: {list(self.trading_manager.trading_stocks.keys())}")
 
             # 시스템에서 누락된 포지션 찾기
             missing_positions = []

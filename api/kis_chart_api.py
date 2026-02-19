@@ -631,7 +631,7 @@ def get_full_trading_day_data(stock_code: str, target_date: str = "",
         # 최대 FALLBACK_MAX_DAYS일까지 이전 날짜로 폴백 시도
         for back in range(0, FALLBACK_MAX_DAYS + 1):
             attempt_date = (base_dt - _td(days=back)).strftime("%Y%m%d")
-            logger.info(f"📊 {stock_code} 전체 거래시간 분봉 데이터 수집 시작 ({attempt_date} {selected_time}까지)")
+            logger.debug(f"📊 {stock_code} 전체 거래시간 분봉 데이터 수집 시작 ({attempt_date} {selected_time}까지)")
 
             time_segments = [
                 ("080000", "100000"),
@@ -648,7 +648,7 @@ def get_full_trading_day_data(stock_code: str, target_date: str = "",
                     break
                 segment_end_time = min(end_time, selected_time)
                 try:
-                    logger.debug(f"  구간 수집: {start_time}~{segment_end_time}")
+                    #logger.debug(f"  구간 수집: {start_time}~{segment_end_time}")
                     
                     # 종목별 적절한 시장 구분 코드 사용
                     div_code = get_div_code_for_stock(stock_code)
@@ -661,11 +661,11 @@ def get_full_trading_day_data(stock_code: str, target_date: str = "",
                         past_data_yn="Y"
                     )
                     if result is None:
-                        logger.debug(f"  ℹ️ {start_time}~{segment_end_time} 구간 조회 실패")
+                        #logger.debug(f"  ℹ️ {start_time}~{segment_end_time} 구간 조회 실패")
                         continue
                     summary_df, chart_df = result
                     if chart_df.empty:
-                        logger.debug(f"  ℹ️ {start_time}~{segment_end_time} 구간 데이터 없음")
+                        #logger.debug(f"  ℹ️ {start_time}~{segment_end_time} 구간 데이터 없음")
                         continue
                     if 'time' in chart_df.columns:
                         chart_df['time_str'] = chart_df['time'].astype(str).str.zfill(6)
@@ -676,7 +676,7 @@ def get_full_trading_day_data(stock_code: str, target_date: str = "",
                             total_collected += len(segment_data)
                             first_time = segment_data['time'].iloc[0] if len(segment_data) > 0 else 'N/A'
                             last_time = segment_data['time'].iloc[-1] if len(segment_data) > 0 else 'N/A'
-                            logger.debug(f"  ✅ 수집 완료: {len(segment_data)}건 ({first_time}~{last_time})")
+                            #logger.debug(f"  ✅ 수집 완료: {len(segment_data)}건 ({first_time}~{last_time})")
                 except Exception as e:
                     logger.error(f"  ❌ {start_time}~{segment_end_time} 구간 수집 오류: {e}")
                     continue
@@ -693,8 +693,7 @@ def get_full_trading_day_data(stock_code: str, target_date: str = "",
                     if back > 0:
                         logger.info(f"↩️ {stock_code} {target_date} 데이터 없음 → {attempt_date} 폴백 수집 완료: {len(combined_df)}건")
                     else:
-                        logger.info(f"✅ {stock_code} 전체 거래시간 데이터 수집 완료: {len(combined_df)}건")
-                    logger.info(f"   수집 범위: {first_time} ~ {last_time}")
+                        logger.debug(f"✅ {stock_code} 전체 거래시간 데이터 수집 완료: {len(combined_df)}건 ({first_time}~{last_time})")
                     return combined_df
             else:
                 logger.debug(f"ℹ️ {stock_code} {attempt_date} 수집된 데이터 없음 (폴백 시도 {back}/{FALLBACK_MAX_DAYS})")
@@ -738,7 +737,7 @@ async def get_full_trading_day_data_async(stock_code: str, target_date: str = ""
         # selected_time 그대로 사용 (미래 데이터 수집 방지)
         start_hour = int(start_time[:2])
         start_minute = int(start_time[2:4])
-        logger.info(f"📊 {stock_code} 분봉 데이터 수집: {start_hour:02d}:{start_minute:02d} ~ {selected_time}")
+        logger.debug(f"📊 {stock_code} 분봉 데이터 수집: {start_hour:02d}:{start_minute:02d} ~ {selected_time}")
 
         # 🔥 당일분봉조회 API는 30건 제한이므로 30분씩 나눠서 수집
         # 🆕 동적 시장 시간에 맞춰 시간 구간 생성
@@ -782,7 +781,7 @@ async def get_full_trading_day_data_async(stock_code: str, target_date: str = ""
 
         for back in range(0, FALLBACK_MAX_DAYS + 1):
             attempt_date = (base_dt - _td(days=back)).strftime("%Y%m%d")
-            logger.info(f"📊 {stock_code} 당일 분봉 데이터 수집 시작 (비동기, {attempt_date} {selected_time}까지)")
+            logger.debug(f"📊 {stock_code} 당일 분봉 데이터 수집 시작 (비동기, {attempt_date} {selected_time}까지)")
 
             needed_segments = []
             for segment_start, segment_end in time_segments:
@@ -838,7 +837,7 @@ async def get_full_trading_day_data_async(stock_code: str, target_date: str = ""
                 if isinstance(result, pd.DataFrame) and not result.empty:
                     valid_data_frames.append(result)
                     s, e = needed_segments[i]
-                    logger.debug(f"  ✅ 구간 {s}~{e}: {len(result)}건")
+                    #logger.debug(f"  ✅ 구간 {s}~{e}: {len(result)}건")
 
             if valid_data_frames:
                 combined_df = pd.concat(valid_data_frames, ignore_index=True)
@@ -849,7 +848,7 @@ async def get_full_trading_day_data_async(stock_code: str, target_date: str = ""
                 if back > 0:
                     logger.info(f"↩️ {stock_code} {target_date} 데이터 없음 → {attempt_date} 폴백 수집 완료: {len(combined_df)}건")
                 else:
-                    logger.info(f"✅ {stock_code} 비동기 수집 완료: {len(combined_df)}건")
+                    logger.debug(f"✅ {stock_code} 비동기 수집 완료: {len(combined_df)}건")
                 return combined_df
             else:
                 logger.debug(f"ℹ️ {stock_code} {attempt_date} 비동기 수집 결과 없음 (폴백 시도 {back}/{FALLBACK_MAX_DAYS})")
