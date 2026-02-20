@@ -661,10 +661,19 @@ class TradingStockManager:
                 
                 trading_stock = self.trading_stocks[order.stock_code]
 
-                # 🆕 추가: 이미 POSITIONED 상태라면 중복 처리 방지
-                # 단, DB에 매수 기록이 없으면 저장 (긴급동기화가 먼저 실행된 경우)
+                # 이미 POSITIONED 상태에서 BUY 콜백 수신
+                # → 긴급동기화가 부분체결 수량으로 먼저 복구한 경우, 실제 체결 수량으로 보정
                 if (order.order_type == OrderType.BUY and
                     trading_stock.state == StockState.POSITIONED):
+                    # 포지션 수량이 주문 수량과 다르면 부분체결 동기화 보정
+                    current_qty = trading_stock.position.quantity if trading_stock.position else 0
+                    if current_qty != order.quantity:
+                        self.logger.warning(
+                            f"🔧 {order.stock_code} 포지션 수량 보정: "
+                            f"{current_qty}주 → {order.quantity}주 @{order.price:,.0f}원 "
+                            f"(긴급동기화 부분체결 보정)"
+                        )
+                        trading_stock.set_position(order.quantity, order.price)
                     try:
                         from db.database_manager import DatabaseManager
                         db = DatabaseManager()

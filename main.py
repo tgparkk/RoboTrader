@@ -1132,6 +1132,15 @@ class DayTradingBot:
                 if code in self.trading_manager.trading_stocks:
                     ts = self.trading_manager.trading_stocks[code]
                     if ts.state != StockState.POSITIONED:
+                        # BUY_PENDING/SELL_PENDING + 활성 주문 = OrderManager가 처리 중
+                        # 부분체결 수량으로 잘못 복구하는 것 방지
+                        if (ts.state in (StockState.BUY_PENDING, StockState.SELL_PENDING)
+                                and ts.current_order_id is not None):
+                            self.logger.debug(
+                                f"⏳ {code}: {ts.state.value} 상태, 활성 주문({ts.current_order_id}) "
+                                f"- 자연 체결 대기, 복구 건너뜀"
+                            )
+                            continue
                         missing_positions.append((code, balance_stock, ts))
                         self.logger.info(f"🔍 {code}: 보유중이지만 상태가 {ts.state.value} (복구 필요)")
                     else:
@@ -1203,6 +1212,15 @@ class DayTradingBot:
 
             # 누락된 포지션들 복구
             for code, balance_stock, ts in missing_positions:
+                # 이중 안전장치: 복구 시점에 활성 주문이 생겼을 수 있음 (레이스 컨디션)
+                if (ts.state in (StockState.BUY_PENDING, StockState.SELL_PENDING)
+                        and ts.current_order_id is not None):
+                    self.logger.info(
+                        f"⏳ {code}: 복구 시점에 활성 주문 발견 "
+                        f"(주문ID: {ts.current_order_id}) - 복구 건너뜀"
+                    )
+                    continue
+
                 # 포지션 복원
                 quantity = balance_stock['quantity']
                 avg_price = balance_stock['avg_price']
