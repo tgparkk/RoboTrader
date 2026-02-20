@@ -34,18 +34,18 @@ class TelegramNotifier:
         self.is_initialized = False
         self.is_polling = False
         
-        # 메시지 형식 템플릿
+        # 메시지 형식 템플릿 (plain text - 마크다운 미사용으로 특수문자 안전)
         self.templates = {
-            'system_start': "🚀 *거래 시스템 시작*\n시간: {time}\n상태: 초기화 완료",
-            'system_stop': "🛑 *거래 시스템 종료*\n시간: {time}\n상태: 정상 종료",
-            'order_placed': "📝 *주문 실행*\n종목: {stock_name}({stock_code})\n구분: {order_type}\n수량: {quantity:,}주\n가격: {price:,}원\n주문ID: {order_id}",
-            'order_filled': "✅ *주문 체결*\n종목: {stock_name}({stock_code})\n구분: {order_type}\n수량: {quantity:,}주\n가격: {price:,}원\n손익: {pnl:+,.0f}원",
-            'order_cancelled': "❌ *주문 취소*\n종목: {stock_name}({stock_code})\n구분: {order_type}\n이유: {reason}",
-            'signal_detected': "🔥 *매매 신호*\n\n📊 종목: {stock_name}({stock_code})\n🎯 신호: {signal_type}\n💰 가격: {price:,}원\n\n📝 근거:\n{reason}",
-            'position_update': "📊 *포지션 현황*\n보유: {position_count}종목\n평가: {total_value:,}원\n손익: {total_pnl:+,.0f}원 ({pnl_rate:+.2f}%)",
-            'system_status': "📡 *시스템 상태*\n시간: {time}\n시장: {market_status}\n미체결: {pending_orders}건\n완료: {completed_orders}건\n데이터: 정상 수집",
-            'error_alert': "⚠️ *시스템 오류*\n시간: {time}\n모듈: {module}\n오류: {error}",
-            'daily_summary': "📈 *일일 거래 요약*\n날짜: {date}\n총 거래: {total_trades}회\n수익률: {return_rate:+.2f}%\n손익: {total_pnl:+,.0f}원"
+            'system_start': "🚀 거래 시스템 시작\n시간: {time}\n상태: 초기화 완료",
+            'system_stop': "🛑 거래 시스템 종료\n시간: {time}\n상태: 정상 종료",
+            'order_placed': "📝 주문 실행\n종목: {stock_name}({stock_code})\n구분: {order_type}\n수량: {quantity:,}주\n가격: {price:,}원\n주문ID: {order_id}",
+            'order_filled': "✅ 주문 체결\n종목: {stock_name}({stock_code})\n구분: {order_type}\n수량: {quantity:,}주\n가격: {price:,}원\n손익: {pnl:+,.0f}원",
+            'order_cancelled': "❌ 주문 취소\n종목: {stock_name}({stock_code})\n구분: {order_type}\n이유: {reason}",
+            'signal_detected': "🔥 매매 신호\n\n📊 종목: {stock_name}({stock_code})\n🎯 신호: {signal_type}\n💰 가격: {price:,}원\n\n📝 근거:\n{reason}",
+            'position_update': "📊 포지션 현황\n보유: {position_count}종목\n평가: {total_value:,}원\n손익: {total_pnl:+,.0f}원 ({pnl_rate:+.2f}%)",
+            'system_status': "📡 시스템 상태\n시간: {time}\n시장: {market_status}\n미체결: {pending_orders}건\n완료: {completed_orders}건\n데이터: 정상 수집",
+            'error_alert': "⚠️ 시스템 오류\n시간: {time}\n모듈: {module}\n오류: {error}",
+            'daily_summary': "📈 일일 거래 요약\n날짜: {date}\n총 거래: {total_trades}회\n수익률: {return_rate:+.2f}%\n손익: {total_pnl:+,.0f}원"
         }
     
     async def initialize(self) -> bool:
@@ -172,8 +172,8 @@ class TelegramNotifier:
         
         return escaped_text
     
-    async def send_message(self, message: str, parse_mode: str = "Markdown") -> bool:
-        """메시지 전송"""
+    async def send_message(self, message: str, parse_mode: Optional[str] = None) -> bool:
+        """메시지 전송 (기본: plain text, 마크다운 필요시 명시적으로 전달)"""
         try:
             await self.bot.send_message(
                 chat_id=self.chat_id,
@@ -184,30 +184,19 @@ class TelegramNotifier:
         except TelegramError as e:
             self.logger.error(f"텔레그램 메시지 전송 실패: {e}")
             
-            # 마크다운 파싱 오류 시 이스케이프 처리 후 재시도
-            if "parse entities" in str(e).lower() or "can't parse" in str(e).lower():
+            # parse_mode가 설정된 경우 plain text로 fallback (1단계만)
+            if parse_mode is not None:
                 try:
-                    self.logger.info("마크다운 파싱 오류 - 특수문자 이스케이프 후 재전송 시도")
-                    escaped_message = self._escape_markdown(message)
+                    self.logger.info(f"파싱 오류 - plain text로 재전송 (parse_mode={parse_mode})")
+                    plain_message = message.replace('*', '').replace('_', '').replace('`', '').replace('[', '').replace(']', '')
                     await self.bot.send_message(
                         chat_id=self.chat_id,
-                        text=escaped_message,
-                        parse_mode="Markdown"
+                        text=plain_message,
+                        parse_mode=None
                     )
                     return True
-                except TelegramError as escape_error:
-                    self.logger.info("이스케이프 처리도 실패 - 일반 텍스트로 재전송 시도")
-                    try:
-                        # 마크다운 문법 완전 제거
-                        plain_message = message.replace('*', '').replace('_', '').replace('`', '').replace('[', '').replace(']', '').replace('(', '').replace(')', '')
-                        await self.bot.send_message(
-                            chat_id=self.chat_id,
-                            text=plain_message,
-                            parse_mode=None
-                        )
-                        return True
-                    except TelegramError as retry_error:
-                        self.logger.error(f"일반 텍스트 재전송도 실패: {retry_error}")
+                except TelegramError as retry_error:
+                    self.logger.error(f"plain text 재전송도 실패: {retry_error}")
             
             return False
     
@@ -294,7 +283,7 @@ class TelegramNotifier:
         """시스템 상태 알림"""
         message = self.templates['system_status'].format(
             time=datetime.now().strftime('%H:%M:%S'),
-            market_status=market_status.replace('_', ' '),
+            market_status=market_status,
             pending_orders=pending_orders,
             completed_orders=completed_orders
         )
@@ -327,11 +316,11 @@ class TelegramNotifier:
             return
         
         # TODO: 실제 시스템 상태 조회 로직 구현
-        status_message = "📊 *시스템 상태*\n\n⏰ 시간: {}\n📈 시장: 장중\n🔄 상태: 정상 동작\n📊 데이터: 수집 중".format(
+        status_message = "📊 시스템 상태\n\n⏰ 시간: {}\n📈 시장: 장중\n🔄 상태: 정상 동작\n📊 데이터: 수집 중".format(
             datetime.now().strftime('%H:%M:%S')
         )
         
-        await update.message.reply_text(status_message, parse_mode="Markdown")
+        await update.message.reply_text(status_message)
     
     async def _cmd_positions(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """포지션 조회 명령어"""
@@ -339,9 +328,9 @@ class TelegramNotifier:
             return
         
         # TODO: 실제 포지션 조회 로직 구현
-        positions_message = "💼 *보유 포지션*\n\n현재 보유 중인 포지션이 없습니다."
+        positions_message = "💼 보유 포지션\n\n현재 보유 중인 포지션이 없습니다."
         
-        await update.message.reply_text(positions_message, parse_mode="Markdown")
+        await update.message.reply_text(positions_message)
     
     async def _cmd_orders(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """주문 현황 조회 명령어"""
@@ -349,9 +338,9 @@ class TelegramNotifier:
             return
         
         # TODO: 실제 주문 현황 조회 로직 구현
-        orders_message = "📋 *주문 현황*\n\n미체결 주문: 0건\n완료된 주문: 0건"
+        orders_message = "📋 주문 현황\n\n미체결 주문: 0건\n완료된 주문: 0건"
         
-        await update.message.reply_text(orders_message, parse_mode="Markdown")
+        await update.message.reply_text(orders_message)
     
     async def _cmd_virtual_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """가상 매매 통계 명령어"""
@@ -368,25 +357,25 @@ class TelegramNotifier:
                 open_positions = db_manager.get_virtual_open_positions()
                 
                 # 통계 메시지 생성
-                message = f"""📊 *가상 매매 통계 (7일)*
+                message = f"""📊 가상 매매 통계 (7일)
 
-💰 *전체 성과*
+💰 전체 성과
 • 총 거래: {stats.get('total_trades', 0)}건
 • 미체결 포지션: {stats.get('open_positions', 0)}건
 • 승률: {stats.get('win_rate', 0):.1f}%
 • 총 손익: {stats.get('total_profit', 0):+,.0f}원
 • 평균 수익률: {stats.get('avg_profit_rate', 0):+.2f}%
 
-📈 *수익률 범위*
+📈 수익률 범위
 • 최대 수익: {stats.get('max_profit', 0):+,.0f}원
 • 최대 손실: {stats.get('max_loss', 0):+,.0f}원
 
-🎯 *전략별 성과*"""
+🎯 전략별 성과"""
                 
                 # 전략별 통계 추가
                 for strategy, strategy_stats in stats.get('strategies', {}).items():
                     message += f"""
-*{strategy}*
+[{strategy}]
 • 거래: {strategy_stats.get('total_trades', 0)}건
 • 승률: {strategy_stats.get('win_rate', 0):.1f}%
 • 손익: {strategy_stats.get('total_profit', 0):+,.0f}원
@@ -394,7 +383,7 @@ class TelegramNotifier:
                 
                 # 미체결 포지션 정보
                 if not open_positions.empty:
-                    message += f"\n\n📋 *미체결 포지션 ({len(open_positions)}건)*"
+                    message += f"\n\n📋 미체결 포지션 ({len(open_positions)}건)"
                     for _, pos in open_positions.head(5).iterrows():  # 최대 5개만 표시
                         buy_time_str = pos['buy_time'].strftime('%m/%d %H:%M') if hasattr(pos['buy_time'], 'strftime') else str(pos['buy_time'])[:16]
                         message += f"\n• {pos['stock_name']}({pos['stock_code']}) {pos['quantity']}주 @{pos['buy_price']:,.0f}원 ({buy_time_str})"
@@ -402,7 +391,7 @@ class TelegramNotifier:
                     if len(open_positions) > 5:
                         message += f"\n• ... 외 {len(open_positions) - 5}건"
                 
-                await update.message.reply_text(message, parse_mode="Markdown")
+                await update.message.reply_text(message)
                 
             else:
                 await update.message.reply_text("⚠️ 시스템에 연결할 수 없습니다.")
@@ -417,7 +406,7 @@ class TelegramNotifier:
             return
         
         help_message = """
-🤖 *거래 봇 명령어*
+🤖 거래 봇 명령어
 
 /status - 시스템 상태 조회
 /positions - 보유 포지션 조회  
@@ -433,7 +422,7 @@ class TelegramNotifier:
 • 가상 매매 실행 시
 """
         
-        await update.message.reply_text(help_message, parse_mode="Markdown")
+        await update.message.reply_text(help_message)
     
     async def _cmd_stop(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """시스템 종료 명령어"""

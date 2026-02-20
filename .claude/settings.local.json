@@ -81,7 +81,13 @@
       "Bash(git -C d:/GIT/RoboTrader log --oneline -5)",
       "Bash(git -C d:/GIT/RoboTrader add config/strategy_settings.py core/strategies/price_position_strategy.py core/trading_decision_engine.py simulate_price_position_strategy.py main.py utils/data_cache.py)",
       "Bash(git -C d:/GIT/RoboTrader commit -m \"$\\(cat <<''EOF''\nimprove: 전략 필터 강화 및 DuckDB 연결 관리 개선\n\n- 목요일 제외 \\(승률 31% → 제거\\), 진입시간 10~11시로 축소\n- 진입 전 변동성 >0.8% 및 20봉 모멘텀 >+2% 필터 추가\n- 시뮬레이션에 동시보유 제한 및 고급 필터 동기화\n- 실거래 엔진에 동시보유 카운트 방식 변경 \\(누적→동시\\)\n- DuckDB read-only 연결 일괄 정리 후 장마감 저장\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\nEOF\n\\)\")",
-      "Bash(git -C d:/GIT/RoboTrader push)"
+      "Bash(git -C d:/GIT/RoboTrader push)",
+      "Bash(__NEW_LINE_5c415e81604596a2__ echo \"\")",
+      "Bash(__NEW_LINE_a1e1f9361f364178__ echo \"\")",
+      "Bash(__NEW_LINE_8e9490b389791277__ echo \"\")",
+      "Bash(__NEW_LINE_f36860b86402423e__ echo \"\")",
+      "Bash(# Check: after 12:00, what are the logs still doing? \\(buy judgment should stop\\) echo \"\"=== 12시 이후 매수 판단 ===\"\" grep -c \"\"매수 판단 시작.*^2026-02-19 1[2-5]\"\" \"\"d:/GIT/RoboTrader/logs/trading_20260219.log\"\" || true grep \"\"^2026-02-19 1[2-5].*매수 판단\"\" \"\"d:/GIT/RoboTrader/logs/trading_20260219.log\"\")",
+      "Bash(__NEW_LINE_094be9fb0de2d8d6__ echo \"\")"
     ],
     "deny": [],
     "ask": []

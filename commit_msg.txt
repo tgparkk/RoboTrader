@@ -1,0 +1,10 @@
+fix(telegram): remove Markdown parse_mode to eliminate parsing errors
+
+- Change send_message default parse_mode from "Markdown" to None
+- Remove all *bold* markdown syntax from templates (emoji provides structure)
+- Remove *bold* from command handler responses (_cmd_status, _cmd_positions, etc.)
+- Simplify fallback chain: was 3-stage (Markdown → escaped → plain), now 1-stage
+- Remove unnecessary replace('_', ' ') workaround from send_system_status
+- Root cause: dynamic values (stock names, errors) contain _, *, [ chars that break Telegram Markdown parser
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
