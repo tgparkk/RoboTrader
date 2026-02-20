@@ -1,1 +1,0 @@
-chore: remove stale commit_msg.txt
