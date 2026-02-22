@@ -2,11 +2,11 @@
 가격 위치 기반 전략 (Price Position Strategy)
 
 데이터 분석 기반으로 발견된 수익 패턴:
-- 시가 대비 2~4% 상승 구간에서 진입
-- 월/수/금요일만 거래 (화/목 회피)
-- 10시~11시 사이 진입
-- 손절 -2.5%, 익절 +3.5%
-- 진입 전 변동성 > 0.8% 제외, 20봉 모멘텀 > +2% 제외
+- 시가 대비 1~3% 상승 구간에서 진입
+- 월~금 전체 거래
+- 9시~12시 사이 진입
+- 손절 -4.0%, 익절 +5.0%
+- 진입 전 변동성 > 0.8% 제외, 20봉 모멘텀 > +2.0% 제외
 """
 
 from typing import Dict, Any, Optional, Tuple
@@ -24,15 +24,15 @@ class PricePositionStrategy:
     # 기본 설정값
     DEFAULT_CONFIG = {
         # 진입 조건
-        'min_pct_from_open': 2.0,      # 시가 대비 최소 상승률 (%)
-        'max_pct_from_open': 3.0,      # 시가 대비 최대 상승률 (%) — 4.0에서 하향, 과열 종목 제외
-        'entry_start_hour': 9,          # 진입 시작 시간 — 10시에서 9시로 확대
-        'entry_end_hour': 11,           # 진입 종료 시간
+        'min_pct_from_open': 1.0,      # 시가 대비 최소 상승률 (%)
+        'max_pct_from_open': 3.0,      # 시가 대비 최대 상승률 (%)
+        'entry_start_hour': 9,          # 진입 시작 시간
+        'entry_end_hour': 12,           # 진입 종료 시간
         'allowed_weekdays': [0, 1, 2, 3, 4],  # 허용 요일 (월~금 전체)
 
         # 손익 설정
-        'stop_loss_pct': -3.0,          # 손절 (%) — -2.5에서 확대, 스탑헌팅 방지
-        'take_profit_pct': 5.0,         # 익절 (%) — 3.5에서 확대, 수익 극대화
+        'stop_loss_pct': -4.0,          # 손절 (%) — trading_config.json과 동일
+        'take_profit_pct': 5.0,         # 익절 (%)
 
         # 거래 제한
         'one_trade_per_stock_per_day': True,  # 하루에 종목당 1회만 거래

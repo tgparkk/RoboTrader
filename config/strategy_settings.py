@@ -6,11 +6,11 @@
 2. 'price_position' - 가격 위치 기반 전략 (신규)
 
 가격 위치 기반 전략 (price_position):
-- 시가 대비 1~4% 상승 구간 진입
-- 월/수/금요일 거래 (화/목 회피)
+- 시가 대비 1~3% 상승 구간 진입
+- 월~금 전체 거래
 - 9시~12시 진입
 - 손절 -4.0%, 익절 +5.0%
-- 진입 전 변동성 > 1.0% 제외, 20봉 모멘텀 > +1.5% 제외
+- 진입 전 변동성 > 0.8% 제외, 20봉 모멘텀 > +2.0% 제외
 """
 
 
@@ -32,18 +32,17 @@ class StrategySettings:
         CANDLE_INTERVAL = 1          # 1분봉 사용
 
         # 진입 조건
-        MIN_PCT_FROM_OPEN = 1.0      # 시가 대비 최소 상승률 (%) — v3 멀티버스 최적화
-        MAX_PCT_FROM_OPEN = 4.0      # 시가 대비 최대 상승률 (%)
-        ENTRY_START_HOUR = 9         # 진입 시작 시간 (9시) — v3 확장
-        ENTRY_END_HOUR = 12          # 진입 종료 시간 (12시) — v3 확장
+        MIN_PCT_FROM_OPEN = 1.0      # 시가 대비 최소 상승률 (%)
+        MAX_PCT_FROM_OPEN = 3.0      # 시가 대비 최대 상승률 (%) — 4.0→3.0 (시뮬 최적화)
+        ENTRY_START_HOUR = 9         # 진입 시작 시간 (9시)
+        ENTRY_END_HOUR = 12          # 진입 종료 시간 (12시)
 
         # 허용 요일 (0=월, 1=화, 2=수, 3=목, 4=금)
-        # 화요일(1), 목요일(3) 회피
-        ALLOWED_WEEKDAYS = [0, 2, 4]  # 월, 수, 금
+        ALLOWED_WEEKDAYS = [0, 1, 2, 3, 4]  # 월~금 전체 (시뮬 검증: 화/목 포함이 +44% 수익)
 
         # 고급 진입 필터
-        MAX_PRE_VOLATILITY = 1.0     # 진입 전 10봉 변동성 상한 (%) — v3 완화
-        MAX_PRE20_MOMENTUM = 1.5     # 진입 전 20봉 모멘텀 상한 (%) — v3 최적화
+        MAX_PRE_VOLATILITY = 0.8     # 진입 전 10봉 변동성 상한 (%) — 1.0→0.8 (시뮬 최적화)
+        MAX_PRE20_MOMENTUM = 2.0     # 진입 전 20봉 모멘텀 상한 (%) — 1.5→2.0 (시뮬 최적화)
 
         # 손익 설정 (trading_config.json의 설정을 따름)
         # stop_loss_ratio: 0.04 (-4.0%)
