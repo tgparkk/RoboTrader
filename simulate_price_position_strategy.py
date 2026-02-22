@@ -4,12 +4,13 @@
 PricePositionStrategy 클래스를 사용하여 백테스트 실행
 """
 
-import duckdb
+import psycopg2
 import pandas as pd
 from datetime import datetime
 from collections import defaultdict
 import argparse
 
+from config.settings import PG_HOST, PG_PORT, PG_DATABASE, PG_USER, PG_PASSWORD
 from core.strategies.price_position_strategy import PricePositionStrategy
 
 
@@ -190,41 +191,46 @@ def run_simulation(
     print(f"분석 기간: {start_date} ~", end_date if end_date else "전체")
     print('=' * 80)
 
-    # DB 연결
-    conn = duckdb.connect('cache/market_data_v2.duckdb', read_only=True)
+    # PostgreSQL 연결
+    conn = psycopg2.connect(
+        host=PG_HOST, port=PG_PORT, database=PG_DATABASE,
+        user=PG_USER, password=PG_PASSWORD,
+    )
+    cur = conn.cursor()
 
-    # 모든 분봉 테이블
-    tables = conn.execute('''
-        SELECT table_name FROM information_schema.tables
-        WHERE table_name LIKE 'minute_%'
-    ''').fetchall()
+    # 모든 종목 코드
+    date_cond = "WHERE trade_date >= %s"
+    params = [start_date]
+    if end_date:
+        date_cond += " AND trade_date <= %s"
+        params.append(end_date)
 
-    print(f'\n총 종목 수: {len(tables)}')
+    cur.execute(f'''
+        SELECT DISTINCT stock_code FROM minute_candles
+        {date_cond}
+        ORDER BY stock_code
+    ''', params)
+    stock_codes = [row[0] for row in cur.fetchall()]
+
+    print(f'\n총 종목 수: {len(stock_codes)}')
 
     # 결과 수집
     all_trades = []
 
     print('\n시뮬레이션 실행 중...')
 
-    for idx, t in enumerate(tables):
+    for idx, stock_code in enumerate(stock_codes):
         if verbose and idx % 100 == 0:
-            print(f'  {idx}/{len(tables)} 종목 처리 중...')
-
-        table_name = t[0]
-        stock_code = table_name.replace('minute_', '')
+            print(f'  {idx}/{len(stock_codes)} 종목 처리 중...')
 
         try:
-            # 날짜 조건
-            date_cond = f"WHERE trade_date >= '{start_date}'"
-            if end_date:
-                date_cond += f" AND trade_date <= '{end_date}'"
-
             # 해당 종목의 모든 거래일
-            dates = conn.execute(f'''
-                SELECT DISTINCT trade_date FROM {table_name}
-                {date_cond}
+            cur.execute(f'''
+                SELECT DISTINCT trade_date FROM minute_candles
+                WHERE stock_code = %s AND {date_cond.replace("WHERE ", "")}
                 ORDER BY trade_date
-            ''').fetchall()
+            ''', [stock_code] + params)
+            dates = cur.fetchall()
 
             for d in dates:
                 trade_date = d[0]
@@ -237,14 +243,18 @@ def run_simulation(
                     continue
 
                 # 분봉 데이터 로드
-                df = conn.execute(f'''
-                    SELECT * FROM {table_name}
-                    WHERE trade_date = '{trade_date}'
+                cur.execute('''
+                    SELECT idx, date, time, close, open, high, low, volume, amount, datetime
+                    FROM minute_candles
+                    WHERE stock_code = %s AND trade_date = %s
                     ORDER BY idx
-                ''').fetchdf()
-
-                if len(df) < 50:
+                ''', [stock_code, trade_date])
+                rows = cur.fetchall()
+                if len(rows) < 50:
                     continue
+
+                columns = ['idx', 'date', 'time', 'close', 'open', 'high', 'low', 'volume', 'amount', 'datetime']
+                df = pd.DataFrame(rows, columns=columns)
 
                 day_open = df.iloc[0]['open']
                 if day_open <= 0:
@@ -302,6 +312,7 @@ def run_simulation(
         except Exception as e:
             continue
 
+    cur.close()
     conn.close()
 
     # 결과 분석
@@ -380,6 +391,7 @@ def main():
     parser.add_argument('--max-daily', type=int, default=5, help='동시보유 거래 종목수 (0=무제한만 표시)')
     parser.add_argument('--max-volatility', type=float, default=0.8, help='진입전 변동성 상한 (%%, 0=비활성)')
     parser.add_argument('--max-momentum', type=float, default=2.0, help='20봉 모멘텀 상한 (%%, 0=비활성)')
+    parser.add_argument('--weekdays', default=None, help='허용 요일 (0=월~4=금, 쉼표구분, 예: 0,2,4)')
     parser.add_argument('--quiet', action='store_true', help='진행상황 출력 숨김')
 
     args = parser.parse_args()
@@ -392,6 +404,8 @@ def main():
         'stop_loss_pct': args.stop_loss,
         'take_profit_pct': args.take_profit,
     }
+    if args.weekdays is not None:
+        config['allowed_weekdays'] = [int(d) for d in args.weekdays.split(',')]
     if args.max_volatility > 0:
         config['max_pre_volatility'] = args.max_volatility
     if args.max_momentum > 0:
