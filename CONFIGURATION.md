@@ -25,8 +25,8 @@ config/
   "risk_management": {
     "max_position_count": 20,       // 최대 보유 종목 수
     "max_position_ratio": 0.3,      // 종목당 최대 비율
-    "stop_loss_ratio": 0.025,       // 손절 (-2.5%)
-    "take_profit_ratio": 0.035,     // 익절 (+3.5%)
+    "stop_loss_ratio": 0.04,        // 손절 (-4.0%)
+    "take_profit_ratio": 0.05,      // 익절 (+5.0%)
     "use_dynamic_profit_loss": false  // 동적 손익비 (비활성화)
   }
 }
@@ -144,6 +144,38 @@ class FundManager:
 
 ---
 
+## 6. strategy_settings.py - 스크리너 설정
+
+### 실시간 종목 스크리너 (Screener)
+```python
+class Screener:
+    ENABLED = True                    # 스크리너 사용 여부
+    SCAN_INTERVAL_SECONDS = 120       # 스캔 주기 (2분)
+    SCAN_START_HOUR = 9               # 9:05부터
+    SCAN_START_MINUTE = 5
+    SCAN_END_HOUR = 11                # 11:50까지
+    SCAN_END_MINUTE = 50
+
+    # 기본 필터 (거래량순위 API 기반)
+    MIN_CHANGE_RATE = 0.5             # 최소 등락률 (%)
+    MAX_CHANGE_RATE = 5.0             # 최대 등락률 (%)
+    MIN_PRICE = 5000                  # 최소 가격 (원)
+    MAX_PRICE = 500000                # 최대 가격 (원)
+    MIN_TRADING_AMOUNT = 1_000_000_000  # 최소 거래대금 (10억)
+
+    # 정밀 필터 (현재가 API 기반)
+    MIN_PCT_FROM_OPEN = 0.8           # 시가 대비 최소 상승률 (%)
+    MAX_PCT_FROM_OPEN = 4.0           # 시가 대비 최대 상승률 (%)
+    MAX_GAP_PCT = 3.0                 # 시가 vs 전일종가 갭 최대 (%)
+```
+
+### 스크리너 3단계 파이프라인
+1. **Phase 1**: KOSPI+KOSDAQ 거래량순위 API (4회 호출) → ~80-100개 후보
+2. **Phase 2**: 기본 필터 (등락률, 가격, 거래대금) → ~20-30개
+3. **Phase 3**: 현재가 API로 정밀 검증 (시가대비, 갭) → 최대 5개 추가
+
+---
+
 ## 설정 변경 시 주의사항
 
 1. **투자 비율 변경**: `trading_config.json`과 `fund_manager.py` 모두 수정
@@ -156,12 +188,13 @@ class FundManager:
 ## 시뮬레이션 명령어
 
 ```bash
-# 기본 시뮬레이션
-python batch_signal_replay.py --start 20250901 --end 20260123
+# 스크리너 통합 시뮬레이션 (price_position 전략)
+python simulate_with_screener.py --start 20250224 --end 20260223
 
-# 고급 필터 적용
-python batch_signal_replay.py --start 20250901 --end 20260123 --advanced-filter
-
-# ML 필터 적용
-python batch_signal_replay.py --start 20250901 --end 20260123 --ml-filter
+# 데이터 수집 + 시뮬레이션 파이프라인
+python collect_and_simulate.py --phase ABCD --start 20250224 --end 20260223
+# Phase A: 일봉 수집 (FinanceDataReader)
+# Phase B: 스크리너 후보 선정
+# Phase C: 분봉 수집 (KIS API → PostgreSQL)
+# Phase D: 시뮬레이션 실행
 ```

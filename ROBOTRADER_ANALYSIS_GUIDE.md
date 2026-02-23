@@ -22,17 +22,17 @@
 
 ### 시뮬레이션 (signal_replay)
 - **목적**: 과거 거래 재현 및 백테스트
-- **데이터**: 캐시 파일 (`cache/minute_data/`) 사용
+- **데이터**: PostgreSQL (`minute_candles` 테이블) 사용
 - **특징**:
   - **selection_date 필터링 적용** (중요!)
-  - 캐시 데이터는 종가 확정 후 저장
+  - 장 마감 후 확정 데이터 저장
   - ML 필터 동일하게 적용
 
 ### 🚨 주요 차이점
 
 | 구분 | 실시간 | 시뮬레이션 |
 |------|--------|-----------|
-| **데이터 소스** | KIS API (실시간) | 캐시 파일 (확정) |
+| **데이터 소스** | KIS API (실시간) | PostgreSQL (확정) |
 | **selection_date 필터** | ❌ 없음 | ✅ 있음 (선정 시점 이전 신호 차단) |
 | **분봉 업데이트** | 지속적 업데이트 | 고정된 종가 |
 | **신호 타이밍** | 데이터 변화에 따라 가변 | 확정 데이터 기준 |
@@ -159,38 +159,34 @@ print('Confidence:', data['signal_info']['confidence'])
 - 같은 캔들의 값이 시간에 따라 변할 수 있음
 - 패턴 로그에 저장된 값 = 신호 발생 당시의 값
 
-### 2. 캐시 파일 데이터
-**위치**: `cache/minute_data/XXXXXX_YYYYMMDD.pkl`
+### 2. PostgreSQL 캐시 데이터
+**테이블**: `minute_candles` (분봉), `daily_candles` (일봉)
 
 **특징**:
-- 장 종료 후 또는 특정 시점에 저장된 확정 데이터
+- 장 종료 후 확정 데이터를 PostgreSQL에 저장
 - 시뮬레이션에서 사용
 - **실시간 데이터와 다를 수 있음** (중요!)
 
 **확인 방법**:
 ```python
-import pickle
+import psycopg2
 import pandas as pd
 
-with open('cache/minute_data/006280_20251218.pkl', 'rb') as f:
-    data = pickle.load(f)
+conn = psycopg2.connect(host='localhost', port=5432, database='robotrader',
+                        user='postgres', password='your_password')
 
-# 3분봉으로 변환
-data['datetime'] = pd.to_datetime(data['datetime'])
-data = data.set_index('datetime')
-df_3min = data.resample('3T', label='right', closed='right').agg({
-    'open': 'first',
-    'high': 'max',
-    'low': 'min',
-    'close': 'last',
-    'volume': 'sum'
-}).dropna()
-
-print(df_3min['2025-12-18 10:42':'2025-12-18 11:00'])
+# 분봉 데이터 조회
+df = pd.read_sql_query('''
+    SELECT * FROM minute_candles
+    WHERE stock_code = '006280' AND trade_date = '20251218'
+    ORDER BY idx
+''', conn)
+print(df)
+conn.close()
 ```
 
 ### 3. 일봉 캐시
-**위치**: `cache/daily/XXXXXX_YYYYMMDD_daily.pkl`
+**테이블**: `daily_candles`
 
 **용도**: 일봉 필터링에 사용
 
@@ -328,18 +324,18 @@ grep -A100 "=== XXXXXX" signal_replay_log/signal_new2_replay_YYYYMMDD*.txt
 
 #### 5단계: 데이터 소스 비교
 ```python
-# 캐시 데이터 vs 패턴 로그 데이터
-import pickle, pandas as pd, json
+# PostgreSQL 데이터 vs 패턴 로그 데이터
+import psycopg2, pandas as pd, json
 
-# 캐시 읽기
-with open('cache/minute_data/XXXXXX_YYYYMMDD.pkl', 'rb') as f:
-    cache_data = pickle.load(f)
-
-# 3분봉 변환
-cache_data['datetime'] = pd.to_datetime(cache_data['datetime'])
-cache_3min = cache_data.set_index('datetime').resample('3T').agg({
-    'close': 'last', 'volume': 'sum'
-})
+# PostgreSQL에서 분봉 읽기
+conn = psycopg2.connect(host='localhost', port=5432, database='robotrader',
+                        user='postgres', password='your_password')
+cache_data = pd.read_sql_query('''
+    SELECT * FROM minute_candles
+    WHERE stock_code = 'XXXXXX' AND trade_date = 'YYYYMMDD'
+    ORDER BY idx
+''', conn)
+conn.close()
 
 # 패턴 로그 읽기
 with open('pattern_data_log/pattern_data_YYYYMMDD.jsonl') as f:
@@ -349,8 +345,8 @@ with open('pattern_data_log/pattern_data_YYYYMMDD.jsonl') as f:
             breakout = data['pattern_stages']['4_breakout']['candle']
             print(f"패턴 로그: {breakout['datetime']} - {breakout['close']}, {breakout['volume']}")
 
-print("캐시 데이터:")
-print(cache_3min[시작:종료])
+print("DB 데이터:")
+print(cache_data)
 ```
 
 ### 일반적인 차이 원인
@@ -415,7 +411,7 @@ grep "ML 필터" logs/trading_YYYYMMDD.log | grep "통과" | wc -l
 1. **순수 패턴**: `signal_replay_log/signal_new2_replay_*.txt`
 2. **ML 적용**: `signal_replay_log_ml/signal_ml_replay_*.txt`
 3. **selection_date**: 종목별 선정 시점 확인 필수
-4. **데이터 소스**: `cache/minute_data/*.pkl`
+4. **데이터 소스**: PostgreSQL `minute_candles` 테이블
 
 ### 🎯 차이 분석 3단계
 1. **신호 시점 비교**: 실시간 vs 시뮬
@@ -446,7 +442,7 @@ grep "ML 필터" logs/trading_YYYYMMDD.log | grep "통과" | wc -l
 ### 파일 인코딩
 - 로그 파일: UTF-8
 - JSON 파일: UTF-8
-- 캐시 파일: pickle (바이너리)
+- 캐시 데이터: PostgreSQL
 
 ---
 

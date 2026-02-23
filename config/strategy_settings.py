@@ -53,6 +53,34 @@ class StrategySettings:
         MAX_DAILY_POSITIONS = 5              # 최대 동시 보유 종목 수 (청산 시 새 매수 가능)
 
     # ========================================
+    # 실시간 종목 스크리너 설정
+    # ========================================
+    class Screener:
+        ENABLED = True                          # 스크리너 사용 여부
+        SCAN_INTERVAL_SECONDS = 120             # 스캔 주기 (2분)
+        SCAN_START_HOUR = 9                     # 스캔 시작 시 (9시)
+        SCAN_START_MINUTE = 5                   # 스캔 시작 분 (9:05)
+        SCAN_END_HOUR = 11                      # 스캔 종료 시 (11시)
+        SCAN_END_MINUTE = 50                    # 스캔 종료 분 (11:50)
+
+        # Phase 2 기본 필터 (거래량순위 데이터 기반)
+        MIN_CHANGE_RATE = 0.5                   # 최소 등락률 (%)
+        MAX_CHANGE_RATE = 5.0                   # 최대 등락률 (%)
+        MIN_PRICE = 5000                        # 최소 가격 (원)
+        MAX_PRICE = 500000                      # 최대 가격 (원)
+        MIN_TRADING_AMOUNT = 1_000_000_000      # 최소 거래대금 (10억)
+
+        # Phase 3 정밀 필터 (현재가 API 기반)
+        MIN_PCT_FROM_OPEN = 0.8                 # 시가 대비 최소 상승률 (%)
+        MAX_PCT_FROM_OPEN = 4.0                 # 시가 대비 최대 상승률 (%)
+        MAX_GAP_PCT = 3.0                       # 시가 vs 전일종가 갭 최대 (%)
+        MAX_PHASE3_CHECKS = 15                  # Phase3 최대 검증 종목 수
+
+        # 제한
+        MAX_CANDIDATES_PER_SCAN = 5             # 스캔당 최대 추가 종목 수
+        MAX_TOTAL_CANDIDATES = 15               # 일일 최대 총 후보 종목 수
+
+    # ========================================
     # 눌림목 캔들패턴 전략 설정 (pullback)
     # ========================================
     class Pullback:

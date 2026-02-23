@@ -12,6 +12,9 @@
 
 한국투자증권 KIS API 기반 자동매매 시스템
 
+**데이터 저장**: PostgreSQL (분봉: `minute_candles`, 일봉: `daily_candles`)
+**종목 발굴**: 코드 기반 실시간 스크리너 (KOSPI + KOSDAQ 2472종목)
+
 ---
 
 ## 현재 활성 전략: 가격 위치 기반 전략 (price_position)
@@ -24,20 +27,26 @@ ACTIVE_STRATEGY = 'price_position'
 ### 진입 조건
 | 항목 | 설정값 |
 |------|--------|
-| 시가 대비 | 1% ~ 4% 상승 |
+| 시가 대비 | 1% ~ 3% 상승 |
 | 거래 시간 | 9:00 ~ 12:00 |
-| 거래 요일 | 월/수/금 (화/목 제외) |
-| 일 최대 종목 | 5개 |
-| 고급 필터 | 변동성 < 1.0%, 모멘텀 < +1.5% |
+| 거래 요일 | 월~금 전체 |
+| 동시 보유 최대 | 5종목 (청산 시 새 매수 가능) |
+| 고급 필터 | 변동성 < 0.8%, 모멘텀 < +2.0% |
 
 ### 청산 조건
 - **손절**: -4.0%
 - **익절**: +5.0%
 
+### 종목 발굴: 실시간 스크리너 (core/stock_screener.py)
+- 2분 주기로 KOSPI+KOSDAQ 거래량순위 API 스캔 (4회 호출)
+- 3단계 필터: 기본필터 → 정밀필터(시가대비, 갭) → 점수순 최대 5개 추가
+- 설정: `config/strategy_settings.py` > `Screener` 클래스
+
 ### 관련 파일
-- `config/strategy_settings.py` - 전략 선택 및 설정
+- `config/strategy_settings.py` - 전략/스크리너 설정
 - `core/strategies/price_position_strategy.py` - 전략 클래스
-- `simulate_price_position_strategy.py` - 시뮬레이션
+- `core/stock_screener.py` - 실시간 종목 스크리너
+- `simulate_with_screener.py` - 스크리너 통합 시뮬레이션
 
 ---
 
@@ -57,15 +66,19 @@ ACTIVE_STRATEGY = 'price_position'
 ```
 config/
 ├── trading_config.json          # 거래 설정 (투자비율, 손익비)
-├── strategy_settings.py         # 전략 선택 설정
+├── strategy_settings.py         # 전략/스크리너 설정
 
 core/
 ├── trading_decision_engine.py   # 매매 판단 엔진
 ├── trade_executor.py            # 매수/매도 실행 로직
+├── stock_screener.py            # 실시간 종목 스크리너
 ├── intraday_stock_manager.py    # 장중 데이터 관리
 ├── fund_manager.py              # 자금 관리
 ├── strategies/
 │   └── price_position_strategy.py  # 가격 위치 전략
+
+utils/
+├── data_cache.py               # PostgreSQL 데이터 캐시
 
 db/
 └── database_manager.py         # PostgreSQL 데이터 관리
@@ -82,12 +95,18 @@ grep "가격위치전략.*매수 신호" logs/trading_YYYYMMDD.log
 
 # 거래 기록 확인
 grep "거래 기록 추가" logs/trading_YYYYMMDD.log
+
+# 스크리너 결과
+grep "\[스크리너\]" logs/trading_YYYYMMDD.log
 ```
 
 ### 시뮬레이션
 ```bash
-# price_position 전략 시뮬레이션
-python simulate_price_position_strategy.py --start 20250901 --end 20260130
+# 스크리너 통합 시뮬레이션 (추천)
+python simulate_with_screener.py --start 20250224 --end 20260223
+
+# 데이터 수집 + 시뮬레이션 파이프라인
+python collect_and_simulate.py --phase ABCD --start 20250224 --end 20260223
 ```
 
 ---

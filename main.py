@@ -17,6 +17,7 @@ from core.data_collector import RealTimeDataCollector
 from core.order_manager import OrderManager
 from core.telegram_integration import TelegramIntegration
 from core.candidate_selector import CandidateSelector, CandidateStock
+from core.stock_screener import StockScreener
 from core.intraday_stock_manager import IntradayStockManager
 from core.trading_stock_manager import TradingStockManager
 from core.trading_decision_engine import TradingDecisionEngine
@@ -68,6 +69,9 @@ class DayTradingBot:
         TradingDecisionEngine.reset_daily_trades()
         self.logger.info("🔄 price_position 일별 거래 기록 초기화 완료")
 
+        # 실시간 종목 스크리너 (HTS 조건검색 대체)
+        self.stock_screener = StockScreener(config=self._build_screener_config())
+
         # 🆕 TradingStockManager에 decision_engine 연결 (쿨다운 설정용)
         self.trading_manager.set_decision_engine(self.decision_engine)
 
@@ -78,6 +82,33 @@ class DayTradingBot:
         # 신호 핸들러 등록
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
+
+    def _build_screener_config(self) -> dict:
+        """스크리너 설정 구성"""
+        from config.strategy_settings import StrategySettings
+        sc = StrategySettings.Screener
+        return {
+            'min_change_rate': sc.MIN_CHANGE_RATE,
+            'max_change_rate': sc.MAX_CHANGE_RATE,
+            'min_price': sc.MIN_PRICE,
+            'max_price': sc.MAX_PRICE,
+            'min_trading_amount': sc.MIN_TRADING_AMOUNT,
+            'min_pct_from_open': sc.MIN_PCT_FROM_OPEN,
+            'max_pct_from_open': sc.MAX_PCT_FROM_OPEN,
+            'max_gap_pct': sc.MAX_GAP_PCT,
+            'max_phase3_checks': sc.MAX_PHASE3_CHECKS,
+            'max_candidates_per_scan': sc.MAX_CANDIDATES_PER_SCAN,
+            'max_total_candidates': sc.MAX_TOTAL_CANDIDATES,
+        }
+
+    def _is_screening_time(self, current_time: datetime) -> bool:
+        """스크리너 실행 가능 시간 확인"""
+        from config.strategy_settings import StrategySettings
+        sc = StrategySettings.Screener
+        t = current_time.hour * 60 + current_time.minute
+        start = sc.SCAN_START_HOUR * 60 + sc.SCAN_START_MINUTE
+        end = sc.SCAN_END_HOUR * 60 + sc.SCAN_END_MINUTE
+        return start <= t <= end
 
     def _round_to_tick(self, price: float) -> float:
         """KRX 정확한 호가단위에 맞게 반올림 - kis_order_api 함수 사용"""
@@ -281,11 +312,15 @@ class DayTradingBot:
                     await asyncio.sleep(5)
                     continue
                 
-                # 🆕 장중 조건검색 체크 (장 시작 ~ 청산 시간 전까지) - 동적 시간 적용
-                if (is_market_open(current_time) and
+                # 장중 실시간 종목 스크리닝 (HTS 조건검색 대체)
+                from config.strategy_settings import StrategySettings
+                sc = StrategySettings.Screener
+                if (sc.ENABLED and
+                    is_market_open(current_time) and
                     not MarketHours.is_eod_liquidation_time('KRX', current_time) and
-                    (current_time - last_condition_check).total_seconds() >= 60):  # 60초
-                    await self._check_condition_search()
+                    self._is_screening_time(current_time) and
+                    (current_time - last_condition_check).total_seconds() >= sc.SCAN_INTERVAL_SECONDS):
+                    await self._run_stock_screener()
                     last_condition_check = current_time
                 
                 # 매매 판단 시스템 실행 (5초 주기)
@@ -995,7 +1030,98 @@ class DayTradingBot:
         except Exception as e:
             self.logger.error(f"❌ 장중 조건검색 체크 오류: {e}")
             await self.telegram.notify_error("Condition Search", e)
-    
+
+    async def _run_stock_screener(self):
+        """장중 실시간 종목 스크리닝 (HTS 조건검색 대체)"""
+        try:
+            # 스크리너 실행 (동기 → run_in_executor로 비동기 래핑)
+            loop = asyncio.get_event_loop()
+            screened_stocks = await loop.run_in_executor(
+                None, self.stock_screener.scan
+            )
+
+            if not screened_stocks:
+                return
+
+            self.logger.info(
+                f"[스크리너] {len(screened_stocks)}개 종목 발견, 거래 풀 추가 시작"
+            )
+
+            candidates_to_save = []
+            for stock in screened_stocks:
+                if not stock.code:
+                    continue
+
+                # 전날 종가 조회 (기존 패턴 재사용)
+                prev_close = 0.0
+                try:
+                    daily_data = self.api_manager.get_ohlcv_data(
+                        stock.code, "D", 7
+                    )
+                    if daily_data is not None and len(daily_data) >= 2:
+                        if hasattr(daily_data, 'iloc'):
+                            daily_data = daily_data.sort_values('stck_bsop_date')
+                            last_date = daily_data.iloc[-1]['stck_bsop_date']
+                            if isinstance(last_date, str):
+                                last_date = datetime.strptime(
+                                    last_date, '%Y%m%d'
+                                ).date()
+                            elif hasattr(last_date, 'date'):
+                                last_date = last_date.date()
+                            if (last_date == now_kst().date()
+                                    and len(daily_data) >= 2):
+                                prev_close = float(
+                                    daily_data.iloc[-2]['stck_clpr']
+                                )
+                            else:
+                                prev_close = float(
+                                    daily_data.iloc[-1]['stck_clpr']
+                                )
+                except Exception as e:
+                    self.logger.debug(
+                        f"[스크리너] {stock.code} 전날 종가 조회 실패: {e}"
+                    )
+
+                # 거래 상태 관리자에 추가
+                selection_reason = (
+                    f"스크리너: {stock.reason}"
+                )
+                success = await self.trading_manager.add_selected_stock(
+                    stock_code=stock.code,
+                    stock_name=stock.name,
+                    selection_reason=selection_reason,
+                    prev_close=prev_close
+                )
+
+                if success:
+                    self.stock_screener.mark_stock_added(stock.code)
+                    candidates_to_save.append(
+                        CandidateStock(
+                            code=stock.code,
+                            name=stock.name,
+                            market=stock.market,
+                            score=stock.score,
+                            reason=selection_reason
+                        )
+                    )
+
+            # 후보 종목 DB 저장
+            if candidates_to_save:
+                try:
+                    self.db_manager.save_candidate_stocks(candidates_to_save)
+                    self.logger.info(
+                        f"[스크리너] 후보 종목 DB 저장 완료: "
+                        f"{len(candidates_to_save)}건"
+                    )
+                except Exception as db_err:
+                    self.logger.error(
+                        f"[스크리너] 후보 종목 DB 저장 오류: {db_err}"
+                    )
+
+        except Exception as e:
+            self.logger.error(f"[스크리너] 스크리닝 오류: {e}")
+            await self.telegram.notify_error("Stock Screener", e)
+
     async def _update_intraday_data(self):
         """장중 종목 실시간 데이터 업데이트 + 매수 판단 실행 (완성된 분봉만 수집)"""
         try:

@@ -57,7 +57,7 @@ AdvancedFilterManager.check_signal(pattern_stages=pattern_stages)
 
 | 구분 | 실시간 | 시뮬레이션 |
 |------|--------|-----------|
-| **데이터 소스** | KIS API (실시간) | DuckDB 캐시 (확정) |
+| **데이터 소스** | KIS API (실시간) | PostgreSQL (확정) |
 | **selection_date 필터** | 없음 | 있음 (선정 시점 이전 차단) |
 | **분봉 업데이트** | 지속적 업데이트 | 고정된 종가 |
 
@@ -105,15 +105,18 @@ grep -A100 "=== XXXXXX" signal_replay_log/signal_new2_replay_YYYYMMDD*.txt
 
 #### 4단계: 캐시 데이터 확인
 ```python
-import duckdb
+import psycopg2
+import pandas as pd
 
-con = duckdb.connect('cache/market_data_v2.duckdb')
-df = con.execute("""
-    SELECT * FROM minute_XXXXXX
-    WHERE date = 'YYYYMMDD'
-    ORDER BY time
-""").fetchdf()
+conn = psycopg2.connect(host='localhost', port=5432, database='robotrader',
+                        user='postgres', password='your_password')
+df = pd.read_sql_query('''
+    SELECT * FROM minute_candles
+    WHERE stock_code = 'XXXXXX' AND trade_date = 'YYYYMMDD'
+    ORDER BY idx
+''', conn)
 print(df)
+conn.close()
 ```
 
 ---
@@ -174,15 +177,11 @@ grep "ML 필터" logs/trading_YYYYMMDD.log | grep "차단" | wc -l
 
 ---
 
-## DuckDB 캐시 시스템
+## PostgreSQL 캐시 시스템
 
 ### 테이블 구조
-- **분봉 데이터**: `minute_{종목코드}` (예: `minute_005930`)
-- **일봉 데이터**: `daily_{종목코드}` (예: `daily_005930`)
-
-### 데이터 로드 우선순위
-1. DuckDB에서 로드 시도
-2. 없으면 pkl 파일에서 폴백 로드 (하위 호환성)
+- **분봉 데이터**: `minute_candles` (PK: stock_code, trade_date, idx)
+- **일봉 데이터**: `daily_candles` (PK: stock_code, stck_bsop_date)
 
 ### 캐시 클래스
 - `DataCache` (utils/data_cache.py): 분봉 데이터

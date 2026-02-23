@@ -43,17 +43,24 @@ RoboTrader/
 ├── core/                   # 핵심 비즈니스 로직
 │   ├── models.py           # 데이터 모델
 │   ├── data_collector.py   # 실시간 데이터 수집
-│   └── order_manager.py    # 주문 관리
+│   ├── trading_decision_engine.py  # 매매 판단 엔진
+│   ├── trade_executor.py   # 매수/매도 실행
+│   ├── stock_screener.py   # 실시간 종목 스크리너
+│   ├── order_manager.py    # 주문 관리
+│   └── strategies/
+│       └── price_position_strategy.py  # 가격 위치 전략
 ├── utils/                  # 유틸리티
+│   ├── data_cache.py       # PostgreSQL 데이터 캐시
 │   ├── logger.py           # 로깅 시스템
 │   ├── korean_time.py      # 한국 시간 처리
 │   └── telegram/           # 텔레그램 모듈
 │       └── telegram_notifier.py
 ├── config/                 # 설정 파일
-│   ├── key.ini            # API 키 및 텔레그램 설정
-│   └── trading_config.json # 거래 설정
-├── docs/                   # 문서
-│   └── telegram_setup.md   # 텔레그램 설정 가이드
+│   ├── strategy_settings.py  # 전략/스크리너 설정
+│   ├── trading_config.json   # 거래 설정 (투자비율, 손익비)
+│   └── key.ini               # API 키 (git 제외)
+├── db/
+│   └── database_manager.py # PostgreSQL 데이터 관리
 ├── main.py                # 메인 실행 파일
 └── requirements.txt       # 의존성 패키지
 ```
@@ -229,21 +236,24 @@ python apply_ml_filter.py \
 
 ---
 
-### 📁 데이터 폴더 구조
+### 📁 데이터 저장소
 
+**PostgreSQL 테이블**:
+- `minute_candles`: 분봉 데이터 (PK: stock_code, trade_date, idx)
+- `daily_candles`: 일봉 데이터 (PK: stock_code, stck_bsop_date)
+- `candidate_stocks`: 후보 종목 및 선정 시점
+- `trading_stocks`: 거래 중인 종목 상태
+
+**파일 기반 데이터**:
 ```
 RoboTrader/
-├── pattern_data_log/              # 고정 손익비 패턴 로그
+├── pattern_data_log/              # 패턴 로그
 │   └── pattern_data_YYYYMMDD.jsonl
-├── pattern_data_log_dynamic/      # 동적 손익비 패턴 로그
-│   └── pattern_data_YYYYMMDD.jsonl
-├── signal_replay_log/             # 고정 손익비 시뮬 결과
+├── signal_replay_log/             # 시뮬 결과
 │   └── signal_new2_replay_*.txt
-├── test_results_dynamic/          # 동적 손익비 시뮬 결과
-│   └── signal_new2_replay_*.txt
-├── ml_dataset_dynamic_pl.csv      # 동적 ML 데이터셋
-├── ml_model_dynamic_pl.pkl        # 동적 ML 모델
-└── ml_model.pkl                   # 고정 ML 모델
+├── stock_list.json                # KOSPI+KOSDAQ 종목 리스트 (2472종목)
+└── logs/                          # 거래 로그
+    └── trading_YYYYMMDD.log
 ```
 
 ---

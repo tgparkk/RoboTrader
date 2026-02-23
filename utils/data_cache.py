@@ -2,16 +2,11 @@
 데이터 캐싱 유틸리티
 1분봉/일봉 데이터를 PostgreSQL 기반으로 캐싱하여 관리 편의성 향상
 
-- PostgreSQL을 기본 저장소로 사용 (단일 테이블: minute_candles, daily_candles)
-- 기존 pkl 파일도 읽기 가능 (호환성 유지)
+- PostgreSQL을 단일 저장소로 사용 (minute_candles, daily_candles 테이블)
 - Connection pool 기반 성능 최적화
 """
-import os
-import pickle
 import pandas as pd
 import threading
-from functools import lru_cache
-from pathlib import Path
 from typing import Optional
 from utils.logger import setup_logger
 
@@ -117,17 +112,10 @@ def _ensure_tables_once():
 
 
 class DataCache:
-    """PostgreSQL 기반 분봉 데이터 캐시 관리자
-
-    - 기본적으로 PostgreSQL에서 데이터를 읽고 씀
-    - PostgreSQL에 데이터가 없으면 pkl 폴백 로드
-    """
+    """PostgreSQL 기반 분봉 데이터 캐시 관리자"""
 
     def __init__(self, cache_dir: str = "cache/minute_data", use_duckdb: bool = True):
         self.logger = setup_logger(__name__)
-        self.cache_dir = Path(cache_dir)
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
-
         _ensure_tables_once()
 
     @classmethod
@@ -135,13 +123,8 @@ class DataCache:
         """호환성 유지용 (no-op)"""
         pass
 
-    def _get_cache_file(self, stock_code: str, date_str: str) -> Path:
-        """캐시 파일 경로 생성 (pkl 폴백용)"""
-        return self.cache_dir / f"{stock_code}_{date_str}.pkl"
-
     def has_data(self, stock_code: str, date_str: str) -> bool:
         """캐시된 데이터 존재 여부 확인"""
-        # PostgreSQL 확인
         try:
             pool = _get_pg_pool()
             conn = pool.getconn()
@@ -152,16 +135,11 @@ class DataCache:
                     (stock_code, date_str)
                 )
                 count = cur.fetchone()[0]
-                if count > 0:
-                    return True
+                return count > 0
             finally:
                 pool.putconn(conn)
         except Exception:
-            pass
-
-        # pkl 폴백
-        cache_file = self._get_cache_file(stock_code, date_str)
-        return cache_file.exists()
+            return False
 
     def save_data(self, stock_code: str, date_str: str, df_minute: pd.DataFrame) -> bool:
         """1분봉 데이터를 PostgreSQL에 저장"""
@@ -228,30 +206,15 @@ class DataCache:
 
         except Exception as e:
             conn.rollback()
-            self.logger.warning(f"PG 저장 실패, pkl로 폴백: {e}")
-            return self._save_to_pkl(stock_code, date_str, df_minute)
+            self.logger.error(f"PG 저장 실패: {e}")
+            return False
         finally:
             pool.putconn(conn)
-
-    def _save_to_pkl(self, stock_code: str, date_str: str, df_minute: pd.DataFrame) -> bool:
-        """pkl 파일로 저장 (폴백)"""
-        cache_file = self._get_cache_file(stock_code, date_str)
-        with open(cache_file, 'wb') as f:
-            pickle.dump(df_minute, f, protocol=pickle.HIGHEST_PROTOCOL)
-        self.logger.debug(f"[{stock_code}] pkl 저장 완료 ({len(df_minute)}개)")
-        return True
 
     def load_data(self, stock_code: str, date_str: str) -> Optional[pd.DataFrame]:
         """캐시된 1분봉 데이터 로드"""
         try:
-            # PostgreSQL 먼저
-            df = self._load_from_pg(stock_code, date_str)
-            if df is not None:
-                return df
-
-            # pkl 폴백
-            return self._load_from_pkl(stock_code, date_str)
-
+            return self._load_from_pg(stock_code, date_str)
         except Exception as e:
             self.logger.error(f"캐시 로드 실패 ({stock_code}, {date_str}): {e}")
             return None
@@ -275,26 +238,12 @@ class DataCache:
                     return None
 
                 df.set_index('idx', inplace=True)
-                #self.logger.debug(f"[{stock_code}] PG에서 로드 ({len(df)}개)")
                 return df
             finally:
                 pool.putconn(conn)
         except Exception as e:
             self.logger.debug(f"PG 로드 실패: {e}")
             return None
-
-    def _load_from_pkl(self, stock_code: str, date_str: str) -> Optional[pd.DataFrame]:
-        """pkl 파일에서 로드 (폴백)"""
-        cache_file = self._get_cache_file(stock_code, date_str)
-
-        if not cache_file.exists():
-            return None
-
-        with open(cache_file, 'rb') as f:
-            df_minute = pickle.load(f)
-
-        #self.logger.debug(f"[{stock_code}] pkl에서 로드 ({len(df_minute)}개)")
-        return df_minute
 
     def clear_cache(self, stock_code: str = None, date_str: str = None):
         """캐시 정리"""
@@ -320,16 +269,6 @@ class DataCache:
             finally:
                 pool.putconn(conn)
 
-            # pkl 파일도 삭제
-            if stock_code and date_str:
-                cache_file = self._get_cache_file(stock_code, date_str)
-                if cache_file.exists():
-                    cache_file.unlink()
-            else:
-                for cache_file in self.cache_dir.glob("*.pkl"):
-                    cache_file.unlink()
-                self.logger.info(f"전체 pkl 캐시 정리 완료: {self.cache_dir}")
-
         except Exception as e:
             self.logger.error(f"캐시 정리 실패: {e}")
 
@@ -340,7 +279,6 @@ class DataCache:
                 'total_tables': 0,
                 'total_records': 0,
                 'total_size_mb': 0,
-                'cache_dir': str(self.cache_dir),
                 'storage': 'postgresql'
             }
 
@@ -359,7 +297,7 @@ class DataCache:
 
         except Exception as e:
             self.logger.error(f"캐시 크기 확인 실패: {e}")
-            return {'total_tables': 0, 'total_records': 0, 'total_size_mb': 0, 'cache_dir': str(self.cache_dir), 'storage': 'error'}
+            return {'total_tables': 0, 'total_records': 0, 'total_size_mb': 0, 'storage': 'error'}
 
     def __enter__(self):
         """Context Manager 진입"""
@@ -371,17 +309,10 @@ class DataCache:
 
 
 class DailyDataCache:
-    """PostgreSQL 기반 일봉 데이터 캐시 관리자
-
-    - 기본적으로 PostgreSQL에서 데이터를 읽고 씀
-    - pkl 폴백 지원
-    """
+    """PostgreSQL 기반 일봉 데이터 캐시 관리자"""
 
     def __init__(self, cache_dir: str = "cache/daily", use_duckdb: bool = True):
         self.logger = setup_logger(__name__)
-        self.cache_dir = Path(cache_dir)
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
-
         _ensure_tables_once()
 
     @classmethod
@@ -389,13 +320,8 @@ class DailyDataCache:
         """호환성 유지용 (no-op)"""
         pass
 
-    def _get_cache_file(self, stock_code: str, date_str: str) -> Path:
-        """캐시 파일 경로 생성 (pkl 폴백용)"""
-        return self.cache_dir / f"{stock_code}_{date_str}_daily.pkl"
-
     def has_data(self, stock_code: str, min_records: int = 50) -> bool:
         """캐시된 일봉 데이터 존재 여부 확인 (최소 레코드 수 기준)"""
-        # PostgreSQL 확인
         try:
             pool = _get_pg_pool()
             conn = pool.getconn()
@@ -403,14 +329,11 @@ class DailyDataCache:
                 cur = conn.cursor()
                 cur.execute("SELECT COUNT(*) FROM daily_candles WHERE stock_code = %s", (stock_code,))
                 count = cur.fetchone()[0]
-                if count >= min_records:
-                    return True
+                return count >= min_records
             finally:
                 pool.putconn(conn)
         except Exception:
-            pass
-
-        return False
+            return False
 
     def save_data(self, stock_code: str, df_daily: pd.DataFrame) -> bool:
         """일봉 데이터를 PostgreSQL에 저장"""
@@ -497,14 +420,7 @@ class DailyDataCache:
     def load_data(self, stock_code: str) -> Optional[pd.DataFrame]:
         """캐시된 일봉 데이터 로드"""
         try:
-            # PostgreSQL 먼저
-            df = self._load_from_pg(stock_code)
-            if df is not None:
-                return df
-
-            # pkl 폴백
-            return self._load_from_pkl(stock_code)
-
+            return self._load_from_pg(stock_code)
         except Exception as e:
             self.logger.error(f"일봉 캐시 로드 실패 ({stock_code}): {e}")
             return None
@@ -529,26 +445,12 @@ class DailyDataCache:
                 if df.empty:
                     return None
 
-                #self.logger.debug(f"[{stock_code}] 일봉 PG에서 로드 ({len(df)}개)")
                 return df
             finally:
                 pool.putconn(conn)
         except Exception as e:
             self.logger.debug(f"일봉 PG 로드 실패: {e}")
             return None
-
-    def _load_from_pkl(self, stock_code: str) -> Optional[pd.DataFrame]:
-        """pkl 파일에서 로드 (최신 파일)"""
-        pkl_files = list(self.cache_dir.glob(f"{stock_code}_*_daily.pkl"))
-        if not pkl_files:
-            return None
-
-        latest_file = max(pkl_files, key=lambda f: f.stat().st_mtime)
-        with open(latest_file, 'rb') as f:
-            df_daily = pickle.load(f)
-
-        #self.logger.debug(f"[{stock_code}] 일봉 pkl에서 로드 ({len(df_daily)}개)")
-        return df_daily
 
     def __enter__(self):
         """Context Manager 진입"""
