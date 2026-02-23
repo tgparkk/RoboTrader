@@ -69,7 +69,7 @@ class DayTradingBot:
         TradingDecisionEngine.reset_daily_trades()
         self.logger.info("🔄 price_position 일별 거래 기록 초기화 완료")
 
-        # 실시간 종목 스크리너 (HTS 조건검색 대체)
+        # 실시간 종목 스크리너
         self.stock_screener = StockScreener(config=self._build_screener_config())
 
         # 🆕 TradingStockManager에 decision_engine 연결 (쿨다운 설정용)
@@ -287,8 +287,6 @@ class DayTradingBot:
         """매매 의사결정 태스크"""
         try:
 
-            #await self._check_condition_search()
-
             self.logger.info("🤖 매매 의사결정 태스크 시작")
             
             last_condition_check = datetime(2000, 1, 1, tzinfo=KST)  # 초기값
@@ -312,7 +310,7 @@ class DayTradingBot:
                     await asyncio.sleep(5)
                     continue
                 
-                # 장중 실시간 종목 스크리닝 (HTS 조건검색 대체)
+                # 장중 실시간 종목 스크리닝
                 from config.strategy_settings import StrategySettings
                 sc = StrategySettings.Screener
                 if (sc.ENABLED and
@@ -882,7 +880,7 @@ class DayTradingBot:
                 score = row[2] or 0.0
                 reason = row[3] or "DB 복원"
 
-                # 조건검색(HTS) 종목 건너뛰기 — 스크리너 선정 종목만 복원
+                # 과거 조건검색(HTS) 종목 건너뛰기 — 스크리너 선정 종목만 복원
                 if reason and '조건검색' in reason:
                     skipped_condition += 1
                     continue
@@ -919,126 +917,16 @@ class DayTradingBot:
                 if success:
                     restored_count += 1
             
-            self.logger.info(f"✅ 오늘 후보 종목 {restored_count}/{len(rows)}개 복원 완료")
+            if skipped_condition > 0:
+                self.logger.info(f"✅ 오늘 후보 종목 {restored_count}/{len(rows)}개 복원 완료 (조건검색 {skipped_condition}개 제외)")
+            else:
+                self.logger.info(f"✅ 오늘 후보 종목 {restored_count}/{len(rows)}개 복원 완료")
             
         except Exception as e:
             self.logger.error(f"❌ 오늘 후보 종목 복원 실패: {e}")
    
-    async def _check_condition_search(self):
-        """장중 조건검색 체크"""
-        try:
-            #self.logger.debug("🔍 장중 조건검색 체크 시작")
-            
-            # 조건검색 seq 리스트 (필요에 따라 여러 조건 추가 가능)
-            #condition_seqs = ["0", "1", "2"]  # 예: 0, 1, 2번 조건
-            condition_seqs = ["0"]
-            
-            all_condition_results = []
-            
-            for seq in condition_seqs:
-                try:
-                    # 조건검색 결과 조회 (단순 조회만)
-                    condition_results = self.candidate_selector.get_condition_search_candidates(seq=seq)
-                    
-                    if condition_results:
-                        all_condition_results.extend(condition_results)
-                        #self.logger.debug(f"✅ 조건검색 {seq}번: {len(condition_results)}개 종목 발견")
-                        #self.logger.debug(f"🔍 조건검색 {seq}번 결과: {condition_results}")
-                    else:
-                        self.logger.debug(f"ℹ️ 조건검색 {seq}번: 해당 종목 없음")
-                        
-                except Exception as e:
-                    self.logger.warning(f"⚠️ 조건검색 {seq}번 오류: {e}")
-                    continue
-            
-            # 결과가 있으면 알림 발송
-            #self.logger.debug(f"🔍 조건검색 전체 결과: {len(all_condition_results)}개 종목")
-            if all_condition_results:
-                
-                # 🆕 장중 선정 종목 관리자에 추가 (과거 분봉 데이터 포함)
-                #self.logger.debug(f"🎯 장중 선정 종목 관리자에 {len(all_condition_results)}개 종목 추가 시작")
-                candidates_to_save = []
-                for stock_data in all_condition_results:
-                    stock_code = stock_data.get('code', '')
-                    stock_name = stock_data.get('name', '')
-                    change_rate = stock_data.get('chgrate', '')
-                    
-                    if stock_code:
-                        # 전날 종가 조회 (일봉 데이터) - 주말 안전 처리
-                        prev_close = 0.0
-                        try:
-                            # 충분한 기간의 데이터 요청 (주말 고려하여 7일)
-                            daily_data = self.api_manager.get_ohlcv_data(stock_code, "D", 7)
-                            if daily_data is not None and len(daily_data) >= 2:
-                                if hasattr(daily_data, 'iloc'):  # DataFrame
-                                    # 데이터 정렬 (날짜순)
-                                    daily_data = daily_data.sort_values('stck_bsop_date')
-                                    
-                                    # 오늘 데이터가 있는지 확인
-                                    last_date = daily_data.iloc[-1]['stck_bsop_date']
-                                    if isinstance(last_date, str):
-                                        last_date = datetime.strptime(last_date, '%Y%m%d').date()
-                                    elif hasattr(last_date, 'date'):
-                                        last_date = last_date.date()
-                                    
-                                    # 오늘 데이터가 있으면 전날(iloc[-2]), 없으면 마지막 거래일(iloc[-1]) 사용
-                                    if last_date == now_kst().date() and len(daily_data) >= 2:
-                                        prev_close = float(daily_data.iloc[-2]['stck_clpr'])
-                                        #self.logger.debug(f"📊 {stock_code}: 전날 종가 {prev_close} (오늘 데이터 제외)")
-                                    else:
-                                        prev_close = float(daily_data.iloc[-1]['stck_clpr'])
-                                        #self.logger.debug(f"📊 {stock_code}: 전날 종가 {prev_close} (마지막 거래일)")
-                                elif len(daily_data) >= 2:  # List
-                                    prev_close = daily_data[-2].close_price
-                        except Exception as e:
-                            self.logger.debug(f"⚠️ {stock_code} 전날 종가 조회 실패: {e}")
-                        
-                        # 거래 상태 통합 관리자에 추가 (분봉 데이터 수집 + 거래 상태 관리)
-                        selection_reason = f"조건검색 급등주 (등락률: {change_rate}%)"
-                        success = await self.trading_manager.add_selected_stock(
-                            stock_code=stock_code,
-                            stock_name=stock_name,
-                            selection_reason=selection_reason,
-                            prev_close=prev_close
-                        )
-                        
-                        if success:
-                            #self.logger.debug(f"🎯 거래 종목 추가: {stock_code}({stock_name}) - {selection_reason}")
-                            # 🆕 후보 종목 DB 저장용 리스트 구성
-                            try:
-                                score_val = 0.0
-                                if isinstance(change_rate, (int, float)):
-                                    score_val = float(change_rate)
-                                else:
-                                    # 문자열인 경우 숫자만 추출 시도 (예: '3.2')
-                                    score_val = float(str(change_rate).replace('%', '').strip()) if str(change_rate).strip() else 0.0
-                            except Exception:
-                                score_val = 0.0
-                            candidates_to_save.append(
-                                CandidateStock(
-                                    code=stock_code,
-                                    name=stock_name,
-                                    market=stock_data.get('market', 'KOSPI'),
-                                    score=score_val,
-                                    reason=selection_reason
-                                )
-                            )
-                # 🆕 후보 종목 DB 저장
-                try:
-                    if candidates_to_save:
-                        self.db_manager.save_candidate_stocks(candidates_to_save)
-                        #self.logger.debug(f"🗄️ 후보 종목 DB 저장 완료: {len(candidates_to_save)}건")
-                except Exception as db_err:
-                    self.logger.error(f"❌ 후보 종목 DB 저장 오류: {db_err}")
-            else:
-                self.logger.debug("ℹ️ 장중 조건검색: 발견된 종목 없음")
-            
-        except Exception as e:
-            self.logger.error(f"❌ 장중 조건검색 체크 오류: {e}")
-            await self.telegram.notify_error("Condition Search", e)
-
     async def _run_stock_screener(self):
-        """장중 실시간 종목 스크리닝 (HTS 조건검색 대체)"""
+        """장중 실시간 종목 스크리닝"""
         try:
             # 스크리너 실행 (동기 → run_in_executor로 비동기 래핑)
             loop = asyncio.get_event_loop()
