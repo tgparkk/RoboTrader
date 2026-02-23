@@ -176,10 +176,14 @@ class PricePositionStrategy:
 
         # 방향성 필터: 직전 N봉 대비 상승 확인
         rising_n = self.config.get('min_rising_candles', 0)
-        if rising_n and rising_n > 0 and candle_idx >= rising_n:
+        if rising_n and rising_n > 0:
+            if candle_idx < rising_n:
+                return False, f"방향성 필터: 캔들 부족 ({candle_idx+1}/{rising_n}봉)"
             past_close = df.iloc[candle_idx - rising_n]['close']
             current_close = df.iloc[candle_idx]['close']
-            if current_close <= past_close:
+            if past_close <= 0 or current_close <= 0:
+                return False, f"방향성 필터: 유효하지 않은 가격 데이터"
+            if current_close < past_close:
                 pct_change = (current_close / past_close - 1) * 100
                 return False, f"방향성 필터: {rising_n}봉전 대비 {pct_change:+.2f}% (상승 필요)"
 
