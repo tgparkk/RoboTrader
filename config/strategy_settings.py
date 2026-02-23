@@ -43,6 +43,7 @@ class StrategySettings:
         # 고급 진입 필터
         MAX_PRE_VOLATILITY = 0.8     # 진입 전 10봉 변동성 상한 (%) — 1.0→0.8 (시뮬 최적화)
         MAX_PRE20_MOMENTUM = 2.0     # 진입 전 20봉 모멘텀 상한 (%) — 1.5→2.0 (시뮬 최적화)
+        MIN_RISING_CANDLES = 3       # 직전 N봉 대비 상승 확인 (0이면 비활성)
 
         # 손익 설정 (trading_config.json의 설정을 따름)
         # stop_loss_ratio: 0.04 (-4.0%)

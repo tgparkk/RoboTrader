@@ -941,6 +941,8 @@ class TradingDecisionEngine:
                 adv_config['max_pre_volatility'] = pp_settings.MAX_PRE_VOLATILITY
             if hasattr(pp_settings, 'MAX_PRE20_MOMENTUM'):
                 adv_config['max_pre20_momentum'] = pp_settings.MAX_PRE20_MOMENTUM
+            if hasattr(pp_settings, 'MIN_RISING_CANDLES'):
+                adv_config['min_rising_candles'] = pp_settings.MIN_RISING_CANDLES
 
             if adv_config:
                 # 설정값을 전략 객체에 반영

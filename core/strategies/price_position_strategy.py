@@ -40,6 +40,7 @@ class PricePositionStrategy:
         # 고급 진입 필터
         'max_pre_volatility': 0.8,      # 진입 전 10봉 변동성 상한 (%)
         'max_pre20_momentum': 2.0,      # 진입 전 20봉 모멘텀 상한 (%) - 급등 추격 방지
+        'min_rising_candles': 3,        # 직전 N봉 대비 상승 확인 (0이면 비활성)
     }
 
     def __init__(self, config: Optional[Dict[str, Any]] = None, logger=None):
@@ -173,6 +174,15 @@ class PricePositionStrategy:
                 if pre20_momentum > max_mom:
                     return False, f"20봉 모멘텀 {pre20_momentum:+.2f}% > +{max_mom}%"
 
+        # 방향성 필터: 직전 N봉 대비 상승 확인
+        rising_n = self.config.get('min_rising_candles', 0)
+        if rising_n and rising_n > 0 and candle_idx >= rising_n:
+            past_close = df.iloc[candle_idx - rising_n]['close']
+            current_close = df.iloc[candle_idx]['close']
+            if current_close <= past_close:
+                pct_change = (current_close / past_close - 1) * 100
+                return False, f"방향성 필터: {rising_n}봉전 대비 {pct_change:+.2f}% (상승 필요)"
+
         return True, "고급 필터 통과"
 
     def record_trade(self, stock_code: str, trade_date: str):
@@ -230,11 +240,12 @@ class PricePositionStrategy:
         Returns:
             거래 결과 딕셔너리 또는 None
         """
-        if entry_idx >= len(df) - 5:
+        if entry_idx + 1 >= len(df) - 5:
             return None
 
-        entry_price = df.iloc[entry_idx]['close']
-        entry_time = df.iloc[entry_idx]['time']
+        # 신호 캔들 확인 후 다음 캔들 시가에 체결 (현실적 시뮬레이션)
+        entry_price = df.iloc[entry_idx + 1]['open']
+        entry_time = df.iloc[entry_idx + 1]['time']
 
         if entry_price <= 0:
             return None
