@@ -875,12 +875,18 @@ class DayTradingBot:
             self.logger.info(f"🔄 오늘({today}) 후보 종목 {len(rows)}개 복원 시작")
             
             restored_count = 0
+            skipped_condition = 0
             for row in rows:
                 stock_code = row[0]
                 stock_name = row[1] or f"Stock_{stock_code}"
                 score = row[2] or 0.0
                 reason = row[3] or "DB 복원"
-                
+
+                # 조건검색(HTS) 종목 건너뛰기 — 스크리너 선정 종목만 복원
+                if reason and '조건검색' in reason:
+                    skipped_condition += 1
+                    continue
+
                 # 전날 종가 조회
                 prev_close = 0.0
                 try:
