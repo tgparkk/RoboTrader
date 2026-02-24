@@ -40,6 +40,7 @@ echo.
 echo Starting RoboTrader...
 echo Press Ctrl+C to stop.
 echo.
+set PYTHONIOENCODING=utf-8
 python main.py
 
 echo.

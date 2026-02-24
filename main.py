@@ -69,6 +69,9 @@ class DayTradingBot:
         TradingDecisionEngine.reset_daily_trades()
         self.logger.info("🔄 price_position 일별 거래 기록 초기화 완료")
 
+        # 🔧 emergency_sync 서킷 브레이커 (같은 종목 반복 복구 방지, 버그 수정 2026-02-24)
+        self._sync_restore_count: dict = {}  # {stock_code: count}
+
         # 실시간 종목 스크리너
         self.stock_screener = StockScreener(config=self._build_screener_config())
 
@@ -1152,13 +1155,13 @@ class DayTradingBot:
                 if code in self.trading_manager.trading_stocks:
                     ts = self.trading_manager.trading_stocks[code]
                     if ts.state != StockState.POSITIONED:
-                        # BUY_PENDING/SELL_PENDING + 활성 주문 = OrderManager가 처리 중
-                        # 부분체결 수량으로 잘못 복구하는 것 방지
-                        if (ts.state in (StockState.BUY_PENDING, StockState.SELL_PENDING)
-                                and ts.current_order_id is not None):
+                        # BUY_PENDING/SELL_PENDING = 주문 진행 중 → 복구 금지
+                        # current_order_id 유무와 무관하게 state만으로 판단
+                        # (매도 API 호출 중 current_order_id가 일시적으로 None일 수 있음)
+                        if ts.state in (StockState.BUY_PENDING, StockState.SELL_PENDING):
                             self.logger.debug(
-                                f"⏳ {code}: {ts.state.value} 상태, 활성 주문({ts.current_order_id}) "
-                                f"- 자연 체결 대기, 복구 건너뜀"
+                                f"⏳ {code}: {ts.state.value} 상태 - "
+                                f"주문 처리 중, 복구 건너뜀 (order_id={ts.current_order_id})"
                             )
                             continue
                         missing_positions.append((code, balance_stock, ts))
@@ -1232,14 +1235,32 @@ class DayTradingBot:
 
             # 누락된 포지션들 복구
             for code, balance_stock, ts in missing_positions:
-                # 이중 안전장치: 복구 시점에 활성 주문이 생겼을 수 있음 (레이스 컨디션)
-                if (ts.state in (StockState.BUY_PENDING, StockState.SELL_PENDING)
-                        and ts.current_order_id is not None):
+                # 이중 안전장치: 복구 시점에 주문 상태가 변경되었을 수 있음 (레이스 컨디션)
+                # current_order_id 유무와 무관하게 state만으로 판단
+                if ts.state in (StockState.BUY_PENDING, StockState.SELL_PENDING):
                     self.logger.info(
-                        f"⏳ {code}: 복구 시점에 활성 주문 발견 "
-                        f"(주문ID: {ts.current_order_id}) - 복구 건너뜀"
+                        f"⏳ {code}: 복구 시점에 주문 처리 중 "
+                        f"({ts.state.value}, order_id={ts.current_order_id}) - 복구 건너뜀"
                     )
                     continue
+
+                # 🔧 서킷 브레이커: 같은 종목 3회 이상 복구 시 중단
+                restore_count = self._sync_restore_count.get(code, 0)
+                if restore_count >= 3:
+                    self.logger.error(
+                        f"🚨 {code} 서킷 브레이커 발동: {restore_count}회 복구 시도됨 - "
+                        f"더 이상 복구하지 않음 (수동 확인 필요)"
+                    )
+                    # 텔레그램 긴급 알림
+                    try:
+                        await self.telegram.notify_error(
+                            "CircuitBreaker",
+                            f"🚨 {code} 서킷 브레이커 발동: {restore_count}회 복구 반복 - 수동 확인 필요"
+                        )
+                    except Exception:
+                        pass
+                    continue
+                self._sync_restore_count[code] = restore_count + 1
 
                 # 포지션 복원
                 quantity = balance_stock['quantity']

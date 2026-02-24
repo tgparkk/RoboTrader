@@ -307,9 +307,10 @@ class TradingStockManager:
                     self.logger.warning(f"⚠️ {stock_code}: 매도 후보 상태가 아님 (현재: {trading_stock.state.value})")
                     return False
                 
-                # 매도 주문 중 상태로 변경
+                # 매도 주문 중 상태로 변경 + 이전 주문ID 즉시 정리 (API 호출 중 모니터링 오매칭 방지)
+                trading_stock.clear_current_order()
                 self._change_stock_state(stock_code, StockState.SELL_PENDING, f"매도 주문: {reason}")
-            
+
             # 매도 주문 실행
             order_id = await self.order_manager.place_sell_order(stock_code, quantity, price, market=market)
             
@@ -396,11 +397,10 @@ class TradingStockManager:
             #self.logger.debug(f"📋 전체 완료 주문 수: {len(completed_orders)}")
             
             for order in completed_orders:
-                if (order.order_id == trading_stock.current_order_id and 
-                    order.stock_code == trading_stock.stock_code):
-                    
-                    #self.logger.info(f"✅ 매칭된 완료 주문 발견: {order.order_id} - 상태: {order.status.value}")
-                    
+                if (order.order_id == trading_stock.current_order_id and
+                    order.stock_code == trading_stock.stock_code and
+                    order.order_type == OrderType.BUY):
+
                     if order.status == OrderStatus.FILLED:
                         # 매수 완료 - 포지션 상태로 변경
                         async with self._lock:
@@ -459,9 +459,10 @@ class TradingStockManager:
             # 주문 관리자에서 완료된 주문 확인
             completed_orders = self.order_manager.get_completed_orders()
             for order in completed_orders:
-                if (order.order_id == trading_stock.current_order_id and 
-                    order.stock_code == trading_stock.stock_code):
-                    
+                if (order.order_id == trading_stock.current_order_id and
+                    order.stock_code == trading_stock.stock_code and
+                    order.order_type == OrderType.SELL):
+
                     if order.status == OrderStatus.FILLED:
                         # 매도 완료 - 수익률 계산 후 포지션 정리
                         profit_rate = 0.0
@@ -692,6 +693,9 @@ class TradingStockManager:
                             self.logger.debug(f"⚠️ {order.stock_code} 이미 POSITIONED + DB기록 있음 (중복 콜백 방지)")
                     except Exception as db_err:
                         self.logger.warning(f"⚠️ {order.stock_code} 매수 기록 보완 실패: {db_err}")
+                    # 매수 주문 완료 처리: current_order_id 정리 (매도 모니터링에서 오매칭 방지)
+                    trading_stock.clear_current_order()
+                    trading_stock.order_processed = True
                     return
 
                 # 🆕 레이스 컨디션 방지: 이미 처리된 주문인지 확인

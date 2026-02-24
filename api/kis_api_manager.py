@@ -67,6 +67,9 @@ class KISAPIManager:
         # 실패 재시도 설정
         self.max_retries = 3
         self.retry_delay = 1.0
+
+        # 체결량 불일치(rmn_qty=0, 체결내역=0) 최초 감지 시각 추적
+        self._fill_anomaly_first_seen: Dict[str, datetime] = {}
         
     def initialize(self) -> bool:
         """API 매니저 초기화"""
@@ -735,12 +738,31 @@ class KISAPIManager:
                     # 🔧 검증: 체결량 + 잔여량 = 주문량이어야 함
                     expected_filled = max(0, total_order_qty - remaining_qty)
                     if filled_qty != expected_filled:
-                        self.logger.warning(f"⚠️ 체결량 불일치 감지: {order_id} - "
-                                          f"체결내역: {filled_qty}주, 계산값: {expected_filled}주")
-                        # 🚨 핵심 수정: 실제 체결 내역만 신뢰 (계산값 사용 금지)
-                        # 실제 체결 내역이 없으면 무조건 체결량 0
-                        self.logger.info(f"📊 실제 체결 내역 기준: {filled_qty}주 (계산값 {expected_filled}주는 무시)")
-                        # filled_qty는 그대로 유지 (실제 체결 내역 기준)
+                        if remaining_qty == 0 and filled_qty == 0 and total_order_qty > 0:
+                            # 🔧 rmn_qty=0이지만 체결내역 미반영: KIS API 지연 가능성
+                            if order_id not in self._fill_anomaly_first_seen:
+                                self._fill_anomaly_first_seen[order_id] = datetime.now()
+                                self.logger.warning(f"⚠️ 체결내역 미반영 최초 감지: {order_id} - "
+                                                  f"rmn_qty=0, 체결내역=0주 (계산값: {expected_filled}주)")
+                            else:
+                                elapsed = (datetime.now() - self._fill_anomaly_first_seen[order_id]).total_seconds()
+                                if elapsed >= 15:
+                                    # 15초 이상 지속: KIS API 지연으로 판단, 계산값 수용
+                                    self.logger.info(f"📊 체결내역 미반영 {elapsed:.0f}초 지속: {order_id} - "
+                                                   f"계산값({expected_filled}주) 수용 (체결 추론)")
+                                    filled_qty = expected_filled
+                                    del self._fill_anomaly_first_seen[order_id]
+                                else:
+                                    self.logger.info(f"📊 체결내역 미반영 {elapsed:.0f}초 경과: {order_id} - "
+                                                   f"대기 중 (15초 후 계산값 수용)")
+                        else:
+                            self.logger.warning(f"⚠️ 체결량 불일치 감지: {order_id} - "
+                                              f"체결내역: {filled_qty}주, 계산값: {expected_filled}주")
+                            self.logger.info(f"📊 실제 체결 내역 기준: {filled_qty}주 (계산값 {expected_filled}주는 무시)")
+                    else:
+                        # 불일치 해소: 추적 정보 정리
+                        if order_id in self._fill_anomaly_first_seen:
+                            del self._fill_anomaly_first_seen[order_id]
                         
                 except (ValueError, TypeError) as e:
                     self.logger.error(f"❌ 미체결 주문 수량 파싱 오류: {order_id} - {e}")
