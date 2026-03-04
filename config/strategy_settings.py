@@ -82,6 +82,42 @@ class StrategySettings:
         MAX_TOTAL_CANDIDATES = 15               # 일일 최대 총 후보 종목 수
 
     # ========================================
+    # NXT 프리마켓 인텔리전스 설정
+    # ========================================
+    class PreMarket:
+        ENABLED = True                          # 프리마켓 분석 사용 여부
+        SNAPSHOT_INTERVAL_SECONDS = 300          # 스냅샷 수집 주기 (5분)
+        MAX_BELLWETHER_STOCKS = 30              # 모니터링 대표 종목 수
+        NXT_DIV_CODE = "NX"                     # NXT 시장 코드
+        API_CALL_INTERVAL_MS = 100              # API 호출 간격 (ms)
+
+        # 분석 시간 (08:00 ~ 08:55)
+        ANALYSIS_START_HOUR = 8
+        ANALYSIS_START_MINUTE = 0
+        ANALYSIS_END_HOUR = 8
+        ANALYSIS_END_MINUTE = 55
+
+        # 심리 판단 임계값 (-1.0 ~ +1.0)
+        BEARISH_THRESHOLD = -0.3                # 이 이하면 약세
+        BULLISH_THRESHOLD = 0.3                 # 이 이상이면 강세
+
+        # 약세장 파라미터 조정
+        BEARISH_MAX_POSITIONS = 3               # 5 → 3
+        BEARISH_STOP_LOSS_RATIO = 0.03          # 4% → 3%
+        BEARISH_TAKE_PROFIT_RATIO = 0.04        # 5% → 4%
+
+        # 서킷브레이커: 전일 지수 기반 매수 완전 중단
+        # 조건1: 전일 KOSPI 또는 KOSDAQ 등락률이 이 값 이하 → 매수 중단
+        CIRCUIT_BREAKER_PREV_DAY_PCT = -2.0     # 전일 -2% 이상 하락
+        # 조건2: 전일 -1% 이하 + 당일 NXT 갭 이 값 이하 → 매수 중단
+        CIRCUIT_BREAKER_PREV_DAY_PCT_WITH_GAP = -1.0  # 전일 -1% 하락
+        CIRCUIT_BREAKER_NXT_GAP_PCT = -0.5            # + NXT 갭 -0.5%
+
+        # NXT 실패 시 기본값
+        FALLBACK_SENTIMENT = 'neutral'
+        FALLBACK_MAX_POSITIONS = 5
+
+    # ========================================
     # 눌림목 캔들패턴 전략 설정 (pullback)
     # ========================================
     class Pullback:
