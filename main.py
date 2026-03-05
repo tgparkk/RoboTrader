@@ -18,6 +18,7 @@ from core.order_manager import OrderManager
 from core.telegram_integration import TelegramIntegration
 from core.candidate_selector import CandidateSelector, CandidateStock
 from core.stock_screener import StockScreener
+from core.pre_market_analyzer import PreMarketAnalyzer
 from core.intraday_stock_manager import IntradayStockManager
 from core.trading_stock_manager import TradingStockManager
 from core.trading_decision_engine import TradingDecisionEngine
@@ -75,10 +76,15 @@ class DayTradingBot:
         # 실시간 종목 스크리너
         self.stock_screener = StockScreener(config=self._build_screener_config())
 
+        # NXT 프리마켓 분석기
+        self.pre_market_analyzer = PreMarketAnalyzer(config=self._build_pre_market_config())
+
         # 🆕 TradingStockManager에 decision_engine 연결 (쿨다운 설정용)
         self.trading_manager.set_decision_engine(self.decision_engine)
 
-        self.fund_manager = FundManager()  # 🆕 자금 관리자
+        self.fund_manager = FundManager(
+            buy_budget_ratio=self.config.order_management.buy_budget_ratio
+        )  # 🆕 자금 관리자
         self.chart_generator = None  # 🆕 장 마감 후 차트 생성기 (지연 초기화)
         
         
@@ -102,6 +108,18 @@ class DayTradingBot:
             'max_phase3_checks': sc.MAX_PHASE3_CHECKS,
             'max_candidates_per_scan': sc.MAX_CANDIDATES_PER_SCAN,
             'max_total_candidates': sc.MAX_TOTAL_CANDIDATES,
+        }
+
+    def _build_pre_market_config(self) -> dict:
+        """프리마켓 분석기 설정 구성"""
+        from config.strategy_settings import StrategySettings
+        pm = StrategySettings.PreMarket
+        return {
+            'enabled': pm.ENABLED,
+            'snapshot_interval': pm.SNAPSHOT_INTERVAL_SECONDS,
+            'max_bellwether_stocks': pm.MAX_BELLWETHER_STOCKS,
+            'nxt_div_code': pm.NXT_DIV_CODE,
+            'api_call_interval_ms': pm.API_CALL_INTERVAL_MS,
         }
 
     def _is_screening_time(self, current_time: datetime) -> bool:
@@ -230,6 +248,7 @@ class DayTradingBot:
             
             # 병렬 실행할 태스크들 (이름 매핑)
             task_factories = {
+                'pre_market': self._pre_market_task,
                 'data_collection': self._data_collection_task,
                 'order_monitoring': self._order_monitoring_task,
                 'stock_monitoring': self.trading_manager.start_monitoring,
@@ -623,6 +642,120 @@ class DayTradingBot:
         except Exception as e:
             self.logger.error(f"❌ 텔레그램 태스크 오류: {e}")
     
+    async def _pre_market_task(self):
+        """NXT 프리마켓 인텔리전스 수집 태스크 (08:00-09:00)"""
+        try:
+            from config.strategy_settings import StrategySettings
+            pm = StrategySettings.PreMarket
+
+            if not pm.ENABLED:
+                self.logger.info("[프리마켓] 프리마켓 분석 비활성화 상태")
+                return
+
+            self.logger.info("[프리마켓] NXT 프리마켓 인텔리전스 태스크 시작")
+
+            last_snapshot = datetime(2000, 1, 1, tzinfo=KST)
+            report_generated_today = None
+
+            while self.is_running:
+                current_time = now_kst()
+                today = current_time.date()
+
+                # 새로운 날이면 상태 초기화
+                if report_generated_today and report_generated_today != today:
+                    self.pre_market_analyzer.reset_daily_state()
+                    report_generated_today = None
+
+                # NXT 프리마켓 시간만 활성 (08:00-09:00 평일)
+                if not MarketHours.is_nxt_pre_market_time(current_time):
+                    await asyncio.sleep(30)
+                    continue
+
+                # 오늘 리포트 이미 생성됨
+                if report_generated_today == today:
+                    await asyncio.sleep(60)
+                    continue
+
+                t = current_time.hour * 60 + current_time.minute
+                analysis_start = pm.ANALYSIS_START_HOUR * 60 + pm.ANALYSIS_START_MINUTE
+                analysis_end = pm.ANALYSIS_END_HOUR * 60 + pm.ANALYSIS_END_MINUTE
+
+                # 스냅샷 수집 (5분 간격)
+                if analysis_start <= t <= analysis_end:
+                    if (current_time - last_snapshot).total_seconds() >= pm.SNAPSHOT_INTERVAL_SECONDS:
+                        loop = asyncio.get_event_loop()
+                        snapshot = await loop.run_in_executor(
+                            None, self.pre_market_analyzer.collect_snapshot
+                        )
+                        last_snapshot = current_time
+
+                # 08:55 이후 리포트 생성
+                if t >= pm.ANALYSIS_END_HOUR * 60 + pm.ANALYSIS_END_MINUTE:
+                    if report_generated_today != today:
+                        # 스냅샷이 없으면 한 번 수집 시도 후 리포트 생성
+                        if not self.pre_market_analyzer._snapshots:
+                            self.logger.info("[프리마켓] 스냅샷 없음 - 수집 1회 시도 후 리포트 생성")
+                            loop = asyncio.get_event_loop()
+                            await loop.run_in_executor(
+                                None, self.pre_market_analyzer.collect_snapshot
+                            )
+                        loop = asyncio.get_event_loop()
+                        report = await loop.run_in_executor(
+                            None, self.pre_market_analyzer.generate_report
+                        )
+                        report_generated_today = today
+
+                        # 매매 엔진에 리포트 전달
+                        self.decision_engine.set_pre_market_report(report)
+
+                        self.logger.info(
+                            f"[프리마켓] 리포트 완료: "
+                            f"심리={report.market_sentiment}({report.sentiment_score:+.2f}), "
+                            f"갭={report.gap_direction}({report.expected_gap_pct:+.2f}%), "
+                            f"추천포지션={report.recommended_max_positions}"
+                        )
+
+                        # 텔레그램 모닝 브리핑
+                        await self._send_morning_briefing(report)
+
+                await asyncio.sleep(10)
+
+        except Exception as e:
+            self.logger.error(f"[프리마켓] 태스크 오류: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+
+    async def _send_morning_briefing(self, report):
+        """프리마켓 모닝 브리핑 텔레그램 발송"""
+        try:
+            lines = [
+                f"=== 모닝 브리핑 ({report.report_time.strftime('%H:%M')}) ===",
+                f"시장 심리: {report.market_sentiment.upper()} ({report.sentiment_score:+.2f})",
+                f"예상 갭: {report.gap_direction} ({report.expected_gap_pct:+.2f}%)",
+                f"변동성: {report.volatility_level}",
+                f"NXT 데이터: {'사용 가능' if report.nxt_available else '사용 불가'}",
+                "",
+                f"오늘 설정:",
+                f"  최대 보유: {report.recommended_max_positions}종목",
+                f"  손절: {report.recommended_stop_loss_pct:.1%}",
+                f"  익절: {report.recommended_take_profit_pct:.1%}",
+            ]
+
+            if report.top_movers:
+                lines.append("")
+                lines.append("NXT 상위 종목:")
+                for mover in report.top_movers[:5]:
+                    lines.append(
+                        f"  {mover['code']}({mover['name']}): "
+                        f"{mover['change_pct']:+.2f}% vol={mover['volume']:,}"
+                    )
+
+            message = "\n".join(lines)
+            await self.telegram.notify_system_status(message)
+
+        except Exception as e:
+            self.logger.error(f"[프리마켓] 모닝 브리핑 발송 오류: {e}")
+
     async def _system_monitoring_task(self):
         """시스템 모니터링 태스크"""
         try:

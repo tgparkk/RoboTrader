@@ -249,6 +249,75 @@ class PostMarketDataSaver:
             self.logger.error(f"❌ 일봉 데이터 저장 중 오류: {e}")
             return {'total': 0, 'saved': 0, 'failed': 0}
 
+    def save_index_daily_data(self) -> bool:
+        """
+        장 마감 후 KOSPI/KOSDAQ 지수 일봉을 yfinance로 저장 (서킷브레이커용)
+        """
+        try:
+            import yfinance as yf
+            import psycopg2
+            from config.settings import PG_HOST, PG_PORT, PG_DATABASE, PG_USER, PG_PASSWORD
+
+            today = now_kst().strftime('%Y-%m-%d')
+            # yfinance는 end가 exclusive이므로 +1일
+            tomorrow = (now_kst() + timedelta(days=1)).strftime('%Y-%m-%d')
+
+            conn = psycopg2.connect(
+                host=PG_HOST, port=PG_PORT, database=PG_DATABASE,
+                user=PG_USER, password=PG_PASSWORD,
+            )
+            cur = conn.cursor()
+
+            saved = 0
+            for ticker, code in [("^KS11", "KS11"), ("^KQ11", "KQ11")]:
+                try:
+                    data = yf.download(ticker, start=today, end=tomorrow, progress=False)
+                    if data.empty:
+                        self.logger.warning(f"⚠️ [{code}] yfinance 지수 데이터 없음")
+                        continue
+
+                    row = data.iloc[-1]
+                    date_str = data.index[-1].strftime('%Y%m%d')
+
+                    # UPSERT
+                    open_val = float(row['Open'].iloc[0]) if hasattr(row['Open'], 'iloc') else float(row['Open'])
+                    high_val = float(row['High'].iloc[0]) if hasattr(row['High'], 'iloc') else float(row['High'])
+                    low_val = float(row['Low'].iloc[0]) if hasattr(row['Low'], 'iloc') else float(row['Low'])
+                    close_val = float(row['Close'].iloc[0]) if hasattr(row['Close'], 'iloc') else float(row['Close'])
+                    vol_val = int(row['Volume'].iloc[0]) if hasattr(row['Volume'], 'iloc') else int(row['Volume'])
+
+                    cur.execute('''
+                        INSERT INTO daily_candles (stock_code, stck_bsop_date, stck_oprc, stck_hgpr, stck_lwpr, stck_clpr, acml_vol)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (stock_code, stck_bsop_date) DO UPDATE SET
+                            stck_oprc = EXCLUDED.stck_oprc,
+                            stck_hgpr = EXCLUDED.stck_hgpr,
+                            stck_lwpr = EXCLUDED.stck_lwpr,
+                            stck_clpr = EXCLUDED.stck_clpr,
+                            acml_vol = EXCLUDED.acml_vol
+                    ''', (
+                        code, date_str,
+                        str(round(open_val, 2)),
+                        str(round(high_val, 2)),
+                        str(round(low_val, 2)),
+                        str(round(close_val, 2)),
+                        str(vol_val),
+                    ))
+                    saved += 1
+                    self.logger.info(f"[지수일봉] {code} 저장: {date_str} 종가 {close_val:,.1f}")
+
+                except Exception as e:
+                    self.logger.error(f"❌ [{code}] 지수 일봉 저장 실패: {e}")
+
+            conn.commit()
+            conn.close()
+            self.logger.info(f"✅ 지수 일봉 저장 완료: {saved}/2개")
+            return saved > 0
+
+        except Exception as e:
+            self.logger.error(f"❌ 지수 일봉 저장 중 오류: {e}")
+            return False
+
     def save_all_data(self, intraday_manager) -> Dict[str, any]:
         """
         장 마감 후 모든 데이터 저장 (분봉 + 일봉 + 텍스트)
@@ -293,9 +362,15 @@ class PostMarketDataSaver:
             self.logger.info("=" * 80)
             daily_result = self.save_daily_data(stock_codes)
 
-            # 3. 분봉 데이터 텍스트 파일 저장 (디버깅용)
+            # 3. 지수 일봉 저장 (서킷브레이커용)
             self.logger.info("\n" + "=" * 80)
-            self.logger.info("3️⃣ 분봉 데이터 텍스트 파일 저장 (디버깅용)")
+            self.logger.info("3️⃣ 지수 일봉 데이터 저장 (KOSPI/KOSDAQ)")
+            self.logger.info("=" * 80)
+            self.save_index_daily_data()
+
+            # 4. 분봉 데이터 텍스트 파일 저장 (디버깅용)
+            self.logger.info("\n" + "=" * 80)
+            self.logger.info("4️⃣ 분봉 데이터 텍스트 파일 저장 (디버깅용)")
             self.logger.info("=" * 80)
             text_file = self.save_minute_data_to_file(intraday_manager)
 

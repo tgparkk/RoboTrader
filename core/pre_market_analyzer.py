@@ -201,12 +201,26 @@ class PreMarketAnalyzer:
             from config.strategy_settings import StrategySettings
             pm = StrategySettings.PreMarket
 
-            # 서킷브레이커 발동 시 매수 완전 중단
+            # 서킷브레이커 발동 시 → NXT 갭으로 해제 가능 여부 체크
             if self._circuit_breaker_active:
-                rec_max_pos = 0
-                rec_stop_loss = pm.BEARISH_STOP_LOSS_RATIO
-                rec_take_profit = pm.BEARISH_TAKE_PROFIT_RATIO
-                sentiment = 'circuit_breaker'
+                if gap_pct >= pm.CIRCUIT_BREAKER_RELEASE_GAP_PCT:
+                    # 강한 반등 신호 → 서킷브레이커 해제, 절반 투입
+                    self._circuit_breaker_active = False
+                    release_reason = (
+                        f"NXT 갭 {gap_pct:+.2f}% >= {pm.CIRCUIT_BREAKER_RELEASE_GAP_PCT}%로 "
+                        f"서킷브레이커 해제 (절반 투입)"
+                    )
+                    self._circuit_breaker_reason = release_reason
+                    logger.info(f"[서킷브레이커] {release_reason}")
+                    rec_max_pos = max(1, pm.FALLBACK_MAX_POSITIONS // 2)
+                    rec_stop_loss = pm.BEARISH_STOP_LOSS_RATIO
+                    rec_take_profit = pm.BEARISH_TAKE_PROFIT_RATIO
+                    sentiment = 'bearish'  # 완전 해제가 아닌 cautious 모드
+                else:
+                    rec_max_pos = 0
+                    rec_stop_loss = pm.BEARISH_STOP_LOSS_RATIO
+                    rec_take_profit = pm.BEARISH_TAKE_PROFIT_RATIO
+                    sentiment = 'circuit_breaker'
             elif sentiment == 'bearish':
                 # 서킷브레이커 미발동이지만 NXT 약세 → 복합 조건 체크
                 if self._check_circuit_breaker_with_gap(gap_pct):

@@ -112,6 +112,8 @@ class StrategySettings:
         # 조건2: 전일 -1% 이하 + 당일 NXT 갭 이 값 이하 → 매수 중단
         CIRCUIT_BREAKER_PREV_DAY_PCT_WITH_GAP = -1.0  # 전일 -1% 하락
         CIRCUIT_BREAKER_NXT_GAP_PCT = -0.5            # + NXT 갭 -0.5%
+        # 해제 조건: 서킷브레이커 발동 상태에서 NXT 갭이 이 값 이상이면 해제
+        CIRCUIT_BREAKER_RELEASE_GAP_PCT = 3.0         # NXT 갭 +3% 이상이면 강한 반등으로 해제
 
         # NXT 실패 시 기본값
         FALLBACK_SENTIMENT = 'neutral'
