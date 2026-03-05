@@ -18,31 +18,48 @@ class FundManager:
     4. 포지션 사이징 관리
     """
     
-    def __init__(self, initial_funds: float = 0):
+    def __init__(self, initial_funds: float = 0, buy_budget_ratio: float = None):
         """
         초기화
-        
+
         Args:
             initial_funds: 초기 자금 (0이면 API에서 조회)
+            buy_budget_ratio: 종목당 투자 비율 (None이면 trading_config.json에서 로드)
         """
         self.logger = setup_logger(__name__)
         self._lock = threading.RLock()
-        
+
         # 자금 관리
         self.total_funds = initial_funds
         self.available_funds = initial_funds
         self.reserved_funds = 0.0  # 주문 중인 금액
         self.invested_funds = 0.0  # 투자 중인 금액
-        
+
         # 주문별 예약 금액 추적
         self.order_reservations: Dict[str, float] = {}  # order_id -> reserved_amount
-        
-        # 설정 (trading_config.json의 buy_budget_ratio와 동일하게 유지)
-        self.max_position_ratio = 0.20  # 종목당 최대 투자 비율 (20% = 1/5)
+
+        # 설정: trading_config.json에서 로드
+        if buy_budget_ratio is not None:
+            self.max_position_ratio = buy_budget_ratio
+        else:
+            self.max_position_ratio = self._load_from_config()
         self.max_total_investment_ratio = 0.9  # 전체 자금 대비 최대 투자 비율 (90%)
         
-        self.logger.info(f"💰 자금 관리자 초기화 완료 - 초기자금: {initial_funds:,.0f}원")
-    
+        self.logger.info(f"💰 자금 관리자 초기화 완료 - 초기자금: {initial_funds:,.0f}원, 종목당 투자비율: {self.max_position_ratio:.0%}")
+
+    @staticmethod
+    def _load_from_config() -> float:
+        """trading_config.json에서 buy_budget_ratio 로드"""
+        import json
+        from pathlib import Path
+        config_path = Path(__file__).parent.parent / 'config' / 'trading_config.json'
+        try:
+            with open(config_path, 'r') as f:
+                data = json.load(f)
+            return data.get('order_management', {}).get('buy_budget_ratio', 0.20)
+        except Exception:
+            return 0.20
+
     def update_total_funds(self, new_total: float):
         """총 자금 업데이트"""
         with self._lock:

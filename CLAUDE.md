@@ -31,11 +31,11 @@ ACTIVE_STRATEGY = 'price_position'
 | 거래 시간 | 9:00 ~ 12:00 |
 | 거래 요일 | 월~금 전체 |
 | 동시 보유 최대 | 5종목 (청산 시 새 매수 가능) |
-| 고급 필터 | 변동성 < 0.8%, 모멘텀 < +2.0% |
+| 고급 필터 | 변동성 < 1.2%, 모멘텀 < +2.0% |
 
 ### 청산 조건
-- **손절**: -4.0%
-- **익절**: +5.0%
+- **손절**: -5.0%
+- **익절**: +6.0%
 
 ### 종목 발굴: 실시간 스크리너 (core/stock_screener.py)
 - 2분 주기로 KOSPI+KOSDAQ 거래량순위 API 스캔 (4회 호출)
@@ -56,8 +56,8 @@ ACTIVE_STRATEGY = 'price_position'
 - **buy_budget_ratio**: 0.20 (건당 가용잔고의 20%)
 
 ### 손익비 (config/trading_config.json)
-- **stop_loss_ratio**: 0.04 (-4.0%)
-- **take_profit_ratio**: 0.05 (+5.0%)
+- **stop_loss_ratio**: 0.05 (-5.0%)
+- **take_profit_ratio**: 0.06 (+6.0%)
 
 ---
 

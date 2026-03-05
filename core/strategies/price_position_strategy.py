@@ -21,27 +21,40 @@ class PricePositionStrategy:
     기존 눌림목 패턴과 무관하게 순수 데이터 분석으로 발견된 규칙
     """
 
-    # 기본 설정값
-    DEFAULT_CONFIG = {
-        # 진입 조건
-        'min_pct_from_open': 1.0,      # 시가 대비 최소 상승률 (%)
-        'max_pct_from_open': 3.0,      # 시가 대비 최대 상승률 (%)
-        'entry_start_hour': 9,          # 진입 시작 시간
-        'entry_end_hour': 12,           # 진입 종료 시간
-        'allowed_weekdays': [0, 1, 2, 3, 4],  # 허용 요일 (월~금 전체)
+    @staticmethod
+    def _load_default_config():
+        """설정 파일에서 기본값 로드"""
+        import json, os
+        from config.strategy_settings import StrategySettings
+        pp = StrategySettings.PricePosition
 
-        # 손익 설정
-        'stop_loss_pct': -4.0,          # 손절 (%) — trading_config.json과 동일
-        'take_profit_pct': 5.0,         # 익절 (%)
+        config_path = os.path.join(os.path.dirname(__file__), '..', '..', 'config', 'trading_config.json')
+        try:
+            with open(config_path, 'r') as f:
+                tc = json.load(f)
+            rm = tc.get('risk_management', {})
+            stop_loss = -rm.get('stop_loss_ratio', 0.05) * 100
+            take_profit = rm.get('take_profit_ratio', 0.06) * 100
+        except Exception:
+            stop_loss = -5.0
+            take_profit = 6.0
 
-        # 거래 제한
-        'one_trade_per_stock_per_day': True,  # 하루에 종목당 1회만 거래
+        return {
+            'min_pct_from_open': pp.MIN_PCT_FROM_OPEN,
+            'max_pct_from_open': pp.MAX_PCT_FROM_OPEN,
+            'entry_start_hour': pp.ENTRY_START_HOUR,
+            'entry_end_hour': pp.ENTRY_END_HOUR,
+            'allowed_weekdays': list(pp.ALLOWED_WEEKDAYS),
+            'stop_loss_pct': stop_loss,
+            'take_profit_pct': take_profit,
+            'one_trade_per_stock_per_day': pp.ONE_TRADE_PER_STOCK_PER_DAY,
+            'max_pre_volatility': pp.MAX_PRE_VOLATILITY,
+            'max_pre20_momentum': pp.MAX_PRE20_MOMENTUM,
+            'min_rising_candles': pp.MIN_RISING_CANDLES,
+        }
 
-        # 고급 진입 필터
-        'max_pre_volatility': 0.8,      # 진입 전 10봉 변동성 상한 (%)
-        'max_pre20_momentum': 2.0,      # 진입 전 20봉 모멘텀 상한 (%) - 급등 추격 방지
-        'min_rising_candles': 3,        # 직전 N봉 대비 상승 확인 (0이면 비활성)
-    }
+    # 기본 설정값 (설정 파일에서 로드, 클래스 초기화 시 사용)
+    DEFAULT_CONFIG = None  # __init__에서 lazy 로드
 
     def __init__(self, config: Optional[Dict[str, Any]] = None, logger=None):
         """
@@ -51,7 +64,9 @@ class PricePositionStrategy:
             config: 사용자 정의 설정 (없으면 기본값 사용)
             logger: 로거 객체
         """
-        self.config = {**self.DEFAULT_CONFIG, **(config or {})}
+        if PricePositionStrategy.DEFAULT_CONFIG is None:
+            PricePositionStrategy.DEFAULT_CONFIG = self._load_default_config()
+        self.config = {**PricePositionStrategy.DEFAULT_CONFIG, **(config or {})}
         self.logger = logger
 
         # 당일 거래 기록 (종목별)
@@ -255,8 +270,14 @@ class PricePositionStrategy:
             return None
 
         # 이후 캔들 검사
+        max_profit_pct = 0.0
         for i in range(entry_idx + 1, len(df)):
             row = df.iloc[i]
+
+            # 장중 최고 수익률 추적
+            high_pnl = (row['high'] / entry_price - 1) * 100
+            if high_pnl > max_profit_pct:
+                max_profit_pct = high_pnl
 
             should_exit, reason, pnl = self.check_exit_conditions(
                 entry_price=entry_price,
@@ -274,6 +295,7 @@ class PricePositionStrategy:
                     'exit_time': row['time'],
                     'entry_price': entry_price,
                     'holding_candles': i - entry_idx,
+                    'max_profit_pct': round(max_profit_pct, 2),
                 }
 
         # 장 마감 시 청산
@@ -288,6 +310,7 @@ class PricePositionStrategy:
             'exit_time': last_row['time'],
             'entry_price': entry_price,
             'holding_candles': len(df) - 1 - entry_idx,
+            'max_profit_pct': round(max_profit_pct, 2),
         }
 
     def get_strategy_info(self) -> Dict[str, Any]:

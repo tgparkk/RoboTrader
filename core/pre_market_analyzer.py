@@ -81,8 +81,8 @@ class PreMarketReport:
     volatility_level: str           # 'low', 'normal', 'high'
     top_movers: List[Dict] = field(default_factory=list)
     recommended_max_positions: int = 5
-    recommended_stop_loss_pct: float = 0.04
-    recommended_take_profit_pct: float = 0.05
+    recommended_stop_loss_pct: float = 0.05
+    recommended_take_profit_pct: float = 0.06
     nxt_available: bool = False
     snapshot_count: int = 0
     log_lines: List[str] = field(default_factory=list)
@@ -234,8 +234,8 @@ class PreMarketAnalyzer:
                     rec_take_profit = pm.BEARISH_TAKE_PROFIT_RATIO
             else:
                 rec_max_pos = pm.FALLBACK_MAX_POSITIONS
-                rec_stop_loss = 0.04
-                rec_take_profit = 0.05
+                rec_stop_loss = 0.05
+                rec_take_profit = 0.06
 
             # 로그 라인 생성
             log_lines = []
@@ -597,8 +597,8 @@ class PreMarketAnalyzer:
             expected_gap_pct=0.0,
             volatility_level='normal',
             recommended_max_positions=pm.FALLBACK_MAX_POSITIONS,
-            recommended_stop_loss_pct=0.04,
-            recommended_take_profit_pct=0.05,
+            recommended_stop_loss_pct=0.05,
+            recommended_take_profit_pct=0.06,
             nxt_available=False,
             snapshot_count=0,
             log_lines=["NXT 데이터 없음 - 기본 설정 사용"],

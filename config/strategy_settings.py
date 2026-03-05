@@ -9,8 +9,8 @@
 - 시가 대비 1~3% 상승 구간 진입
 - 월~금 전체 거래
 - 9시~12시 진입
-- 손절 -4.0%, 익절 +5.0%
-- 진입 전 변동성 > 0.8% 제외, 20봉 모멘텀 > +2.0% 제외
+- 손절 -5.0%, 익절 +6.0%
+- 진입 전 변동성 > 1.2% 제외, 20봉 모멘텀 > +2.0% 제외
 """
 
 
@@ -41,13 +41,13 @@ class StrategySettings:
         ALLOWED_WEEKDAYS = [0, 1, 2, 3, 4]  # 월~금 전체 (시뮬 검증: 화/목 포함이 +44% 수익)
 
         # 고급 진입 필터
-        MAX_PRE_VOLATILITY = 0.8     # 진입 전 10봉 변동성 상한 (%) — 1.0→0.8 (시뮬 최적화)
+        MAX_PRE_VOLATILITY = 1.2     # 진입 전 10봉 변동성 상한 (%) — 0.8→1.2 (익절 특성 분석 최적화)
         MAX_PRE20_MOMENTUM = 2.0     # 진입 전 20봉 모멘텀 상한 (%) — 1.5→2.0 (시뮬 최적화)
         MIN_RISING_CANDLES = 3       # 직전 N봉 대비 상승 확인 (0이면 비활성)
 
         # 손익 설정 (trading_config.json의 설정을 따름)
-        # stop_loss_ratio: 0.04 (-4.0%)
-        # take_profit_ratio: 0.05 (+5.0%)
+        # stop_loss_ratio: 0.05 (-5.0%)
+        # take_profit_ratio: 0.06 (+6.0%)
 
         # 거래 제한
         ONE_TRADE_PER_STOCK_PER_DAY = True  # 하루에 종목당 1회만 거래

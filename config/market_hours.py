@@ -237,6 +237,30 @@ class MarketHours:
             return False
 
     @classmethod
+    def is_nxt_pre_market_time(cls, dt: Optional[datetime] = None) -> bool:
+        """NXT 프리마켓 인텔리전스 수집 시간인지 확인 (08:00-09:00 평일)
+
+        Args:
+            dt: 확인할 시간 (None이면 현재)
+
+        Returns:
+            NXT 프리마켓 시간이면 True
+        """
+        tz = pytz.timezone('Asia/Seoul')
+
+        if dt is None:
+            dt = datetime.now(tz)
+        elif dt.tzinfo is None:
+            dt = tz.localize(dt)
+
+        # 평일만
+        if dt.weekday() >= 5:
+            return False
+
+        current_time = dt.time()
+        return time(8, 0) <= current_time < time(9, 0)
+
+    @classmethod
     def get_today_info(cls, market: str = 'KRX') -> str:
         """오늘 거래시간 정보를 문자열로 반환 (로깅용)"""
         hours = cls.get_market_hours(market)

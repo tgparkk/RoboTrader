@@ -55,6 +55,9 @@ class TradingDecisionEngine:
             self.logger.warning(f"⚠️ 설정 파일 로드 실패: {e}")
             self.config = {}
         
+        # 프리마켓 리포트 (08:55에 set_pre_market_report()로 설정됨)
+        self._pre_market_report = None
+
         # 가상 매매 설정
         self.is_virtual_mode = False  # 🆕 가상매매 모드 여부 (False: 실제매매, True: 가상매매)
         
@@ -629,17 +632,17 @@ class TradingDecisionEngine:
                         self.logger.debug(f"🔧 [동적 손익비] 패턴: {support_volume}+{decline_volume}, "
                                         f"손절 {stop_loss_percent:.1f}% / 익절 {take_profit_percent:.1f}%")
                     else:
-                        # 패턴 정보 없으면 기본값
-                        take_profit_percent = config.risk_management.take_profit_ratio * 100
-                        stop_loss_percent = config.risk_management.stop_loss_ratio * 100
+                        # 패턴 정보 없으면 기본값 (프리마켓 동적 조정 적용)
+                        take_profit_percent = self.get_effective_take_profit() * 100
+                        stop_loss_percent = self.get_effective_stop_loss() * 100
                 else:
-                    # debug_info 없으면 기본값
-                    take_profit_percent = config.risk_management.take_profit_ratio * 100
-                    stop_loss_percent = config.risk_management.stop_loss_ratio * 100
+                    # debug_info 없으면 기본값 (프리마켓 동적 조정 적용)
+                    take_profit_percent = self.get_effective_take_profit() * 100
+                    stop_loss_percent = self.get_effective_stop_loss() * 100
             else:
-                # 플래그가 false이거나 없으면 기본값 사용
-                take_profit_percent = config.risk_management.take_profit_ratio * 100  # 0.035 -> 3.5%
-                stop_loss_percent = config.risk_management.stop_loss_ratio * 100      # 0.025 -> 2.5%
+                # 플래그가 false이거나 없으면 기본값 사용 (프리마켓 동적 조정 적용)
+                take_profit_percent = self.get_effective_take_profit() * 100
+                stop_loss_percent = self.get_effective_stop_loss() * 100
             
             # 익절 조건: config에서 설정한 % 이상
             if profit_rate_percent >= take_profit_percent:
@@ -895,14 +898,18 @@ class TradingDecisionEngine:
                     if stock_code in TradingDecisionEngine._price_position_daily_trades[trade_date]:
                         return False, "당일 이미 거래함", None
 
-            # 동시 보유 종목 수 체크 (POSITIONED + BUY_PENDING)
+            # 동시 보유 종목 수 체크 (POSITIONED + BUY_PENDING) - 프리마켓 동적 조정 적용
             if self.trading_manager:
                 from core.models import StockState
                 positioned = self.trading_manager.get_stocks_by_state(StockState.POSITIONED)
                 buy_pending = self.trading_manager.get_stocks_by_state(StockState.BUY_PENDING)
                 current_holding = len(positioned) + len(buy_pending)
-                if current_holding >= pp_settings.MAX_DAILY_POSITIONS:
-                    return False, f"동시 보유 최대 {pp_settings.MAX_DAILY_POSITIONS}종목 도달 (현재 {current_holding})", None
+                effective_max = self.get_effective_max_positions()
+                if current_holding >= effective_max:
+                    pm_info = ""
+                    if self._pre_market_report and self._pre_market_report.nxt_available:
+                        pm_info = f" (프리마켓: {self._pre_market_report.market_sentiment})"
+                    return False, f"동시 보유 최대 {effective_max}종목 도달 (현재 {current_holding}){pm_info}", None
 
             # 시가 계산 (09:00 캔들의 open = 장 시작 가격, 불변값)
             day_open = self._get_day_open_price(stock_code, trade_date, data)
@@ -986,6 +993,49 @@ class TradingDecisionEngine:
             import traceback
             self.logger.error(traceback.format_exc())
             return False, f"오류: {e}", None
+
+    # =========================================================================
+    # 프리마켓 인텔리전스 연동
+    # =========================================================================
+
+    def set_pre_market_report(self, report):
+        """프리마켓 인텔리전스 리포트 설정 (main.py에서 08:55에 호출)"""
+        self._pre_market_report = report
+        if report:
+            self.logger.info(
+                f"[프리마켓] 리포트 적용: 심리={report.market_sentiment}, "
+                f"최대포지션={report.recommended_max_positions}, "
+                f"손절={report.recommended_stop_loss_pct:.1%}, 익절={report.recommended_take_profit_pct:.1%}"
+            )
+
+    def get_pre_market_report(self):
+        """현재 프리마켓 리포트 반환"""
+        return self._pre_market_report
+
+    def get_effective_max_positions(self) -> int:
+        """프리마켓 분석 반영된 최대 동시 보유 종목 수"""
+        from config.strategy_settings import StrategySettings
+        default = StrategySettings.PricePosition.MAX_DAILY_POSITIONS
+
+        if self._pre_market_report and self._pre_market_report.nxt_available:
+            return self._pre_market_report.recommended_max_positions
+        return default
+
+    def get_effective_stop_loss(self) -> float:
+        """프리마켓 분석 반영된 손절 비율"""
+        default = self.config.get('risk_management', {}).get('stop_loss_ratio', 0.05)
+
+        if self._pre_market_report and self._pre_market_report.nxt_available:
+            return self._pre_market_report.recommended_stop_loss_pct
+        return default
+
+    def get_effective_take_profit(self) -> float:
+        """프리마켓 분석 반영된 익절 비율"""
+        default = self.config.get('risk_management', {}).get('take_profit_ratio', 0.06)
+
+        if self._pre_market_report and self._pre_market_report.nxt_available:
+            return self._pre_market_report.recommended_take_profit_pct
+        return default
 
     @classmethod
     def reset_daily_trades(cls, trade_date: str = None):
