@@ -271,6 +271,29 @@ class DatabaseManager:
                     )
                 ''')
 
+                # NXT 프리마켓 스냅샷 테이블
+                cur.execute('''
+                    CREATE TABLE IF NOT EXISTS nxt_snapshots (
+                        id SERIAL PRIMARY KEY,
+                        trade_date VARCHAR(8) NOT NULL,
+                        snapshot_time TIMESTAMP NOT NULL,
+                        snapshot_seq INTEGER NOT NULL,
+                        avg_change_pct DOUBLE PRECISION,
+                        up_count INTEGER,
+                        down_count INTEGER,
+                        unchanged_count INTEGER,
+                        total_volume BIGINT,
+                        sentiment_score DOUBLE PRECISION,
+                        market_sentiment VARCHAR(20),
+                        expected_gap_pct DOUBLE PRECISION,
+                        circuit_breaker BOOLEAN DEFAULT FALSE,
+                        circuit_breaker_reason VARCHAR,
+                        recommended_max_positions INTEGER,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(trade_date, snapshot_seq)
+                    )
+                ''')
+
                 # 인덱스 생성
                 index_statements = [
                     'CREATE INDEX IF NOT EXISTS idx_candidate_date ON candidate_stocks(selection_date)',
@@ -281,6 +304,7 @@ class DatabaseManager:
                     'CREATE INDEX IF NOT EXISTS idx_virtual_trading_action ON virtual_trading_records(action)',
                     'CREATE INDEX IF NOT EXISTS idx_real_trading_code_date ON real_trading_records(stock_code, timestamp)',
                     'CREATE INDEX IF NOT EXISTS idx_real_trading_action ON real_trading_records(action)',
+                    'CREATE INDEX IF NOT EXISTS idx_nxt_snapshots_date ON nxt_snapshots(trade_date)',
                 ]
                 for stmt in index_statements:
                     try:
@@ -972,6 +996,95 @@ class DatabaseManager:
         except Exception as e:
             self.logger.error(f"가상 매매 통계 조회 실패: {e}")
             return {}
+
+    # ============================
+    # NXT 프리마켓 스냅샷 저장/조회
+    # ============================
+    def save_nxt_snapshot(self, trade_date: str, snapshot_seq: int,
+                          snapshot_time: datetime, avg_change_pct: float,
+                          up_count: int, down_count: int, unchanged_count: int,
+                          total_volume: int) -> bool:
+        """NXT 프리마켓 스냅샷 저장 (수집 시점마다 호출)"""
+        try:
+            self._execute('''
+                INSERT INTO nxt_snapshots
+                (trade_date, snapshot_seq, snapshot_time, avg_change_pct,
+                 up_count, down_count, unchanged_count, total_volume, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (trade_date, snapshot_seq) DO UPDATE SET
+                    snapshot_time = EXCLUDED.snapshot_time,
+                    avg_change_pct = EXCLUDED.avg_change_pct,
+                    up_count = EXCLUDED.up_count,
+                    down_count = EXCLUDED.down_count,
+                    unchanged_count = EXCLUDED.unchanged_count,
+                    total_volume = EXCLUDED.total_volume
+            ''', (
+                trade_date, snapshot_seq,
+                snapshot_time.strftime('%Y-%m-%d %H:%M:%S'),
+                avg_change_pct, up_count, down_count, unchanged_count,
+                total_volume,
+                now_kst().strftime('%Y-%m-%d %H:%M:%S'),
+            ))
+            return True
+        except Exception as e:
+            self.logger.error(f"NXT 스냅샷 저장 실패: {e}")
+            return False
+
+    def save_nxt_report_summary(self, trade_date: str,
+                                 sentiment_score: float, market_sentiment: str,
+                                 expected_gap_pct: float, circuit_breaker: bool,
+                                 circuit_breaker_reason: str,
+                                 recommended_max_positions: int) -> bool:
+        """NXT 리포트 요약을 마지막 스냅샷에 업데이트"""
+        try:
+            self._execute('''
+                UPDATE nxt_snapshots SET
+                    sentiment_score = %s,
+                    market_sentiment = %s,
+                    expected_gap_pct = %s,
+                    circuit_breaker = %s,
+                    circuit_breaker_reason = %s,
+                    recommended_max_positions = %s
+                WHERE trade_date = %s
+                  AND snapshot_seq = (
+                      SELECT MAX(snapshot_seq) FROM nxt_snapshots WHERE trade_date = %s
+                  )
+            ''', (
+                sentiment_score, market_sentiment, expected_gap_pct,
+                circuit_breaker, circuit_breaker_reason or '',
+                recommended_max_positions,
+                trade_date, trade_date,
+            ))
+            return True
+        except Exception as e:
+            self.logger.error(f"NXT 리포트 요약 저장 실패: {e}")
+            return False
+
+    def get_nxt_history(self, days: int = 30) -> 'pd.DataFrame':
+        """NXT 스냅샷 이력 조회 (일별 마지막 스냅샷 = 리포트 요약)"""
+        try:
+            conn = self._get_connection()
+            try:
+                df = pd.read_sql_query('''
+                    SELECT n.*
+                    FROM nxt_snapshots n
+                    INNER JOIN (
+                        SELECT trade_date, MAX(snapshot_seq) as max_seq
+                        FROM nxt_snapshots
+                        GROUP BY trade_date
+                    ) latest ON n.trade_date = latest.trade_date
+                                AND n.snapshot_seq = latest.max_seq
+                    WHERE n.trade_date >= %s
+                    ORDER BY n.trade_date DESC
+                ''', conn, params=(
+                    (now_kst() - timedelta(days=days)).strftime('%Y%m%d'),
+                ))
+                return df
+            finally:
+                self._put_connection(conn)
+        except Exception as e:
+            self.logger.error(f"NXT 이력 조회 실패: {e}")
+            return pd.DataFrame()
 
     @classmethod
     def close_connection(cls):

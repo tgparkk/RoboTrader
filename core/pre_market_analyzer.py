@@ -74,7 +74,7 @@ class PreMarketSnapshot:
 class PreMarketReport:
     """최종 프리마켓 인텔리전스 리포트"""
     report_time: datetime
-    market_sentiment: str           # 'bullish', 'bearish', 'neutral'
+    market_sentiment: str           # 'bullish', 'bearish', 'extreme_bearish', 'neutral', 'circuit_breaker'
     sentiment_score: float          # -1.0 ~ +1.0
     gap_direction: str              # 'gap_up', 'gap_down', 'flat'
     expected_gap_pct: float         # 예상 갭 %
@@ -151,6 +151,10 @@ class PreMarketAnalyzer:
                 f"상승={up_count}, 하락={down_count}, 보합={unchanged_count}, "
                 f"평균등락={avg_change:+.2f}%, NXT거래량={total_volume:,}"
             )
+
+            # DB에 스냅샷 저장
+            self._save_snapshot_to_db(snapshot, len(self._snapshots))
+
             return snapshot
 
         except Exception as e:
@@ -221,6 +225,14 @@ class PreMarketAnalyzer:
                     rec_stop_loss = pm.BEARISH_STOP_LOSS_RATIO
                     rec_take_profit = pm.BEARISH_TAKE_PROFIT_RATIO
                     sentiment = 'circuit_breaker'
+            elif sentiment == 'extreme_bearish':
+                # NXT 급락 → 전일 상관없이 매수 완전 중단
+                rec_max_pos = pm.EXTREME_BEARISH_MAX_POSITIONS
+                rec_stop_loss = pm.BEARISH_STOP_LOSS_RATIO
+                rec_take_profit = pm.BEARISH_TAKE_PROFIT_RATIO
+                logger.warning(
+                    f"[프리마켓] 극약세 감지 (sentiment={sentiment_score:+.2f}) -> 매수 완전 중단"
+                )
             elif sentiment == 'bearish':
                 # 서킷브레이커 미발동이지만 NXT 약세 → 복합 조건 체크
                 if self._check_circuit_breaker_with_gap(gap_pct):
@@ -241,6 +253,8 @@ class PreMarketAnalyzer:
             log_lines = []
             if self._circuit_breaker_active or sentiment == 'circuit_breaker':
                 log_lines.append(f"서킷브레이커: {self._circuit_breaker_reason}")
+            if sentiment == 'extreme_bearish':
+                log_lines.append(f"극약세: NXT sentiment {sentiment_score:+.2f} <= {pm.EXTREME_BEARISH_THRESHOLD} -> 매수 중단")
             log_lines.extend([
                 f"시장 심리: {sentiment.upper()} ({sentiment_score:+.2f})",
                 f"예상 갭: {gap_direction} ({gap_pct:+.2f}%)",
@@ -272,6 +286,10 @@ class PreMarketAnalyzer:
                 f"변동성={volatility}, "
                 f"추천포지션={rec_max_pos}"
             )
+
+            # DB에 리포트 요약 저장
+            self._save_report_summary_to_db(self._report)
+
             return self._report
 
         except Exception as e:
@@ -290,6 +308,249 @@ class PreMarketAnalyzer:
         self._circuit_breaker_active = False
         self._circuit_breaker_reason = ""
         logger.info("[프리마켓] 일일 상태 초기화 완료")
+
+    # =========================================================================
+    # 장 시작 후 지수 갭 체크
+    # =========================================================================
+
+    def check_market_open_gap(self) -> Optional[PreMarketReport]:
+        """
+        장 시작 후 실제 KOSPI/KOSDAQ 지수 시가 갭을 확인하여
+        기존 리포트를 업데이트하거나 새로운 서킷브레이커를 발동합니다.
+
+        Returns:
+            업데이트된 PreMarketReport 또는 None (체크 불필요/실패 시)
+        """
+        from config.strategy_settings import StrategySettings
+        pm = StrategySettings.PreMarket
+
+        if not pm.MARKET_OPEN_GAP_CHECK_ENABLED:
+            return None
+
+        try:
+            # KIS API로 실시간 KOSPI/KOSDAQ 지수 조회
+            gap_info = self._get_market_open_gap()
+            if gap_info is None:
+                logger.warning("[장시작갭] 지수 시가 갭 조회 실패")
+                return None
+
+            kospi_gap = gap_info.get('kospi_gap', 0)
+            kosdaq_gap = gap_info.get('kosdaq_gap', 0)
+            worst_gap = min(kospi_gap, kosdaq_gap)
+
+            logger.info(
+                f"[장시작갭] KOSPI 갭: {kospi_gap:+.2f}%, KOSDAQ 갭: {kosdaq_gap:+.2f}% "
+                f"(임계값: {pm.MARKET_OPEN_GAP_THRESHOLD_PCT}%)"
+            )
+
+            # 임계값 이하이면 서킷브레이커 발동
+            if worst_gap <= pm.MARKET_OPEN_GAP_THRESHOLD_PCT:
+                idx_name = "KOSPI" if kospi_gap <= kosdaq_gap else "KOSDAQ"
+                reason = (
+                    f"장시작 {idx_name} 갭 {worst_gap:+.2f}% "
+                    f"(임계값 {pm.MARKET_OPEN_GAP_THRESHOLD_PCT}%)"
+                )
+                logger.warning(f"[장시작갭] 서킷브레이커 발동! {reason}")
+
+                # 기존 리포트가 있으면 업데이트, 없으면 새로 생성
+                if self._report:
+                    self._report.recommended_max_positions = 0
+                    self._report.market_sentiment = 'circuit_breaker'
+                    self._report.nxt_available = True
+                    self._report.log_lines.insert(0, f"장시작갭 서킷브레이커: {reason}")
+                    logger.info("[장시작갭] 기존 리포트 업데이트 완료")
+                else:
+                    self._report = PreMarketReport(
+                        report_time=now_kst(),
+                        market_sentiment='circuit_breaker',
+                        sentiment_score=-1.0,
+                        gap_direction='gap_down',
+                        expected_gap_pct=worst_gap,
+                        volatility_level='high',
+                        recommended_max_positions=0,
+                        recommended_stop_loss_pct=pm.BEARISH_STOP_LOSS_RATIO,
+                        recommended_take_profit_pct=pm.BEARISH_TAKE_PROFIT_RATIO,
+                        nxt_available=True,
+                        snapshot_count=0,
+                        log_lines=[f"장시작갭 서킷브레이커: {reason}"],
+                    )
+                    logger.info("[장시작갭] 새 리포트 생성 완료")
+
+                return self._report
+            else:
+                logger.info(f"[장시작갭] 정상 범위 — 기존 판단 유지")
+                return None
+
+        except Exception as e:
+            logger.error(f"[장시작갭] 체크 오류: {e}")
+            return None
+
+    def _get_market_open_gap(self) -> Optional[Dict[str, float]]:
+        """
+        KIS API로 KOSPI/KOSDAQ 시가 갭(%) 조회
+
+        Returns:
+            {'kospi_gap': float, 'kosdaq_gap': float} 또는 None
+        """
+        try:
+            from api.kis_market_api import get_index_data
+
+            result = {}
+            for index_code, key in [('0001', 'kospi_gap'), ('1001', 'kosdaq_gap')]:
+                data = get_index_data(index_code)
+                if data:
+                    # bstp_nmix_prpr: 현재지수, bstp_nmix_prdy_ctrt: 전일대비율(%)
+                    gap_pct = float(data.get('bstp_nmix_prdy_ctrt', '0'))
+                    result[key] = gap_pct
+                else:
+                    logger.warning(f"[장시작갭] {index_code} 지수 조회 실패")
+                    return None
+
+                time_module.sleep(0.1)  # API 호출 간격
+
+            return result
+
+        except Exception as e:
+            logger.error(f"[장시작갭] 지수 API 조회 오류: {e}")
+            return None
+
+    # =========================================================================
+    # 장중 지수 모니터링
+    # =========================================================================
+
+    def check_intraday_index(self) -> Optional[PreMarketReport]:
+        """
+        장중 KOSPI/KOSDAQ 지수를 확인하여 급락 시 서킷브레이커 발동,
+        회복 시 매수 재개합니다.
+
+        Returns:
+            업데이트된 PreMarketReport 또는 None (변경 없음)
+        """
+        from config.strategy_settings import StrategySettings
+        pm = StrategySettings.PreMarket
+
+        if not pm.INTRADAY_INDEX_CHECK_ENABLED:
+            return None
+
+        try:
+            gap_info = self._get_market_open_gap()
+            if gap_info is None:
+                logger.warning("[장중지수] 지수 조회 실패")
+                return None
+
+            kospi_gap = gap_info.get('kospi_gap', 0)
+            kosdaq_gap = gap_info.get('kosdaq_gap', 0)
+            worst_gap = min(kospi_gap, kosdaq_gap)
+
+            current_sentiment = self._report.market_sentiment if self._report else 'neutral'
+            is_currently_blocked = current_sentiment == 'circuit_breaker'
+
+            logger.info(
+                f"[장중지수] KOSPI: {kospi_gap:+.2f}%, KOSDAQ: {kosdaq_gap:+.2f}% "
+                f"(현재: {current_sentiment})"
+            )
+
+            # Case 1: 급락 감지 → 서킷브레이커 발동
+            if not is_currently_blocked and worst_gap <= pm.INTRADAY_INDEX_DROP_THRESHOLD_PCT:
+                idx_name = "KOSPI" if kospi_gap <= kosdaq_gap else "KOSDAQ"
+                reason = (
+                    f"장중 {idx_name} {worst_gap:+.2f}% "
+                    f"(임계값 {pm.INTRADAY_INDEX_DROP_THRESHOLD_PCT}%)"
+                )
+                logger.warning(f"[장중지수] 서킷브레이커 발동! {reason}")
+
+                if self._report:
+                    self._report.recommended_max_positions = 0
+                    self._report.market_sentiment = 'circuit_breaker'
+                    self._report.nxt_available = True
+                    self._report.log_lines.insert(0, f"장중지수 서킷브레이커: {reason}")
+                else:
+                    self._report = PreMarketReport(
+                        report_time=now_kst(),
+                        market_sentiment='circuit_breaker',
+                        sentiment_score=-1.0,
+                        gap_direction='gap_down',
+                        expected_gap_pct=worst_gap,
+                        volatility_level='high',
+                        recommended_max_positions=0,
+                        recommended_stop_loss_pct=pm.BEARISH_STOP_LOSS_RATIO,
+                        recommended_take_profit_pct=pm.BEARISH_TAKE_PROFIT_RATIO,
+                        nxt_available=True,
+                        snapshot_count=0,
+                        log_lines=[f"장중지수 서킷브레이커: {reason}"],
+                    )
+                return self._report
+
+            # Case 2: 장중 서킷브레이커 상태에서 회복 감지 → bearish 모드로 매수 재개
+            if is_currently_blocked and worst_gap >= pm.INTRADAY_INDEX_RECOVERY_PCT:
+                reason = (
+                    f"장중 지수 회복 {worst_gap:+.2f}% "
+                    f"(회복 임계값 {pm.INTRADAY_INDEX_RECOVERY_PCT}%)"
+                )
+                logger.info(f"[장중지수] 서킷브레이커 해제 (bearish 모드): {reason}")
+
+                if self._report:
+                    self._report.recommended_max_positions = max(1, pm.BEARISH_MAX_POSITIONS // 2)
+                    self._report.market_sentiment = 'bearish'
+                    self._report.recommended_stop_loss_pct = pm.BEARISH_STOP_LOSS_RATIO
+                    self._report.recommended_take_profit_pct = pm.BEARISH_TAKE_PROFIT_RATIO
+                    self._report.log_lines.insert(0, f"장중지수 회복: {reason}")
+                return self._report
+
+            return None
+
+        except Exception as e:
+            logger.error(f"[장중지수] 체크 오류: {e}")
+            return None
+
+    # =========================================================================
+    # DB 저장 메서드
+    # =========================================================================
+
+    def _save_snapshot_to_db(self, snapshot: PreMarketSnapshot, seq: int):
+        """스냅샷을 DB에 저장"""
+        try:
+            from db.database_manager import DatabaseManager
+            db = DatabaseManager()
+            trade_date = snapshot.timestamp.strftime('%Y%m%d')
+            db.save_nxt_snapshot(
+                trade_date=trade_date,
+                snapshot_seq=seq,
+                snapshot_time=snapshot.timestamp,
+                avg_change_pct=snapshot.avg_change_pct,
+                up_count=snapshot.up_count,
+                down_count=snapshot.down_count,
+                unchanged_count=snapshot.unchanged_count,
+                total_volume=snapshot.total_nxt_volume,
+            )
+        except Exception as e:
+            logger.warning(f"[프리마켓] 스냅샷 DB 저장 실패 (무시): {e}")
+
+    def _save_report_summary_to_db(self, report: PreMarketReport):
+        """리포트 요약을 DB에 저장 (마지막 스냅샷에 업데이트)"""
+        try:
+            from db.database_manager import DatabaseManager
+            db = DatabaseManager()
+            trade_date = report.report_time.strftime('%Y%m%d')
+            is_cb = report.market_sentiment == 'circuit_breaker'
+            cb_reason = ''
+            if is_cb and report.log_lines:
+                for line in report.log_lines:
+                    if '서킷브레이커' in line:
+                        cb_reason = line
+                        break
+            db.save_nxt_report_summary(
+                trade_date=trade_date,
+                sentiment_score=report.sentiment_score,
+                market_sentiment=report.market_sentiment,
+                expected_gap_pct=report.expected_gap_pct,
+                circuit_breaker=is_cb,
+                circuit_breaker_reason=cb_reason,
+                recommended_max_positions=report.recommended_max_positions,
+            )
+            logger.info(f"[프리마켓] 리포트 요약 DB 저장 완료 (date={trade_date})")
+        except Exception as e:
+            logger.warning(f"[프리마켓] 리포트 요약 DB 저장 실패 (무시): {e}")
 
     # =========================================================================
     # Private Methods
@@ -538,7 +799,9 @@ class PreMarketAnalyzer:
         from config.strategy_settings import StrategySettings
         pm = StrategySettings.PreMarket
 
-        if score <= pm.BEARISH_THRESHOLD:
+        if score <= pm.EXTREME_BEARISH_THRESHOLD:
+            return 'extreme_bearish'
+        elif score <= pm.BEARISH_THRESHOLD:
             return 'bearish'
         elif score >= pm.BULLISH_THRESHOLD:
             return 'bullish'

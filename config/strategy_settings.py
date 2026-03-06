@@ -99,12 +99,16 @@ class StrategySettings:
 
         # 심리 판단 임계값 (-1.0 ~ +1.0)
         BEARISH_THRESHOLD = -0.3                # 이 이하면 약세
+        EXTREME_BEARISH_THRESHOLD = -0.7        # 이 이하면 극약세 (매수 중단)
         BULLISH_THRESHOLD = 0.3                 # 이 이상이면 강세
 
         # 약세장 파라미터 조정
         BEARISH_MAX_POSITIONS = 3               # 5 → 3
         BEARISH_STOP_LOSS_RATIO = 0.03          # 4% → 3%
         BEARISH_TAKE_PROFIT_RATIO = 0.04        # 5% → 4%
+
+        # 극약세장 (NXT 급락 시 매수 완전 중단)
+        EXTREME_BEARISH_MAX_POSITIONS = 0       # 매수 중단
 
         # 서킷브레이커: 전일 지수 기반 매수 완전 중단
         # 조건1: 전일 KOSPI 또는 KOSDAQ 등락률이 이 값 이하 → 매수 중단
@@ -114,6 +118,17 @@ class StrategySettings:
         CIRCUIT_BREAKER_NXT_GAP_PCT = -0.5            # + NXT 갭 -0.5%
         # 해제 조건: 서킷브레이커 발동 상태에서 NXT 갭이 이 값 이상이면 해제
         CIRCUIT_BREAKER_RELEASE_GAP_PCT = 3.0         # NXT 갭 +3% 이상이면 강한 반등으로 해제
+
+        # 장 시작 후 지수 갭 체크 (09:00~09:05 실제 KOSPI/KOSDAQ 시가 확인)
+        MARKET_OPEN_GAP_CHECK_ENABLED = True          # 장 시작 갭 체크 사용 여부
+        MARKET_OPEN_GAP_THRESHOLD_PCT = -1.5          # 지수 시가 갭 이 값 이하 → 매수 중단
+        MARKET_OPEN_GAP_CHECK_MINUTE = 1              # 장 시작 후 N분에 체크 (09:01)
+
+        # 장중 지수 모니터링 (09:30~ 장 마감까지 주기적 체크)
+        INTRADAY_INDEX_CHECK_ENABLED = True           # 장중 지수 체크 사용 여부
+        INTRADAY_INDEX_CHECK_INTERVAL_MINUTES = 30    # 체크 주기 (분)
+        INTRADAY_INDEX_DROP_THRESHOLD_PCT = -2.0      # 전일 대비 이 값 이하 → 매수 중단
+        INTRADAY_INDEX_RECOVERY_PCT = -1.0            # 이 값 이상 회복 시 → 매수 재개
 
         # NXT 실패 시 기본값
         FALLBACK_SENTIMENT = 'neutral'

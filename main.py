@@ -656,6 +656,7 @@ class DayTradingBot:
 
             last_snapshot = datetime(2000, 1, 1, tzinfo=KST)
             report_generated_today = None
+            market_open_gap_checked_today = None  # 장 시작 갭 체크 완료 날짜
 
             while self.is_running:
                 current_time = now_kst()
@@ -665,6 +666,7 @@ class DayTradingBot:
                 if report_generated_today and report_generated_today != today:
                     self.pre_market_analyzer.reset_daily_state()
                     report_generated_today = None
+                    market_open_gap_checked_today = None
 
                 # NXT 프리마켓 시간만 활성 (08:00-09:00 평일)
                 if not MarketHours.is_nxt_pre_market_time(current_time):
@@ -718,6 +720,32 @@ class DayTradingBot:
                         # 텔레그램 모닝 브리핑
                         await self._send_morning_briefing(report)
 
+                # 장 시작 후 실제 지수 갭 체크 (09:01 이후 1회)
+                if (report_generated_today == today and
+                        market_open_gap_checked_today != today and
+                        current_time.hour == 9 and
+                        current_time.minute >= pm.MARKET_OPEN_GAP_CHECK_MINUTE):
+                    market_open_gap_checked_today = today
+                    self.logger.info("[장시작갭] 실제 지수 갭 체크 시작...")
+                    loop = asyncio.get_event_loop()
+                    updated_report = await loop.run_in_executor(
+                        None, self.pre_market_analyzer.check_market_open_gap
+                    )
+                    if updated_report:
+                        # 서킷브레이커 발동 → 매매 엔진에 업데이트된 리포트 재전달
+                        self.decision_engine.set_pre_market_report(updated_report)
+                        self.logger.warning(
+                            f"[장시작갭] 서킷브레이커 발동! "
+                            f"추천포지션={updated_report.recommended_max_positions}"
+                        )
+                        # 텔레그램 긴급 알림
+                        gap_msg = (
+                            f"[장시작갭 서킷브레이커]\n"
+                            f"매수 중단! 포지션={updated_report.recommended_max_positions}\n"
+                            f"{updated_report.log_lines[0] if updated_report.log_lines else ''}"
+                        )
+                        await self.telegram.notify_system_status(gap_msg)
+
                 await asyncio.sleep(10)
 
         except Exception as e:
@@ -765,6 +793,7 @@ class DayTradingBot:
             last_api_refresh = now_kst()
             last_market_check = now_kst()
             last_intraday_update = now_kst()  # 🆕 장중 데이터 업데이트 시간
+            last_intraday_index_check = now_kst()  # 장중 지수 체크 시간
             post_market_data_saved_date = None  # 장 마감 후 데이터 저장 완료 날짜
             # last_chart_generation = datetime(2000, 1, 1, tzinfo=KST)  # 🆕 장 마감 후 차트 생성 시간 (주석처리)
             # chart_generation_count = 0  # 🆕 차트 생성 횟수 카운터 (주석처리)
@@ -839,6 +868,36 @@ class DayTradingBot:
                 if (current_time - last_market_check).total_seconds() >= 30 * 60:  # 30분
                     await self._log_system_status()
                     last_market_check = current_time
+
+                # 장중 지수 모니터링 (30분 주기, 09:30~ 장중에만)
+                from config.strategy_settings import StrategySettings
+                pm_cfg = StrategySettings.PreMarket
+                if (pm_cfg.INTRADAY_INDEX_CHECK_ENABLED and
+                        is_market_open() and
+                        current_time.hour >= 9 and current_time.minute >= 30 and
+                        (current_time - last_intraday_index_check).total_seconds() >= pm_cfg.INTRADAY_INDEX_CHECK_INTERVAL_MINUTES * 60):
+                    last_intraday_index_check = current_time
+                    try:
+                        loop = asyncio.get_event_loop()
+                        updated_report = await loop.run_in_executor(
+                            None, self.pre_market_analyzer.check_intraday_index
+                        )
+                        if updated_report:
+                            self.decision_engine.set_pre_market_report(updated_report)
+                            status = updated_report.market_sentiment
+                            max_pos = updated_report.recommended_max_positions
+                            self.logger.info(
+                                f"[장중지수] 리포트 업데이트: {status}, 포지션={max_pos}"
+                            )
+                            # 텔레그램 알림 (서킷브레이커 발동/해제 시)
+                            msg = (
+                                f"[장중지수 모니터링]\n"
+                                f"상태: {status.upper()}, 최대포지션: {max_pos}\n"
+                                f"{updated_report.log_lines[0] if updated_report.log_lines else ''}"
+                            )
+                            await self.telegram.notify_system_status(msg)
+                    except Exception as e:
+                        self.logger.error(f"[장중지수] 체크 오류: {e}")
                 
         except Exception as e:
             self.logger.error(f"❌ 시스템 모니터링 태스크 오류: {e}")
