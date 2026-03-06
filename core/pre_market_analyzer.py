@@ -98,6 +98,7 @@ class PreMarketAnalyzer:
         self._nxt_available: Optional[bool] = None  # None = 미테스트
         self._circuit_breaker_active: bool = False
         self._circuit_breaker_reason: str = ""
+        self._prev_day_decline_active: bool = False
 
         self._nxt_div_code = self.config.get('nxt_div_code', 'NX')
         self._max_stocks = self.config.get('max_bellwether_stocks', 30)
@@ -184,6 +185,12 @@ class PreMarketAnalyzer:
                     report.nxt_available = True  # 서킷브레이커가 유효한 신호이므로
                     report.log_lines.insert(0, f"서킷브레이커: {self._circuit_breaker_reason}")
                     logger.warning(f"[프리마켓] 서킷브레이커 발동 (NXT 없음): {self._circuit_breaker_reason}")
+                elif self._prev_day_decline_active:
+                    # 전일 하락 → 손절/익절 축소 (매수는 유지)
+                    report.recommended_stop_loss_pct = pm.PREV_DAY_DECLINE_STOP_LOSS_RATIO
+                    report.recommended_take_profit_pct = pm.PREV_DAY_DECLINE_TAKE_PROFIT_RATIO
+                    report.log_lines.insert(0, f"전일 하락 -> 손절 {pm.PREV_DAY_DECLINE_STOP_LOSS_RATIO:.0%}/익절 {pm.PREV_DAY_DECLINE_TAKE_PROFIT_RATIO:.0%} 축소")
+                    logger.info(f"[프리마켓] 전일 하락 손절축소 적용 (NXT 없음)")
                 self._report = report
                 return self._report
 
@@ -246,8 +253,13 @@ class PreMarketAnalyzer:
                     rec_take_profit = pm.BEARISH_TAKE_PROFIT_RATIO
             else:
                 rec_max_pos = pm.FALLBACK_MAX_POSITIONS
-                rec_stop_loss = 0.05
-                rec_take_profit = 0.06
+                # 전일 하락 시 손절/익절 축소 (매수는 유지)
+                if self._prev_day_decline_active:
+                    rec_stop_loss = pm.PREV_DAY_DECLINE_STOP_LOSS_RATIO
+                    rec_take_profit = pm.PREV_DAY_DECLINE_TAKE_PROFIT_RATIO
+                else:
+                    rec_stop_loss = 0.05
+                    rec_take_profit = 0.06
 
             # 로그 라인 생성
             log_lines = []
@@ -255,6 +267,8 @@ class PreMarketAnalyzer:
                 log_lines.append(f"서킷브레이커: {self._circuit_breaker_reason}")
             if sentiment == 'extreme_bearish':
                 log_lines.append(f"극약세: NXT sentiment {sentiment_score:+.2f} <= {pm.EXTREME_BEARISH_THRESHOLD} -> 매수 중단")
+            if self._prev_day_decline_active and sentiment not in ('circuit_breaker', 'extreme_bearish', 'bearish'):
+                log_lines.append(f"전일 하락 -> 손절 {rec_stop_loss:.0%}/익절 {rec_take_profit:.0%} 축소")
             log_lines.extend([
                 f"시장 심리: {sentiment.upper()} ({sentiment_score:+.2f})",
                 f"예상 갭: {gap_direction} ({gap_pct:+.2f}%)",
@@ -307,6 +321,7 @@ class PreMarketAnalyzer:
         self._nxt_available = None
         self._circuit_breaker_active = False
         self._circuit_breaker_reason = ""
+        self._prev_day_decline_active = False
         logger.info("[프리마켓] 일일 상태 초기화 완료")
 
     # =========================================================================
@@ -558,9 +573,10 @@ class PreMarketAnalyzer:
 
     def _check_circuit_breaker(self):
         """
-        전일 지수 등락률 기반 서킷브레이커 체크
+        전일 지수 등락률 기반 서킷브레이커 + 손절축소 체크
 
-        조건1: 전일 KOSPI 또는 KOSDAQ -2% 이상 하락 → 매수 완전 중단
+        조건1: 전일 KOSPI 또는 KOSDAQ -3% 이상 하락 → 매수 완전 중단
+        조건1b: 전일 -1% 이하 → 매수는 유지하되 손절 3%/익절 4%로 축소
         """
         from config.strategy_settings import StrategySettings
         pm = StrategySettings.PreMarket
@@ -578,7 +594,7 @@ class PreMarketAnalyzer:
 
             logger.info(
                 f"[서킷브레이커] 전일 지수: KOSPI {kospi_ret:+.2f}%, KOSDAQ {kosdaq_ret:+.2f}% "
-                f"(임계값: {threshold}%)"
+                f"(서킷브레이커 임계값: {threshold}%, 손절축소 임계값: {pm.PREV_DAY_DECLINE_THRESHOLD}%)"
             )
 
             if worst_ret <= threshold:
@@ -589,6 +605,14 @@ class PreMarketAnalyzer:
                 )
                 logger.warning(
                     f"[서킷브레이커] 발동! {self._circuit_breaker_reason} -> 매수 완전 중단"
+                )
+            elif worst_ret <= pm.PREV_DAY_DECLINE_THRESHOLD:
+                # 서킷브레이커는 아니지만 전일 하락 → 손절/익절 축소 플래그
+                self._prev_day_decline_active = True
+                idx_name = "KOSPI" if kospi_ret <= kosdaq_ret else "KOSDAQ"
+                logger.info(
+                    f"[서킷브레이커] 전일 {idx_name} {worst_ret:+.2f}% "
+                    f"(임계값 {pm.PREV_DAY_DECLINE_THRESHOLD}%) -> 손절/익절 축소 적용"
                 )
 
         except Exception as e:

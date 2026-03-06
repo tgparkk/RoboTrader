@@ -112,7 +112,12 @@ class StrategySettings:
 
         # 서킷브레이커: 전일 지수 기반 매수 완전 중단
         # 조건1: 전일 KOSPI 또는 KOSDAQ 등락률이 이 값 이하 → 매수 중단
-        CIRCUIT_BREAKER_PREV_DAY_PCT = -2.0     # 전일 -2% 이상 하락
+        CIRCUIT_BREAKER_PREV_DAY_PCT = -3.0     # 전일 -3% 이상 하락 (4년 시뮬: -3% 이하만 마이너스)
+
+        # 조건1b: 전일 -1% 이하 → 스킵 안하고 손절만 축소 (5%→3%)
+        PREV_DAY_DECLINE_THRESHOLD = -1.0       # 전일 -1% 이하 시
+        PREV_DAY_DECLINE_STOP_LOSS_RATIO = 0.03  # 손절 3%로 축소
+        PREV_DAY_DECLINE_TAKE_PROFIT_RATIO = 0.04  # 익절 4%로 축소
         # 조건2: 전일 -1% 이하 + 당일 NXT 갭 이 값 이하 → 매수 중단
         CIRCUIT_BREAKER_PREV_DAY_PCT_WITH_GAP = -1.0  # 전일 -1% 하락
         CIRCUIT_BREAKER_NXT_GAP_PCT = -0.5            # + NXT 갭 -0.5%
