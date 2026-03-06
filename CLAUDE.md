@@ -58,9 +58,11 @@ ACTIVE_STRATEGY = 'price_position'
 ### 손익비 (config/trading_config.json)
 - **stop_loss_ratio**: 0.05 (-5.0%)
 - **take_profit_ratio**: 0.06 (+6.0%)
+- 전일 지수 -1% 이하 시 → 손절 3%, 익절 4%로 자동 축소
 
 ### 서킷브레이커 (config/strategy_settings.py > PreMarket)
-- 전일 KOSPI/KOSDAQ -2% → 매수 완전 중단
+- 전일 KOSPI/KOSDAQ -3% → 매수 완전 중단 (4년 시뮬: -3% 이하만 마이너스)
+- 전일 -1% 이하 → 손절 3%/익절 4%로 축소 (매수는 허용)
 - 전일 -1% + NXT 갭 -0.5% → 매수 완전 중단
 - NXT sentiment <= -0.7 → 매수 완전 중단
 - 상세: [docs/pre_market_circuit_breaker.md](docs/pre_market_circuit_breaker.md)
