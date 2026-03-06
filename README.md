@@ -46,6 +46,7 @@ RoboTrader/
 │   ├── trading_decision_engine.py  # 매매 판단 엔진
 │   ├── trade_executor.py   # 매수/매도 실행
 │   ├── stock_screener.py   # 실시간 종목 스크리너
+│   ├── pre_market_analyzer.py  # 프리마켓 분석 & 서킷브레이커
 │   ├── order_manager.py    # 주문 관리
 │   └── strategies/
 │       └── price_position_strategy.py  # 가격 위치 전략
@@ -114,6 +115,15 @@ python main.py
 - 오류 처리 및 재시도
 
 ## 안전 기능
+
+### 🛡️ 프리마켓 분석 & 서킷브레이커
+장전 NXT 프리마켓 데이터(08:00~08:55)로 시장 심리를 판단하여 위험 시 매수를 자동 중단합니다.
+- 전일 지수 급락(-2%) 시 매수 완전 중단
+- 전일 하락(-1%) + NXT 갭다운(-0.5%) 복합 조건
+- NXT 심리 극약세(score <= -0.7) 시 전일 지수 무관 매수 중단
+- 강한 반등(NXT 갭 +3%) 시 절반 투입으로 해제
+
+상세 문서: [`docs/pre_market_circuit_breaker.md`](docs/pre_market_circuit_breaker.md)
 
 ### 🔒 리스크 제한
 - 최대 투자 비율 제한
