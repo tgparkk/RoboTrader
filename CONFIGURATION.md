@@ -5,9 +5,11 @@
 ```
 config/
 ├── trading_config.json          # 거래 설정 (투자비율, 손익비, 리스크)
-├── ml_settings.py               # ML 필터 설정
-├── advanced_filter_settings.py  # 고급 필터 설정
-├── dynamic_profit_loss_config.py  # 동적 손익비 (비활성화)
+├── strategy_settings.py         # 전략/스크리너/프리마켓 설정
+├── ml_settings.py               # ML 필터 설정 (현재 비활성)
+├── advanced_filter_settings.py  # 고급 필터 설정 (pullback 전략용)
+├── market_hours.py              # 장 시간 설정
+├── settings.py                  # 일반 설정
 └── key.ini                      # API 키 (git 제외)
 ```
 
@@ -25,8 +27,8 @@ config/
   "risk_management": {
     "max_position_count": 20,       // 최대 보유 종목 수
     "max_position_ratio": 0.3,      // 종목당 최대 비율
-    "stop_loss_ratio": 0.04,        // 손절 (-4.0%)
-    "take_profit_ratio": 0.05,      // 익절 (+5.0%)
+    "stop_loss_ratio": 0.05,        // 손절 (-5.0%)
+    "take_profit_ratio": 0.06,      // 익절 (+6.0%)
     "use_dynamic_profit_loss": false  // 동적 손익비 (비활성화)
   }
 }
@@ -65,46 +67,14 @@ USE_ML_FILTER = False
 
 ---
 
-## 3. advanced_filter_settings.py
+## 3. advanced_filter_settings.py (pullback 전략 전용)
+
+> **참고**: 현재 활성 전략은 `price_position`이며, 이 필터들은 pullback 전략에서만 사용됩니다.
+> price_position 전략의 필터는 `strategy_settings.py > PricePosition` 클래스를 참조하세요.
 
 ### 마스터 스위치
 ```python
 ENABLED = True  # False면 모든 고급 필터 비활성화
-```
-
-### 현재 활성화된 필터
-
-#### 3분봉 기반 필터
-| 필터 | 설정 | 효과 |
-|------|------|------|
-| CONSECUTIVE_BULLISH | min_count: 1 | 연속 양봉 1개 이상 |
-| PRICE_POSITION | min_position: 0.80 | 가격위치 80% 이상 |
-| TUESDAY_FILTER | enabled: True | 화요일 회피 |
-| TIME_DAY_FILTER | avoid: 9시화, 10시화, 11시화, 10시수 | 저승률 시간대 회피 |
-| LOW_WINRATE_STOCKS | blacklist: 101170, 394800 | 저승률 종목 회피 |
-
-#### pattern_stages 기반 필터
-| 필터 | 설정 | 회피 조건 |
-|------|------|----------|
-| UPTREND_GAIN_FILTER | max_gain: 15.0 | 상승폭 >= 15% |
-| DECLINE_PCT_FILTER | max_decline: 5.0 | 하락폭 >= 5% |
-| SUPPORT_CANDLE_FILTER | avoid_counts: [3] | 지지캔들 = 3개 |
-
-### 비활성화된 필터
-- UPPER_WICK: 윗꼬리 비율 (효과 미미)
-- VOLUME_RATIO: 거래량 비율 (연속양봉+가격위치가 더 효과적)
-- RSI_FILTER: RSI (단독 효과 보통)
-- FIRST_TRADE_FILTER: 첫 거래 (구현 복잡)
-
-### 프리셋
-```python
-PRESETS = {
-    'conservative': {...},   # 보수적: 승률 75.5%, 거래 21%
-    'balanced': {...},       # 균형: 승률 69.3%, 거래 26%
-    'aggressive': {...},     # 공격적: 승률 50%, 거래 81%
-    'highest_winrate': {...} # 최고승률: 71.6%
-}
-ACTIVE_PRESET = None  # None이면 개별 설정 사용
 ```
 
 ---
@@ -139,12 +109,28 @@ class FundManager:
 ```
 
 ### 관련 문서
-- [README_DYNAMIC_PROFIT_LOSS.md](README_DYNAMIC_PROFIT_LOSS.md)
-- [QUICK_START_동적손익비.md](QUICK_START_동적손익비.md)
+- [archive/docs/README_DYNAMIC_PROFIT_LOSS.md](archive/docs/README_DYNAMIC_PROFIT_LOSS.md)
+- [archive/docs/QUICK_START_동적손익비.md](archive/docs/QUICK_START_동적손익비.md)
 
 ---
 
-## 6. strategy_settings.py - 스크리너 설정
+## 6. strategy_settings.py - 전략 & 스크리너 & 프리마켓 설정
+
+### 가격 위치 전략 (PricePosition) - 진입 조건
+```python
+class PricePosition:
+    CANDLE_INTERVAL = 1              # 1분봉
+    MIN_PCT_FROM_OPEN = 1.0          # 시가 대비 최소 상승률 (%)
+    MAX_PCT_FROM_OPEN = 3.0          # 시가 대비 최대 상승률 (%)
+    ENTRY_START_HOUR = 9             # 진입 시작 (9시)
+    ENTRY_END_HOUR = 12              # 진입 종료 (12시)
+    MAX_PRE_VOLATILITY = 1.2         # 변동성 상한 (%)
+    MAX_PRE20_MOMENTUM = 2.0         # 모멘텀 상한 (%)
+    MAX_DAILY_POSITIONS = 5          # 동시 보유 최대
+```
+
+> **주의**: 스크리너 Phase 3 필터(0.8~4.0%)는 후보 종목 발굴용이고,
+> PricePosition 진입 조건(1.0~3.0%)은 실제 매수 판단용입니다. 범위가 다릅니다.
 
 ### 실시간 종목 스크리너 (Screener)
 ```python
@@ -173,6 +159,22 @@ class Screener:
 1. **Phase 1**: KOSPI+KOSDAQ 거래량순위 API (4회 호출) → ~80-100개 후보
 2. **Phase 2**: 기본 필터 (등락률, 가격, 거래대금) → ~20-30개
 3. **Phase 3**: 현재가 API로 정밀 검증 (시가대비, 갭) → 최대 5개 추가
+
+### 프리마켓 & 서킷브레이커 (PreMarket)
+```python
+class PreMarket:
+    # NXT 심리 판단 임계값
+    BEARISH_THRESHOLD = -0.3         # 약세 → 포지션 3개, 손절3%/익절4%
+    EXTREME_BEARISH_THRESHOLD = -0.7 # 극약세 → 매수 완전 중단
+
+    # 서킷브레이커 (전일 지수 기반)
+    CIRCUIT_BREAKER_PREV_DAY_PCT = -2.0          # 조건1: 전일 -2% → 매수 중단
+    CIRCUIT_BREAKER_PREV_DAY_PCT_WITH_GAP = -1.0 # 조건2: 전일 -1% +
+    CIRCUIT_BREAKER_NXT_GAP_PCT = -0.5           #        NXT 갭 -0.5% → 매수 중단
+    CIRCUIT_BREAKER_RELEASE_GAP_PCT = 3.0        # 해제: NXT 갭 +3% → 2종목으로 재개
+```
+
+상세: [docs/pre_market_circuit_breaker.md](docs/pre_market_circuit_breaker.md)
 
 ---
 

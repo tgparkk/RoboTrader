@@ -152,126 +152,23 @@ python main.py
 이 프로젝트는 교육 및 연구 목적으로 제작되었습니다.
 실제 투자에 사용 시 발생하는 손실에 대해 책임지지 않습니다.
 
-## ML 학습 파이프라인
+## ML 필터 (현재 비활성)
 
-### 🤖 동적 손익비 ML 시스템
-
-패턴별로 최적화된 손익비를 적용하고 ML 필터로 신호 품질을 향상시키는 시스템입니다.
-
-#### 1단계: 패턴 로그 수집
-```bash
-python batch_signal_replay.py \
-  -s 20250901 \
-  -e 20251226 \
-  -o test_results_dynamic \
-  --save-pattern-log \
-  --use-dynamic \
-  --workers 8
-```
-- **결과물**:
-  - `test_results_dynamic/`: 시뮬레이션 결과 (승/패 기록)
-  - `pattern_data_log_dynamic/`: 4단계 패턴 상세 데이터 (JSONL 형식)
-
-#### 2단계: ML 데이터셋 생성
-```bash
-python prepare_ml_dataset_dynamic.py
-```
-- **입력**: `test_results_dynamic/` + `pattern_data_log_dynamic/`
-- **출력**: `ml_dataset_dynamic_pl.csv` (28개 특징 + 라벨)
-- **특징**:
-  - 패턴 특징 26개 (상승/하락/지지/돌파 구간 데이터)
-  - 목표 손익비 2개 (`target_stop_loss`, `target_take_profit`)
-
-#### 3단계: ML 모델 학습
-```bash
-python train_ml_dynamic_pl.py
-```
-- **알고리즘**: LightGBM
-- **출력**:
-  - `ml_model_dynamic_pl.pkl`: 학습된 모델
-  - `ml_training_report_dynamic_pl.txt`: 성능 리포트
-
-#### 4단계: 성능 검증
-```bash
-python batch_signal_replay_ml_dynamic.py \
-  -s 20250901 \
-  -e 20251226 \
-  --workers 8
-```
-- 동적 손익비 + ML 필터 조합 성능 측정
-- 결과: `signal_replay_log_ml_dynamic/`
+ML 필터 기능이 구현되어 있으나 현재 비활성 상태입니다 (`USE_ML_FILTER = False`).
+관련 파일: `config/ml_settings.py`, `archive/` 디렉토리의 ML 관련 문서 참조.
 
 ---
 
-### 📊 고정 손익비 ML 시스템 (기존)
-
-고정된 3.5:2.5 손익비를 사용하며 ML 필터로 신호를 선별하는 시스템입니다.
-
-#### 1단계: 패턴 로그 수집
-```bash
-python batch_signal_replay.py \
-  -s 20250901 \
-  -e 20251226 \
-  -o signal_replay_log \
-  --save-pattern-log \
-  --workers 8
-```
-- **결과물**:
-  - `signal_replay_log/`: 시뮬레이션 결과
-  - `pattern_data_log/`: 패턴 상세 데이터
-
-#### 2단계: ML 데이터셋 생성
-```bash
-python prepare_ml_dataset_fixed.py
-```
-- **입력**: `signal_replay_log/` + `pattern_data_log/`
-- **출력**: `ml_dataset_fixed.csv` (26개 특징 + 라벨)
-- **특징**: 패턴 특징만 26개 (목표 손익비 없음 - 항상 고정 3.5:2.5)
-
-#### 3단계: ML 모델 학습
-```bash
-python train_ml_merged.py
-# 또는
-python train_ml_experiments.py
-```
-- **출력**: `ml_model.pkl`
-
-#### 4단계: 성능 검증
-```bash
-python apply_ml_filter.py \
-  signal_replay_log/signal_new2_replay_20250901_9_00_0.txt \
-  --model ml_model.pkl \
-  --threshold 0.5
-```
-
----
-
-### 📁 데이터 저장소
+## 데이터 저장소
 
 **PostgreSQL 테이블**:
 - `minute_candles`: 분봉 데이터 (PK: stock_code, trade_date, idx)
-- `daily_candles`: 일봉 데이터 (PK: stock_code, stck_bsop_date)
-- `candidate_stocks`: 후보 종목 및 선정 시점
-- `trading_stocks`: 거래 중인 종목 상태
+- `daily_candles`: 일봉 데이터 (PK: stock_code, stck_bsop_date) — 지수(KS11, KQ11) 포함
 
 **파일 기반 데이터**:
 ```
 RoboTrader/
-├── pattern_data_log/              # 패턴 로그
-│   └── pattern_data_YYYYMMDD.jsonl
-├── signal_replay_log/             # 시뮬 결과
-│   └── signal_new2_replay_*.txt
 ├── stock_list.json                # KOSPI+KOSDAQ 종목 리스트 (2472종목)
 └── logs/                          # 거래 로그
     └── trading_YYYYMMDD.log
 ```
-
----
-
-## 개발 계획
-
-- [ ] 다양한 매매 전략 플러그인
-- [ ] 웹 대시보드 구현
-- [x] 백테스팅 기능
-- [x] 텔레그램 알림 연동
-- [x] 딥러닝 기반 예측 모델 (LightGBM ML 필터)

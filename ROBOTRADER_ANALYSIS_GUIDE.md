@@ -1,5 +1,13 @@
 # RoboTrader 분석 가이드
 
+> **참고**: 이 문서는 pullback(눌림목) 전략 시대에 작성되었습니다.
+> 현재 활성 전략은 **price_position**이며, 매수 신호 분석 시 아래 grep 패턴을 사용하세요:
+> ```bash
+> grep "가격위치전략.*매수 신호" logs/trading_YYYYMMDD.log  # 매수 신호
+> grep "서킷브레이커" logs/trading_YYYYMMDD.log             # 서킷브레이커
+> grep "\[스크리너\]" logs/trading_YYYYMMDD.log             # 스크리너 결과
+> ```
+
 ## 📋 목차
 1. [실시간 거래 vs 시뮬레이션 차이 분석](#실시간-거래-vs-시뮬레이션-차이-분석)
 2. [주요 로그 파일 및 용도](#주요-로그-파일-및-용도)

@@ -59,6 +59,12 @@ ACTIVE_STRATEGY = 'price_position'
 - **stop_loss_ratio**: 0.05 (-5.0%)
 - **take_profit_ratio**: 0.06 (+6.0%)
 
+### 서킷브레이커 (config/strategy_settings.py > PreMarket)
+- 전일 KOSPI/KOSDAQ -2% → 매수 완전 중단
+- 전일 -1% + NXT 갭 -0.5% → 매수 완전 중단
+- NXT sentiment <= -0.7 → 매수 완전 중단
+- 상세: [docs/pre_market_circuit_breaker.md](docs/pre_market_circuit_breaker.md)
+
 ---
 
 ## 주요 파일 구조
@@ -66,13 +72,17 @@ ACTIVE_STRATEGY = 'price_position'
 ```
 config/
 ├── trading_config.json          # 거래 설정 (투자비율, 손익비)
-├── strategy_settings.py         # 전략/스크리너 설정
+├── strategy_settings.py         # 전략/스크리너/프리마켓 설정
 
 core/
 ├── trading_decision_engine.py   # 매매 판단 엔진
 ├── trade_executor.py            # 매수/매도 실행 로직
+├── order_manager.py             # 주문 관리
 ├── stock_screener.py            # 실시간 종목 스크리너
+├── trading_stock_manager.py     # 종목 상태 관리
 ├── intraday_stock_manager.py    # 장중 데이터 관리
+├── pre_market_analyzer.py       # 프리마켓 분석 & 서킷브레이커
+├── post_market_data_saver.py    # 장 마감 데이터 저장
 ├── fund_manager.py              # 자금 관리
 ├── strategies/
 │   └── price_position_strategy.py  # 가격 위치 전략
@@ -116,3 +126,7 @@ python collect_and_simulate.py --phase ABCD --start 20250224 --end 20260223
 - [DEVELOPMENT.md](DEVELOPMENT.md) - 개발자용 상세 가이드
 - [CONFIGURATION.md](CONFIGURATION.md) - 설정 파일 상세 설명
 - [README.md](README.md) - 프로젝트 소개 및 설치 방법
+- [docs/pre_market_circuit_breaker.md](docs/pre_market_circuit_breaker.md) - 서킷브레이커 상세
+- [docs/stock_state_management.md](docs/stock_state_management.md) - 종목 상태 관리
+- [docs/telegram_setup.md](docs/telegram_setup.md) - 텔레그램 설정
+- [장중_테스트_가이드.md](장중_테스트_가이드.md) - 장중 테스트
