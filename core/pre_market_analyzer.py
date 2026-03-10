@@ -215,18 +215,19 @@ class PreMarketAnalyzer:
             # 서킷브레이커 발동 시 → NXT 갭으로 해제 가능 여부 체크
             if self._circuit_breaker_active:
                 if gap_pct >= pm.CIRCUIT_BREAKER_RELEASE_GAP_PCT:
-                    # 강한 반등 신호 → 서킷브레이커 해제, 절반 투입
+                    # 강한 반등 신호 → 서킷브레이커 해제, 정상 모드 복귀
                     self._circuit_breaker_active = False
+                    self._prev_day_decline_active = False  # 손절축소도 해제
                     release_reason = (
                         f"NXT 갭 {gap_pct:+.2f}% >= {pm.CIRCUIT_BREAKER_RELEASE_GAP_PCT}%로 "
-                        f"서킷브레이커 해제 (절반 투입)"
+                        f"서킷브레이커 해제 (정상 복귀)"
                     )
                     self._circuit_breaker_reason = release_reason
                     logger.info(f"[서킷브레이커] {release_reason}")
-                    rec_max_pos = max(1, pm.FALLBACK_MAX_POSITIONS // 2)
-                    rec_stop_loss = pm.BEARISH_STOP_LOSS_RATIO
-                    rec_take_profit = pm.BEARISH_TAKE_PROFIT_RATIO
-                    sentiment = 'bearish'  # 완전 해제가 아닌 cautious 모드
+                    rec_max_pos = pm.FALLBACK_MAX_POSITIONS
+                    rec_stop_loss = 0.05
+                    rec_take_profit = 0.06
+                    sentiment = 'neutral'  # 정상 모드 복귀
                 else:
                     rec_max_pos = 0
                     rec_stop_loss = pm.BEARISH_STOP_LOSS_RATIO

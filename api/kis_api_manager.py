@@ -739,22 +739,16 @@ class KISAPIManager:
                     expected_filled = max(0, total_order_qty - remaining_qty)
                     if filled_qty != expected_filled:
                         if remaining_qty == 0 and filled_qty == 0 and total_order_qty > 0:
-                            # 🔧 rmn_qty=0이지만 체결내역 미반영: KIS API 지연 가능성
+                            # rmn_qty=0이지만 체결내역 미반영: API 지연 가능성
+                            # 계산값 수용하지 않고 대기 — 체결 내역 API가 반영될 때까지 filled_qty=0 유지
                             if order_id not in self._fill_anomaly_first_seen:
                                 self._fill_anomaly_first_seen[order_id] = datetime.now()
                                 self.logger.warning(f"⚠️ 체결내역 미반영 최초 감지: {order_id} - "
-                                                  f"rmn_qty=0, 체결내역=0주 (계산값: {expected_filled}주)")
+                                                  f"rmn_qty=0, 체결내역=0주 (계산값: {expected_filled}주, 수용 안 함)")
                             else:
                                 elapsed = (datetime.now() - self._fill_anomaly_first_seen[order_id]).total_seconds()
-                                if elapsed >= 15:
-                                    # 15초 이상 지속: KIS API 지연으로 판단, 계산값 수용
-                                    self.logger.info(f"📊 체결내역 미반영 {elapsed:.0f}초 지속: {order_id} - "
-                                                   f"계산값({expected_filled}주) 수용 (체결 추론)")
-                                    filled_qty = expected_filled
-                                    del self._fill_anomaly_first_seen[order_id]
-                                else:
-                                    self.logger.info(f"📊 체결내역 미반영 {elapsed:.0f}초 경과: {order_id} - "
-                                                   f"대기 중 (15초 후 계산값 수용)")
+                                self.logger.info(f"📊 체결내역 미반영 {elapsed:.0f}초 경과: {order_id} - "
+                                               f"체결내역 API 반영 대기 중 (filled_qty=0 유지)")
                         else:
                             self.logger.warning(f"⚠️ 체결량 불일치 감지: {order_id} - "
                                               f"체결내역: {filled_qty}주, 계산값: {expected_filled}주")
