@@ -155,12 +155,16 @@ def apply_daily_limit(trades_df, max_daily):
     return pd.DataFrame(limited).reset_index(drop=True) if limited else pd.DataFrame()
 
 
-def calc_capital_returns(trades_df, initial_capital=10_000_000, buy_ratio=0.20):
+def calc_capital_returns(trades_df, initial_capital=10_000_000, buy_ratio=0.20,
+                         cost_pct=0.0):
     """
     원금 기반 누적 수익률 계산
 
     날짜순으로 거래를 처리하며, 각 거래의 투자금 = 당시 자본 * buy_ratio.
     동일 날짜 내 거래는 해당 날짜 시작 자본 기준으로 계산 (장중 자본 변동 미반영).
+
+    Args:
+        cost_pct: 건당 왕복 비용 (수수료+세금+슬리피지). 예: 0.3 = 0.3%
 
     Returns:
         dict: {final_capital, total_return_pct, monthly_returns: {month: pct}}
@@ -186,7 +190,8 @@ def calc_capital_returns(trades_df, initial_capital=10_000_000, buy_ratio=0.20):
 
         for _, trade in day_trades.iterrows():
             invest_amount = day_start_capital * buy_ratio
-            profit = invest_amount * (trade['pnl'] / 100)
+            net_pnl = trade['pnl'] - cost_pct
+            profit = invest_amount * (net_pnl / 100)
             capital += profit
 
     # 마지막 월 마무리
@@ -205,7 +210,50 @@ def calc_capital_returns(trades_df, initial_capital=10_000_000, buy_ratio=0.20):
     }
 
 
-def print_stats(trades_df, daily_results, label, initial_capital=10_000_000, buy_ratio=0.20):
+def calc_fixed_capital_returns(trades_df, initial_capital=10_000_000, buy_ratio=0.20,
+                                cost_pct=0.0):
+    """
+    고정자본 수익률 계산 (복리 없음)
+
+    매 거래의 투자금 = 초기자본 * buy_ratio (고정).
+    복리 효과를 제거하여 전략 자체의 순수 성과를 측정.
+    """
+    if trades_df is None or len(trades_df) == 0:
+        return {'final_capital': initial_capital, 'total_return_pct': 0.0,
+                'monthly_returns': {}, 'total_profit': 0}
+
+    invest_amount = initial_capital * buy_ratio  # 고정
+    total_profit = 0
+    monthly_profits = {}  # month -> profit_won
+    current_month = None
+
+    for date in sorted(trades_df['date'].unique()):
+        month = date[:6]
+        if month != current_month:
+            current_month = month
+            if month not in monthly_profits:
+                monthly_profits[month] = 0
+
+        day_trades = trades_df[trades_df['date'] == date]
+        for _, trade in day_trades.iterrows():
+            net_pnl = trade['pnl'] - cost_pct
+            profit = invest_amount * (net_pnl / 100)
+            total_profit += profit
+            monthly_profits[month] += profit
+
+    total_return_pct = total_profit / initial_capital * 100
+    monthly_pcts = {m: p / initial_capital * 100 for m, p in monthly_profits.items()}
+
+    return {
+        'final_capital': initial_capital + total_profit,
+        'total_return_pct': total_return_pct,
+        'monthly_returns': monthly_pcts,
+        'total_profit': total_profit,
+    }
+
+
+def print_stats(trades_df, daily_results, label, initial_capital=10_000_000, buy_ratio=0.20,
+                cost_pct=0.0):
     """거래 통계 출력"""
     if len(trades_df) == 0:
         print(f'\n[{label}] 거래 없음')
@@ -216,25 +264,32 @@ def print_stats(trades_df, daily_results, label, initial_capital=10_000_000, buy
     total = len(trades_df)
     winrate = wins / total * 100
     avg_pnl = trades_df['pnl'].mean()
+    avg_net = avg_pnl - cost_pct
 
     avg_win = trades_df[trades_df['result'] == 'WIN']['pnl'].mean() if wins > 0 else 0
     avg_loss = trades_df[trades_df['result'] == 'LOSS']['pnl'].mean() if losses > 0 else 0
     pl_ratio = abs(avg_win / avg_loss) if avg_loss != 0 else 0
 
-    # 원금 기반 수익률 계산
-    cap = calc_capital_returns(trades_df, initial_capital, buy_ratio)
+    # 수익률 계산 (비용 적용)
+    cap_compound = calc_capital_returns(trades_df, initial_capital, buy_ratio, cost_pct)
+    cap_fixed = calc_fixed_capital_returns(trades_df, initial_capital, buy_ratio, cost_pct)
 
     print('\n' + '=' * 80)
     print(f'전체 통계 [{label}]')
-    print(f'  (초기자본: {initial_capital/10000:,.0f}만원, 건당 투자비율: {buy_ratio:.0%})')
+    print(f'  (초기자본: {initial_capital/10000:,.0f}만원, 건당 투자비율: {buy_ratio:.0%},'
+          f' 비용: {cost_pct:.2f}%/건)')
     print('=' * 80)
     print(f'총 거래: {total}건 ({wins}승 {losses}패)')
     print(f'승률: {winrate:.1f}%')
-    print(f'원금 기준 수익률: {cap["total_return_pct"]:+.2f}% '
-          f'({initial_capital/10000:,.0f}만 → {cap["final_capital"]/10000:,.0f}만원)')
-    print(f'평균 수익률: {avg_pnl:+.2f}% (건당)')
+    print(f'평균 수익률: {avg_pnl:+.2f}% (건당, 비용 전)')
+    print(f'평균 순수익률: {avg_net:+.2f}% (건당, 비용 {cost_pct:.2f}% 차감)')
     print(f'평균 승리: {avg_win:+.2f}% | 평균 손실: {avg_loss:.2f}%')
     print(f'손익비: {pl_ratio:.2f}:1')
+    print()
+    print(f'  [고정자본] 수익률: {cap_fixed["total_return_pct"]:+.2f}% '
+          f'({initial_capital/10000:,.0f}만 → {cap_fixed["final_capital"]/10000:,.0f}만원)')
+    print(f'  [복리자본] 수익률: {cap_compound["total_return_pct"]:+.2f}% '
+          f'({initial_capital/10000:,.0f}만 → {cap_compound["final_capital"]/10000:,.0f}만원)')
 
     # 요일별
     print('\n' + '-' * 60)
@@ -272,9 +327,10 @@ def print_stats(trades_df, daily_results, label, initial_capital=10_000_000, buy
         w = (f['result'] == 'WIN').sum()
         rate = w / len(f) * 100
         avg = f['pnl'].mean()
-        cap_m = cap['monthly_returns'].get(month, 0.0)
+        avg_n = avg - cost_pct
+        cap_m = cap_fixed['monthly_returns'].get(month, 0.0)
         print(f'  {month}: {len(f)}건, {w}승 {len(f)-w}패, {rate:.1f}%, '
-              f'평균{avg:+.2f}%, 원금수익률{cap_m:+.2f}%')
+              f'순평균{avg_n:+.2f}%, 고정수익률{cap_m:+.2f}%')
 
     # 청산 사유별
     print('\n' + '-' * 60)
@@ -304,6 +360,7 @@ def run_simulation(
     screener_min_price=5000,
     screener_max_price=500000,
     verbose=True,
+    cost_pct=0.33,
 ):
     strategy = PricePositionStrategy(config=config)
     info = strategy.get_strategy_info()
@@ -320,6 +377,7 @@ def run_simulation(
           f"갭<{screener_max_gap}%, "
           f"가격 {screener_min_price:,}~{screener_max_price:,}원")
     print(f"동시보유: {max_daily}종목")
+    print(f"비용: {cost_pct:.2f}%/건 (수수료+세금+슬리피지)")
     print(f"기간: {start_date} ~ {end_date or '전체'}")
     print('=' * 80)
 
@@ -460,7 +518,7 @@ def run_simulation(
     unlimited_daily = defaultdict(list)
     for t in all_trades:
         unlimited_daily[t['date']].append(t)
-    print_stats(trades_df, unlimited_daily, '무제한')
+    print_stats(trades_df, unlimited_daily, '무제한', cost_pct=cost_pct)
 
     # 동시보유 제한 결과
     if max_daily > 0:
@@ -473,28 +531,28 @@ def run_simulation(
         print('#' * 80)
         print(f'#  동시보유 {max_daily}종목 제한')
         print('#' * 80)
-        print_stats(limited_df, limited_daily, f'동시보유 {max_daily}종목')
+        print_stats(limited_df, limited_daily, f'동시보유 {max_daily}종목', cost_pct=cost_pct)
 
         # 비교 요약
         u_total = len(trades_df)
         u_wins = (trades_df['result'] == 'WIN').sum()
-        u_cap = calc_capital_returns(trades_df)
+        u_fixed = calc_fixed_capital_returns(trades_df, cost_pct=cost_pct)
         l_total = len(limited_df)
         l_wins = (limited_df['result'] == 'WIN').sum() if l_total > 0 else 0
-        l_cap = calc_capital_returns(limited_df) if l_total > 0 else {'total_return_pct': 0}
+        l_fixed = calc_fixed_capital_returns(limited_df, cost_pct=cost_pct) if l_total > 0 else {'total_return_pct': 0}
 
         print('\n' + '=' * 80)
-        print('비교 요약')
+        print(f'비교 요약 (비용 {cost_pct:.2f}%/건 차감, 고정자본 기준)')
         print('=' * 80)
         print(f"{'':>20} {'무제한':>15} {'최대 '+str(max_daily)+'종목':>15}")
         print('-' * 50)
         print(f"{'거래수':>20} {u_total:>14}건 {l_total:>14}건")
         print(f"{'승률':>20} {u_wins/u_total*100:>13.1f}% "
               f"{l_wins/l_total*100 if l_total else 0:>13.1f}%")
-        print(f"{'원금수익률':>20} {u_cap['total_return_pct']:>+13.2f}% "
-              f"{l_cap['total_return_pct']:>+13.2f}%")
-        print(f"{'평균 수익률':>20} {trades_df['pnl'].mean():>+13.2f}% "
-              f"{limited_df['pnl'].mean() if l_total else 0:>+13.2f}%")
+        print(f"{'고정자본수익률':>20} {u_fixed['total_return_pct']:>+13.2f}% "
+              f"{l_fixed['total_return_pct']:>+13.2f}%")
+        print(f"{'순평균수익률':>20} {trades_df['pnl'].mean()-cost_pct:>+13.2f}% "
+              f"{limited_df['pnl'].mean()-cost_pct if l_total else 0:>+13.2f}%")
 
     print('\nDone!')
     return trades_df
@@ -545,6 +603,8 @@ def main():
                         help='최소 거래대금 (원)')
     parser.add_argument('--screener-max-gap', type=float, default=3.0,
                         help='최대 갭 %%')
+    parser.add_argument('--cost', type=float, default=0.33,
+                        help='건당 왕복 비용 %% (수수료+세금+슬리피지, 기본 0.33%%)')
     parser.add_argument('--quiet', action='store_true')
 
     args = parser.parse_args()
@@ -573,6 +633,7 @@ def main():
         screener_min_amount=args.screener_min_amount,
         screener_max_gap=args.screener_max_gap,
         verbose=not args.quiet,
+        cost_pct=args.cost,
     )
 
 
