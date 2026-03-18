@@ -10,13 +10,12 @@ RoboTrader의 종목 상태 관리 시스템은 조건검색으로 선정된 종
 
 ```python
 class StockState(Enum):
-    SELECTED = "selected"           # 조건검색으로 선정됨
-    BUY_CANDIDATE = "buy_candidate" # 매수 후보
+    SELECTED = "selected"           # 조건검색으로 선정됨 (매수 판단 대상)
     BUY_PENDING = "buy_pending"     # 매수 주문 중
     POSITIONED = "positioned"       # 매수 완료 (포지션 보유)
     SELL_CANDIDATE = "sell_candidate" # 매도 후보
     SELL_PENDING = "sell_pending"   # 매도 주문 중
-    COMPLETED = "completed"         # 거래 완료
+    COMPLETED = "completed"         # 거래 완료 (재거래 가능)
     FAILED = "failed"              # 거래 실패
 ```
 
@@ -26,8 +25,6 @@ class StockState(Enum):
 조건검색 선정
     ↓
 SELECTED (선정됨)
-    ↓ move_to_buy_candidate()
-BUY_CANDIDATE (매수 후보)
     ↓ execute_buy_order()
 BUY_PENDING (매수 주문 중)
     ↓ 매수 체결 완료
@@ -42,7 +39,7 @@ COMPLETED (거래 완료)
 
 ### 예외 상황 처리
 
-- **매수 실패**: `BUY_PENDING` → `BUY_CANDIDATE` (재시도 가능)
+- **매수 실패**: `BUY_PENDING` → `SELECTED` (재시도 가능)
 - **매도 실패**: `SELL_PENDING` → `SELL_CANDIDATE` (재시도 가능)
 - **거래 실패**: 모든 상태에서 → `FAILED`
 - **강제 종료**: 모든 상태에서 → `COMPLETED`

@@ -82,7 +82,7 @@ grep "프리마켓 리포트" logs/trading_YYYYMMDD.log
 import psycopg2
 import pandas as pd
 
-conn = psycopg2.connect(host='localhost', port=5432, database='robotrader',
+conn = psycopg2.connect(host='localhost', port=5433, database='robotrader',
                         user='postgres', password='your_password')
 df = pd.read_sql_query('''
     SELECT * FROM minute_candles

@@ -127,6 +127,9 @@ logs/
 !logs/memory_data/
 *.log
 
+# 장중 메모리 덤프
+memory_minute_data_*.txt
+
 # 데이터 파일
 data/
 *.csv

@@ -12,7 +12,11 @@
 
 한국투자증권 KIS API 기반 자동매매 시스템
 
-**데이터 저장**: PostgreSQL (분봉: `minute_candles`, 일봉: `daily_candles`)
+**데이터 저장**: PostgreSQL (port 5433, DB: `robotrader`)
+- 캐시: `minute_candles`, `daily_candles` (utils/data_cache.py)
+- 거래: `candidate_stocks`, `real_trading_records`, `virtual_trading_records`, `trading_records` (db/database_manager.py)
+- 시장: `nxt_snapshots` (NXT 센티먼트)
+
 **종목 발굴**: 코드 기반 실시간 스크리너 (KOSPI + KOSDAQ 2472종목)
 
 ---
@@ -95,6 +99,20 @@ utils/
 db/
 └── database_manager.py         # PostgreSQL 데이터 관리
 ```
+
+---
+
+## 안전장치
+
+- **서킷브레이커**: 전일 -3% → 매수 중단, NXT ≤ -0.7 → 매수 중단 (상세: docs/pre_market_circuit_breaker.md)
+- **동적 TP/SL**: 약세장 시 5%/6% → 3%/4%로 자동 축소
+- **매수 쿨다운**: 동일 종목 25분 내 재매수 차단
+- **자금 관리**: 건당 가용잔고 20%, 총 투자 90% 상한 (core/fund_manager.py)
+- **포지션 제한**: 정상 5종목, 약세 3종목, 극약세 0종목
+- **장마감 청산**: 15:30 보유 전 종목 시장가 매도
+- **API Rate Limiting**: 60ms 간격, 서킷 브레이커 연속 실패 시 차단 (api/kis_auth.py)
+- **상태 머신**: asyncio.Lock 기반 종목 상태 전이 보호 (core/trading_stock_manager.py)
+- **중복 매수 방지**: is_buying 플래그 + 쿨다운 이중 차단
 
 ---
 

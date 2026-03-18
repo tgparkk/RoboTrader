@@ -180,7 +180,7 @@ print('Confidence:', data['signal_info']['confidence'])
 import psycopg2
 import pandas as pd
 
-conn = psycopg2.connect(host='localhost', port=5432, database='robotrader',
+conn = psycopg2.connect(host='localhost', port=5433, database='robotrader',
                         user='postgres', password='your_password')
 
 # 분봉 데이터 조회
@@ -336,7 +336,7 @@ grep -A100 "=== XXXXXX" signal_replay_log/signal_new2_replay_YYYYMMDD*.txt
 import psycopg2, pandas as pd, json
 
 # PostgreSQL에서 분봉 읽기
-conn = psycopg2.connect(host='localhost', port=5432, database='robotrader',
+conn = psycopg2.connect(host='localhost', port=5433, database='robotrader',
                         user='postgres', password='your_password')
 cache_data = pd.read_sql_query('''
     SELECT * FROM minute_candles
