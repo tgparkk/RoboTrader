@@ -361,6 +361,7 @@ def run_simulation(
     screener_max_price=500000,
     verbose=True,
     cost_pct=0.33,
+    max_holding_minutes=0,
 ):
     strategy = PricePositionStrategy(config=config)
     info = strategy.get_strategy_info()
@@ -378,6 +379,8 @@ def run_simulation(
           f"가격 {screener_min_price:,}~{screener_max_price:,}원")
     print(f"동시보유: {max_daily}종목")
     print(f"비용: {cost_pct:.2f}%/건 (수수료+세금+슬리피지)")
+    hold_str = f"{max_holding_minutes}분" if max_holding_minutes > 0 else "제한없음"
+    print(f"최대보유: {hold_str}")
     print(f"기간: {start_date} ~ {end_date or '전체'}")
     print('=' * 80)
 
@@ -482,7 +485,7 @@ def run_simulation(
                     if not adv_ok:
                         continue
 
-                    result = strategy.simulate_trade(df, candle_idx)
+                    result = strategy.simulate_trade(df, candle_idx, max_holding_minutes)
                     if result:
                         pct_from_open = (current_price / day_open - 1) * 100
                         all_trades.append({
@@ -605,6 +608,8 @@ def main():
                         help='최대 갭 %%')
     parser.add_argument('--cost', type=float, default=0.33,
                         help='건당 왕복 비용 %% (수수료+세금+슬리피지, 기본 0.33%%)')
+    parser.add_argument('--max-hold', type=int, default=0,
+                        help='최대 보유 시간(분). 0이면 제한없음 (기본 0)')
     parser.add_argument('--quiet', action='store_true')
 
     args = parser.parse_args()
@@ -634,6 +639,7 @@ def main():
         screener_max_gap=args.screener_max_gap,
         verbose=not args.quiet,
         cost_pct=args.cost,
+        max_holding_minutes=args.max_hold,
     )
 
 

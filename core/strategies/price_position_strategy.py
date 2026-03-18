@@ -248,6 +248,7 @@ class PricePositionStrategy:
         self,
         df: pd.DataFrame,
         entry_idx: int,
+        max_holding_minutes: int = 0,
     ) -> Optional[Dict[str, Any]]:
         """
         진입 후 거래 시뮬레이션
@@ -255,6 +256,7 @@ class PricePositionStrategy:
         Args:
             df: 분봉 데이터프레임 (columns: open, high, low, close, time, ...)
             entry_idx: 진입 캔들 인덱스
+            max_holding_minutes: 최대 보유 시간(분). 0이면 제한 없음.
 
         Returns:
             거래 결과 딕셔너리 또는 None
@@ -271,13 +273,33 @@ class PricePositionStrategy:
 
         # 이후 캔들 검사
         max_profit_pct = 0.0
+        min_profit_pct = 0.0
         for i in range(entry_idx + 1, len(df)):
             row = df.iloc[i]
+            holding_candles = i - entry_idx
 
-            # 장중 최고 수익률 추적
+            # 최대 보유시간 초과 시 강제 청산
+            if max_holding_minutes > 0 and holding_candles > max_holding_minutes:
+                time_pnl = (row['close'] / entry_price - 1) * 100
+                return {
+                    'result': 'WIN' if time_pnl > 0 else 'LOSS',
+                    'pnl': time_pnl,
+                    'exit_reason': '시간청산',
+                    'entry_time': entry_time,
+                    'exit_time': row['time'],
+                    'entry_price': entry_price,
+                    'holding_candles': holding_candles,
+                    'max_profit_pct': round(max_profit_pct, 2),
+                    'min_profit_pct': round(min_profit_pct, 2),
+                }
+
+            # 장중 최고/최저 수익률 추적
             high_pnl = (row['high'] / entry_price - 1) * 100
+            low_pnl = (row['low'] / entry_price - 1) * 100
             if high_pnl > max_profit_pct:
                 max_profit_pct = high_pnl
+            if low_pnl < min_profit_pct:
+                min_profit_pct = low_pnl
 
             should_exit, reason, pnl = self.check_exit_conditions(
                 entry_price=entry_price,
@@ -294,8 +316,9 @@ class PricePositionStrategy:
                     'entry_time': entry_time,
                     'exit_time': row['time'],
                     'entry_price': entry_price,
-                    'holding_candles': i - entry_idx,
+                    'holding_candles': holding_candles,
                     'max_profit_pct': round(max_profit_pct, 2),
+                    'min_profit_pct': round(min_profit_pct, 2),
                 }
 
         # 장 마감 시 청산
@@ -311,6 +334,7 @@ class PricePositionStrategy:
             'entry_price': entry_price,
             'holding_candles': len(df) - 1 - entry_idx,
             'max_profit_pct': round(max_profit_pct, 2),
+            'min_profit_pct': round(min_profit_pct, 2),
         }
 
     def get_strategy_info(self) -> Dict[str, Any]:
