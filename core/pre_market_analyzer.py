@@ -74,7 +74,7 @@ class PreMarketSnapshot:
 class PreMarketReport:
     """최종 프리마켓 인텔리전스 리포트"""
     report_time: datetime
-    market_sentiment: str           # 'bullish', 'bearish', 'extreme_bearish', 'neutral', 'circuit_breaker'
+    market_sentiment: str           # 'bullish', 'bearish', 'very_bearish', 'extreme_bearish', 'neutral', 'circuit_breaker'
     sentiment_score: float          # -1.0 ~ +1.0
     gap_direction: str              # 'gap_up', 'gap_down', 'flat'
     expected_gap_pct: float         # 예상 갭 %
@@ -241,6 +241,14 @@ class PreMarketAnalyzer:
                 logger.warning(
                     f"[프리마켓] 극약세 감지 (sentiment={sentiment_score:+.2f}) -> 매수 완전 중단"
                 )
+            elif sentiment == 'very_bearish':
+                # NXT 강약세 → 손절축소, 매수는 허용
+                rec_max_pos = pm.VERY_BEARISH_MAX_POSITIONS
+                rec_stop_loss = pm.VERY_BEARISH_STOP_LOSS_RATIO
+                rec_take_profit = pm.VERY_BEARISH_TAKE_PROFIT_RATIO
+                logger.warning(
+                    f"[프리마켓] 강약세 감지 (sentiment={sentiment_score:+.2f}) -> 손절축소 {rec_stop_loss:.0%}/{rec_take_profit:.0%}, 매수 허용(최대 {rec_max_pos}종목)"
+                )
             elif sentiment == 'bearish':
                 # 서킷브레이커 미발동이지만 NXT 약세 → 복합 조건 체크
                 if self._check_circuit_breaker_with_gap(gap_pct):
@@ -268,7 +276,9 @@ class PreMarketAnalyzer:
                 log_lines.append(f"서킷브레이커: {self._circuit_breaker_reason}")
             if sentiment == 'extreme_bearish':
                 log_lines.append(f"극약세: NXT sentiment {sentiment_score:+.2f} <= {pm.EXTREME_BEARISH_THRESHOLD} -> 매수 중단")
-            if self._prev_day_decline_active and sentiment not in ('circuit_breaker', 'extreme_bearish', 'bearish'):
+            if sentiment == 'very_bearish':
+                log_lines.append(f"강약세: NXT sentiment {sentiment_score:+.2f} <= {pm.VERY_BEARISH_THRESHOLD} -> 손절축소, 매수 허용")
+            if self._prev_day_decline_active and sentiment not in ('circuit_breaker', 'extreme_bearish', 'very_bearish', 'bearish'):
                 log_lines.append(f"전일 하락 -> 손절 {rec_stop_loss:.0%}/익절 {rec_take_profit:.0%} 축소")
             log_lines.extend([
                 f"시장 심리: {sentiment.upper()} ({sentiment_score:+.2f})",
@@ -826,6 +836,8 @@ class PreMarketAnalyzer:
 
         if score <= pm.EXTREME_BEARISH_THRESHOLD:
             return 'extreme_bearish'
+        elif score <= pm.VERY_BEARISH_THRESHOLD:
+            return 'very_bearish'
         elif score <= pm.BEARISH_THRESHOLD:
             return 'bearish'
         elif score >= pm.BULLISH_THRESHOLD:

@@ -99,7 +99,8 @@ class StrategySettings:
 
         # 심리 판단 임계값 (-1.0 ~ +1.0)
         BEARISH_THRESHOLD = -0.3                # 이 이하면 약세
-        EXTREME_BEARISH_THRESHOLD = -0.7        # 이 이하면 극약세 (매수 중단)
+        VERY_BEARISH_THRESHOLD = -0.7           # 이 이하면 강약세 (손절축소, 매수 허용)
+        EXTREME_BEARISH_THRESHOLD = -0.9        # 이 이하면 극약세 (매수 중단)
         BULLISH_THRESHOLD = 0.3                 # 이 이상이면 강세
 
         # 약세장 파라미터 조정
@@ -107,7 +108,12 @@ class StrategySettings:
         BEARISH_STOP_LOSS_RATIO = 0.03          # 4% → 3%
         BEARISH_TAKE_PROFIT_RATIO = 0.04        # 5% → 4%
 
-        # 극약세장 (NXT 급락 시 매수 완전 중단)
+        # 강약세장 (sentiment -0.7~-0.9: 손절축소, 매수 허용)
+        VERY_BEARISH_MAX_POSITIONS = 3          # 포지션 축소
+        VERY_BEARISH_STOP_LOSS_RATIO = 0.03     # 손절 3%
+        VERY_BEARISH_TAKE_PROFIT_RATIO = 0.04   # 익절 4%
+
+        # 극약세장 (sentiment <= -0.9: 매수 완전 중단)
         EXTREME_BEARISH_MAX_POSITIONS = 0       # 매수 중단
 
         # 서킷브레이커: 전일 지수 기반 매수 완전 중단
