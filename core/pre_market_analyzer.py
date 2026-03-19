@@ -172,6 +172,9 @@ class PreMarketAnalyzer:
         try:
             report_time = now_kst()
 
+            from config.strategy_settings import StrategySettings
+            pm = StrategySettings.PreMarket
+
             # 서킷브레이커 체크 (전일 지수 기반)
             self._check_circuit_breaker()
 

@@ -570,10 +570,9 @@ class OrderManager:
             # 🆕 취소 성공한 경우도 TradingStockManager에 알림 (상태 동기화)
             if cancel_success and self.trading_manager and hasattr(self.trading_manager, 'handle_order_timeout'):
                 try:
-                    order = self.pending_orders.get(order_id)
-                    if order:
-                        await self.trading_manager.handle_order_timeout(order)
-                        self.logger.info(f"✅ TradingStockManager 취소 처리 완료: {order_id}")
+                    # order는 라인 543에서 cancel 전에 이미 참조 저장됨
+                    await self.trading_manager.handle_order_timeout(order)
+                    self.logger.info(f"✅ TradingStockManager 취소 처리 완료: {order_id}")
                 except Exception as notify_error:
                     self.logger.error(f"❌ TradingStockManager 취소 처리 실패: {notify_error}")
             
@@ -632,10 +631,9 @@ class OrderManager:
             # 🆕 3분봉 타임아웃 취소 성공한 경우도 TradingStockManager에 알림
             if cancel_success and self.trading_manager and hasattr(self.trading_manager, 'handle_order_timeout'):
                 try:
-                    order = self.pending_orders.get(order_id)  
-                    if order:
-                        await self.trading_manager.handle_order_timeout(order)
-                        self.logger.info(f"✅ TradingStockManager 3분봉 취소 처리 완료: {order_id}")
+                    # order는 라인 598에서 cancel 전에 이미 참조 저장됨
+                    await self.trading_manager.handle_order_timeout(order)
+                    self.logger.info(f"✅ TradingStockManager 3분봉 취소 처리 완료: {order_id}")
                 except Exception as notify_error:
                     self.logger.error(f"❌ TradingStockManager 3분봉 취소 처리 실패: {notify_error}")
             
