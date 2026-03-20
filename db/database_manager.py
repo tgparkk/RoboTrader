@@ -252,6 +252,9 @@ class DatabaseManager:
                         reason VARCHAR,
                         profit_loss DOUBLE PRECISION DEFAULT 0,
                         profit_rate DOUBLE PRECISION DEFAULT 0,
+                        fee_amount DOUBLE PRECISION DEFAULT 0,
+                        net_profit DOUBLE PRECISION DEFAULT 0,
+                        net_profit_rate DOUBLE PRECISION DEFAULT 0,
                         buy_record_id INTEGER,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
@@ -722,8 +725,9 @@ class DatabaseManager:
 
     def save_real_sell(self, stock_code: str, stock_name: str, price: float,
                        quantity: int, strategy: str = '', reason: str = '',
-                       buy_record_id: Optional[int] = None, timestamp: datetime = None) -> bool:
-        """실거래 매도 기록 저장 (손익 계산 포함)"""
+                       buy_record_id: Optional[int] = None, timestamp: datetime = None,
+                       tax_rate: float = 0.0018, commission_rate: float = 0.00014) -> bool:
+        """실거래 매도 기록 저장 (손익 + 수수료/세금 계산 포함)"""
         try:
             if timestamp is None:
                 timestamp = now_kst()
@@ -744,25 +748,39 @@ class DatabaseManager:
 
                 profit_loss = 0.0
                 profit_rate = 0.0
+                fee_amount = 0.0
+                net_profit = 0.0
+                net_profit_rate = 0.0
                 if buy_price and buy_price > 0:
+                    buy_amount = buy_price * quantity
+                    sell_amount = price * quantity
                     profit_loss = (price - buy_price) * quantity
                     profit_rate = (price - buy_price) / buy_price * 100.0
+                    # 수수료: 거래세(매도금액) + 증권사 수수료(매수+매도금액)
+                    tax = sell_amount * tax_rate
+                    commission = (buy_amount + sell_amount) * commission_rate
+                    fee_amount = round(tax + commission)
+                    net_profit = profit_loss - fee_amount
+                    net_profit_rate = net_profit / buy_amount * 100.0
 
                 cur.execute('''
                     INSERT INTO real_trading_records
                     (stock_code, stock_name, action, quantity, price, timestamp, strategy, reason,
-                     profit_loss, profit_rate, buy_record_id, created_at)
-                    VALUES (%s, %s, 'SELL', %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     profit_loss, profit_rate, fee_amount, net_profit, net_profit_rate,
+                     buy_record_id, created_at)
+                    VALUES (%s, %s, 'SELL', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ''', (
                     stock_code, stock_name, quantity, price,
                     timestamp.strftime('%Y-%m-%d %H:%M:%S'), strategy, reason,
-                    profit_loss, profit_rate, buy_record_id,
+                    profit_loss, profit_rate, fee_amount, net_profit, net_profit_rate,
+                    buy_record_id,
                     now_kst().strftime('%Y-%m-%d %H:%M:%S')
                 ))
                 conn.commit()
 
                 self.logger.info(
-                    f"✅ 실거래 매도 기록 저장: {stock_code} {quantity}주 @{price:,.0f} 손익 {profit_loss:+,.0f}원 ({profit_rate:+.2f}%)"
+                    f"✅ 실거래 매도 기록 저장: {stock_code} {quantity}주 @{price:,.0f} "
+                    f"손익 {profit_loss:+,.0f}원 ({profit_rate:+.2f}%) → 수수료 {fee_amount:,.0f}원 → 실손익 {net_profit:+,.0f}원 ({net_profit_rate:+.2f}%)"
                 )
                 return True
             except Exception:

@@ -34,6 +34,10 @@
     "time_filter_hours": 2,
     "min_loss_threshold": -0.5
   },
+  "fee": {
+    "tax_rate": 0.0018,
+    "commission_rate": 0.00014
+  },
   "logging": {
     "level": "INFO",
     "file_retention_days": 30,

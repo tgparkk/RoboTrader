@@ -295,6 +295,13 @@ class StrategyConfig:
 
 
 @dataclass
+class FeeConfig:
+    """수수료/세금 설정"""
+    tax_rate: float = 0.0018       # 거래세 0.18% (매도 시)
+    commission_rate: float = 0.00014  # 수수료 0.014% (매수+매도 각각)
+
+
+@dataclass
 class LoggingConfig:
     """로깅 설정"""
     level: str = "INFO"
@@ -308,6 +315,7 @@ class TradingConfig:
     order_management: OrderManagementConfig = field(default_factory=OrderManagementConfig)
     risk_management: RiskManagementConfig = field(default_factory=RiskManagementConfig)
     strategy: StrategyConfig = field(default_factory=StrategyConfig)
+    fee: FeeConfig = field(default_factory=FeeConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     
     @classmethod
@@ -338,6 +346,10 @@ class TradingConfig:
             strategy=StrategyConfig(
                 name=json_data.get('strategy', {}).get('name', 'simple_momentum'),
                 parameters=json_data.get('strategy', {}).get('parameters', {})
+            ),
+            fee=FeeConfig(
+                tax_rate=json_data.get('fee', {}).get('tax_rate', 0.0018),
+                commission_rate=json_data.get('fee', {}).get('commission_rate', 0.00014)
             ),
             logging=LoggingConfig(
                 level=json_data.get('logging', {}).get('level', 'INFO'),
