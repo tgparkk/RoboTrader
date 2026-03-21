@@ -163,8 +163,8 @@ class TradingDecisionEngine:
                     'entry_start_hour': StrategySettings.PricePosition.ENTRY_START_HOUR,
                     'entry_end_hour': StrategySettings.PricePosition.ENTRY_END_HOUR,
                     'allowed_weekdays': StrategySettings.PricePosition.ALLOWED_WEEKDAYS,
-                    'stop_loss_pct': -self.config.get('risk_management', {}).get('stop_loss_ratio', 0.025) * 100,
-                    'take_profit_pct': self.config.get('risk_management', {}).get('take_profit_ratio', 0.035) * 100,
+                    'stop_loss_pct': -self.config.get('risk_management', {}).get('stop_loss_ratio', 0.05) * 100,
+                    'take_profit_pct': self.config.get('risk_management', {}).get('take_profit_ratio', 0.06) * 100,
                 }
                 self.price_position_strategy = PricePositionStrategy(config=pp_config, logger=self.logger)
                 self.logger.info(f"   진입조건: 시가+{pp_config['min_pct_from_open']}%~{pp_config['max_pct_from_open']}%, "
