@@ -174,7 +174,7 @@ class DayTradingBot:
                 except ImportError:
                     # psutil이 없는 경우 간단한 체크
                     self.logger.warning("psutil 모듈이 없어 정확한 중복 실행 체크를 할 수 없습니다")
-                except:
+                except Exception:
                     # 기존 PID가 존재하지 않으면 PID 파일 삭제
                     self.pid_file.unlink(missing_ok=True)
             
@@ -407,8 +407,16 @@ class DayTradingBot:
                         await self._analyze_sell_decision(trading_stock)
                     else:
                         self.logger.warning(f"⚠️ {trading_stock.stock_code} 포지션 정보 없음 (매도 판단 건너뜀)")
-            else:
-                self.logger.debug("📊 매도 판단 대상 종목 없음 (POSITIONED 상태 종목 없음)")
+
+            # SELL_CANDIDATE 매도 재시도 (타임아웃 복구 등으로 SELL_CANDIDATE에 빠진 종목)
+            sell_candidate_stocks = self.trading_manager.get_stocks_by_state(StockState.SELL_CANDIDATE)
+            for trading_stock in sell_candidate_stocks:
+                if trading_stock.position and trading_stock.position.quantity > 0:
+                    self.logger.info(f"🔄 {trading_stock.stock_code} SELL_CANDIDATE 매도 재시도")
+                    await self._analyze_sell_decision(trading_stock)
+
+            if not positioned_stocks and not sell_candidate_stocks:
+                self.logger.debug("📊 매도 판단 대상 종목 없음 (POSITIONED/SELL_CANDIDATE 상태 종목 없음)")
 
         except Exception as e:
             self.logger.error(f"❌ 매매 판단 시스템 오류: {e}")
@@ -602,8 +610,11 @@ class DayTradingBot:
                 if trading_stock.position:
                     self.logger.debug(f"🔍 포지션 정보: {trading_stock.position.quantity}주 @{trading_stock.position.avg_price:,.0f}원")
                 
-                # 매도 후보로 변경
-                success = await self.trading_manager.move_to_sell_candidate(stock_code, sell_reason)
+                # 매도 후보로 변경 (이미 SELL_CANDIDATE이면 건너뜀)
+                if trading_stock.state == StockState.SELL_CANDIDATE:
+                    success = True
+                else:
+                    success = await self.trading_manager.move_to_sell_candidate(stock_code, sell_reason)
                 if success:
                     # [실제 매도 주문 실행 - 활성화]
                     try:
@@ -965,15 +976,17 @@ class DayTradingBot:
             eod_minute = market_hours['eod_liquidation_minute']
 
             positioned_stocks = self.trading_manager.get_stocks_by_state(StockState.POSITIONED)
+            sell_candidate_stocks = self.trading_manager.get_stocks_by_state(StockState.SELL_CANDIDATE)
+            all_liquidation_targets = positioned_stocks + sell_candidate_stocks
 
-            if not positioned_stocks:
+            if not all_liquidation_targets:
                 self.logger.info(f"📦 {eod_hour}:{eod_minute:02d} 시장가 매도: 보유 포지션 없음")
                 return
 
-            self.logger.info(f"🚨 {eod_hour}:{eod_minute:02d} 시장가 일괄매도 시작: {len(positioned_stocks)}종목")
+            self.logger.info(f"🚨 {eod_hour}:{eod_minute:02d} 시장가 일괄매도 시작: {len(all_liquidation_targets)}종목 (POSITIONED={len(positioned_stocks)}, SELL_CANDIDATE={len(sell_candidate_stocks)})")
 
             # 모든 보유 종목 시장가 매도
-            for trading_stock in positioned_stocks:
+            for trading_stock in all_liquidation_targets:
                 try:
                     if not trading_stock.position or trading_stock.position.quantity <= 0:
                         continue
@@ -986,7 +999,11 @@ class DayTradingBot:
                     current_price = 0.0  # 시장가는 0원으로 주문
 
                     # 상태를 매도 대기로 변경 후 시장가 매도 주문
-                    moved = await self.trading_manager.move_to_sell_candidate(stock_code, f"{eod_hour}:{eod_minute:02d} 시장가 일괄매도")
+                    # SELL_CANDIDATE는 이미 매도 후보 상태이므로 move 불필요
+                    if trading_stock.state == StockState.SELL_CANDIDATE:
+                        moved = True
+                    else:
+                        moved = await self.trading_manager.move_to_sell_candidate(stock_code, f"{eod_hour}:{eod_minute:02d} 시장가 일괄매도")
                     if moved:
                         await self.trading_manager.execute_sell_order(
                             stock_code, quantity, current_price, f"{eod_hour}:{eod_minute:02d} 시장가 일괄매도", market=True
@@ -1387,13 +1404,14 @@ class DayTradingBot:
                             # 추가된 종목을 즉시 POSITIONED 상태로 설정
                             ts = self.trading_manager.get_trading_stock(code)
                             if ts:
-                                ts.set_position(quantity, avg_price)
-                                ts.clear_current_order()
-                                ts.is_buying = False
-                                ts.order_processed = True
+                                async with self.trading_manager._lock:
+                                    ts.set_position(quantity, avg_price)
+                                    ts.clear_current_order()
+                                    ts.is_buying = False
+                                    ts.order_processed = True
 
-                                self.trading_manager._change_stock_state(code, StockState.POSITIONED,
-                                    f"미관리종목 복구: {quantity}주 @{avg_price:,.0f}원")
+                                    self.trading_manager._change_stock_state(code, StockState.POSITIONED,
+                                        f"미관리종목 복구: {quantity}주 @{avg_price:,.0f}원")
 
                                 self.logger.info(f"✅ {code} 미관리 종목 복구 완료")
 
@@ -1457,10 +1475,6 @@ class DayTradingBot:
                 # 포지션 복원
                 quantity = balance_stock['quantity']
                 avg_price = balance_stock['avg_price']
-                ts.set_position(quantity, avg_price)
-                ts.clear_current_order()
-                ts.is_buying = False
-                ts.order_processed = True
 
                 # 매수가 기준 고정 비율로 목표가격 계산 (로깅용 - config에서 읽기)
                 buy_price = avg_price
@@ -1469,9 +1483,18 @@ class DayTradingBot:
                 target_price = buy_price * (1 + take_profit_ratio)
                 stop_loss = buy_price * (1 - stop_loss_ratio)
 
-                # 상태 변경
-                self.trading_manager._change_stock_state(code, StockState.POSITIONED,
-                    f"잔고복구: {quantity}주 @{buy_price:,.0f}원, 목표: +{take_profit_ratio*100:.1f}%/-{stop_loss_ratio*100:.1f}%")
+                # 상태 변경 (락 획득하여 원자적 처리)
+                async with self.trading_manager._lock:
+                    # TOCTOU 방지: 락 내부에서 상태 재확인 (SELL_CANDIDATE도 이미 추적 중이므로 건너뜀)
+                    if ts.state in (StockState.BUY_PENDING, StockState.SELL_PENDING, StockState.POSITIONED, StockState.SELL_CANDIDATE, StockState.COMPLETED):
+                        self.logger.debug(f"⏳ {code}: 복구 시점에 상태 변경됨 ({ts.state.value}) - 건너뜀")
+                        continue
+                    ts.set_position(quantity, avg_price)
+                    ts.clear_current_order()
+                    ts.is_buying = False
+                    ts.order_processed = True
+                    self.trading_manager._change_stock_state(code, StockState.POSITIONED,
+                        f"잔고복구: {quantity}주 @{buy_price:,.0f}원, 목표: +{take_profit_ratio*100:.1f}%/-{stop_loss_ratio*100:.1f}%")
 
                 self.logger.info(f"✅ {code} 복구완료: 매수 {buy_price:,.0f} → "
                                f"목표 {target_price:,.0f} / 손절 {stop_loss:,.0f}")

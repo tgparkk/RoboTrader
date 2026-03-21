@@ -267,13 +267,13 @@ class DataCollectionConfig:
 @dataclass
 class OrderManagementConfig:
     """주문 관리 설정"""
-    buy_timeout_seconds: int = 180
+    buy_timeout_seconds: int = 300
     sell_timeout_seconds: int = 180
     max_adjustments: int = 3
     adjustment_threshold_percent: float = 0.5
     market_order_threshold_percent: float = 2.0
     buy_budget_ratio: float = 0.20
-    buy_cooldown_minutes: int = 20
+    buy_cooldown_minutes: int = 25
 
 
 @dataclass
@@ -281,8 +281,8 @@ class RiskManagementConfig:
     """리스크 관리 설정"""
     max_position_count: int = 20
     max_position_ratio: float = 0.3
-    stop_loss_ratio: float = 0.025
-    take_profit_ratio: float = 0.035
+    stop_loss_ratio: float = 0.05
+    take_profit_ratio: float = 0.06
     max_daily_loss: float = 0.1
     use_dynamic_profit_loss: bool = False  # 동적 손익비 활성화 플래그
 
@@ -327,19 +327,19 @@ class TradingConfig:
                 candidate_stocks=json_data.get('data_collection', {}).get('candidate_stocks', [])
             ),
             order_management=OrderManagementConfig(
-                buy_timeout_seconds=json_data.get('order_management', {}).get('buy_timeout_seconds', 180),
+                buy_timeout_seconds=json_data.get('order_management', {}).get('buy_timeout_seconds', 300),
                 sell_timeout_seconds=json_data.get('order_management', {}).get('sell_timeout_seconds', 180),
                 max_adjustments=json_data.get('order_management', {}).get('max_adjustments', 3),
                 adjustment_threshold_percent=json_data.get('order_management', {}).get('adjustment_threshold_percent', 0.5),
                 market_order_threshold_percent=json_data.get('order_management', {}).get('market_order_threshold_percent', 2.0),
                 buy_budget_ratio=json_data.get('order_management', {}).get('buy_budget_ratio', 0.20),
-                buy_cooldown_minutes=json_data.get('order_management', {}).get('buy_cooldown_minutes', 20)
+                buy_cooldown_minutes=json_data.get('order_management', {}).get('buy_cooldown_minutes', 25)
             ),
             risk_management=RiskManagementConfig(
                 max_position_count=json_data.get('risk_management', {}).get('max_position_count', 20),
                 max_position_ratio=json_data.get('risk_management', {}).get('max_position_ratio', 0.3),
-                stop_loss_ratio=json_data.get('risk_management', {}).get('stop_loss_ratio', 0.03),
-                take_profit_ratio=json_data.get('risk_management', {}).get('take_profit_ratio', 0.05),
+                stop_loss_ratio=json_data.get('risk_management', {}).get('stop_loss_ratio', 0.05),
+                take_profit_ratio=json_data.get('risk_management', {}).get('take_profit_ratio', 0.06),
                 max_daily_loss=json_data.get('risk_management', {}).get('max_daily_loss', 0.1),
                 use_dynamic_profit_loss=json_data.get('risk_management', {}).get('use_dynamic_profit_loss', False)
             ),

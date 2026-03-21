@@ -402,6 +402,10 @@ class TradingStockManager:
                     order.order_type == OrderType.BUY):
 
                     if order.status == OrderStatus.FILLED:
+                        # on_order_filled 콜백에서 이미 처리된 경우 중복 방지
+                        if trading_stock.order_processed:
+                            self.logger.debug(f"🔄 {trading_stock.stock_code} 매수 완료 이미 처리됨 (order_processed=True)")
+                            break
                         # 매수 완료 - 포지션 상태로 변경
                         async with self._lock:
                             trading_stock.set_position(order.quantity, order.price)
@@ -917,25 +921,34 @@ class TradingStockManager:
                 
                 trading_stock = self.trading_stocks[stock_code]
                 
-                # BUY_PENDING 상태인 경우에만 처리
-                if trading_stock.state != StockState.BUY_PENDING:
+                # BUY_PENDING 상태 처리
+                if trading_stock.state == StockState.BUY_PENDING:
+                    trading_stock.is_buying = False
+                    trading_stock.current_order_id = None
+                    trading_stock.order_processed = False
+
+                    if self.enable_re_trading:
+                        self._change_stock_state(stock_code, StockState.COMPLETED,
+                                              f"주문 타임아웃 복구 (재거래 가능)")
+                        self.logger.info(f"🔄 {stock_code} 타임아웃 복구 완료: BUY_PENDING → COMPLETED (재거래 가능)")
+                    else:
+                        self._change_stock_state(stock_code, StockState.SELECTED,
+                                              f"주문 타임아웃 복구")
+                        self.logger.info(f"🔄 {stock_code} 타임아웃 복구 완료: BUY_PENDING → SELECTED (매수 재시도 가능)")
+
+                # SELL_PENDING 상태 처리 — 매도 후보로 되돌려 재시도 가능하게
+                elif trading_stock.state == StockState.SELL_PENDING:
+                    trading_stock.is_selling = False
+                    trading_stock.current_order_id = None
+                    trading_stock.order_processed = False
+
+                    self._change_stock_state(stock_code, StockState.SELL_CANDIDATE,
+                                          f"매도 주문 타임아웃 복구")
+                    self.logger.info(f"🔄 {stock_code} 타임아웃 복구 완료: SELL_PENDING → SELL_CANDIDATE (매도 재시도 가능)")
+
+                else:
                     self.logger.warning(f"⚠️ {stock_code} 예상치 못한 상태에서 타임아웃 처리: {trading_stock.state.value}")
                     return
-                
-                # 매수 진행 플래그 해제
-                trading_stock.is_buying = False
-                trading_stock.current_order_id = None
-                trading_stock.order_processed = False
-                
-                # 재거래가 활성화된 경우 COMPLETED로, 비활성화된 경우 SELECTED로 복구
-                if self.enable_re_trading:
-                    self._change_stock_state(stock_code, StockState.COMPLETED, 
-                                          f"주문 타임아웃 복구 (재거래 가능)")
-                    self.logger.info(f"🔄 {stock_code} 타임아웃 복구 완료: BUY_PENDING → COMPLETED (재거래 가능)")
-                else:
-                    self._change_stock_state(stock_code, StockState.SELECTED, 
-                                          f"주문 타임아웃 복구")
-                    self.logger.info(f"🔄 {stock_code} 타임아웃 복구 완료: BUY_PENDING → SELECTED (매수 재시도 가능)")
                 
         except Exception as e:
             self.logger.error(f"❌ {order.stock_code if hasattr(order, 'stock_code') else 'Unknown'} 타임아웃 처리 오류: {e}")

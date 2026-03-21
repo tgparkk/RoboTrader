@@ -4,6 +4,7 @@ KIS API 인증/토큰 관리 모듈 (공식 문서 기반)
 import os
 import json
 import time
+import threading
 import yaml
 import requests
 from datetime import datetime
@@ -453,21 +454,24 @@ def _url_fetch(api_url: str, ptr_id: str, tr_cont: str, params: Dict,
     return None
 
 
+_api_rate_lock = threading.Lock()
+
 def _wait_for_api_limit():
-    """API 호출 속도 제한을 위한 대기"""
+    """API 호출 속도 제한을 위한 대기 (스레드 안전)"""
     global _last_api_call_time
 
-    current_time = now_kst().timestamp()
+    with _api_rate_lock:
+        current_time = now_kst().timestamp()
 
-    if _last_api_call_time is not None:
-        elapsed = current_time - _last_api_call_time
-        if elapsed < _min_api_interval:
-            wait_time = _min_api_interval - elapsed
-            if _DEBUG:
-                logger.debug(f"API 속도 제한: {wait_time:.3f}초 대기 (이전 호출로부터 {elapsed:.3f}초 경과)")
-            time.sleep(wait_time)
+        if _last_api_call_time is not None:
+            elapsed = current_time - _last_api_call_time
+            if elapsed < _min_api_interval:
+                wait_time = _min_api_interval - elapsed
+                if _DEBUG:
+                    logger.debug(f"API 속도 제한: {wait_time:.3f}초 대기 (이전 호출로부터 {elapsed:.3f}초 경과)")
+                time.sleep(wait_time)
 
-    _last_api_call_time = now_kst().timestamp()
+        _last_api_call_time = now_kst().timestamp()
 
 
 def _is_rate_limit_error(response_text: str) -> bool:
