@@ -48,10 +48,19 @@
 ### 조건1: 전일 급락
 
 ```
-전일 KOSPI 또는 KOSDAQ 등락률 <= -2.0%  -->  매수 완전 중단
+전일 KOSPI 또는 KOSDAQ 등락률 <= -3.0%  -->  매수 완전 중단
 ```
 
-- 설정: `CIRCUIT_BREAKER_PREV_DAY_PCT = -2.0`
+- 설정: `CIRCUIT_BREAKER_PREV_DAY_PCT = -3.0` (4년 일봉 시뮬: -3% 이하만 마이너스)
+- 코드: `_check_circuit_breaker()`
+
+### 조건1b: 전일 소폭 하락 → 손절 축소
+
+```
+전일 KOSPI 또는 KOSDAQ 등락률 <= -1.0%  -->  매수 유지, 손절 3%/익절 4%로 축소
+```
+
+- 설정: `PREV_DAY_DECLINE_THRESHOLD = -1.0`, `PREV_DAY_DECLINE_STOP_LOSS_RATIO = 0.03`
 - 코드: `_check_circuit_breaker()`
 
 ### 조건2: 전일 하락 + NXT 갭다운 복합
@@ -67,10 +76,10 @@
 ### 해제 조건: 강한 반등
 
 ```
-서킷브레이커 발동 상태에서 NXT 갭 >= +3.0%  -->  해제 (절반 투입)
+서킷브레이커 발동 상태에서 NXT 갭 >= +3.0%  -->  해제 (정상 복귀)
 ```
 
-- 해제 시: 최대 포지션 2종목, bearish 모드(손절 3% / 익절 4%)
+- 해제 시: 최대 포지션 5종목, neutral 모드(손절 5% / 익절 6%) — 정상 운영으로 전면 복귀
 - 설정: `CIRCUIT_BREAKER_RELEASE_GAP_PCT = 3.0`
 
 ---
@@ -95,7 +104,8 @@
 
 | 점수 범위 | 분류 | 동작 |
 |-----------|------|------|
-| <= -0.7 | `extreme_bearish` | 매수 완전 중단 (0종목) |
+| <= -0.9 | `extreme_bearish` | 매수 완전 중단 (0종목) |
+| <= -0.7 | `very_bearish` | 최대 3종목, 손절 3% / 익절 4% (매수 허용) |
 | <= -0.3 | `bearish` | 최대 3종목, 손절 3% / 익절 4% |
 | >= +0.3 | `bullish` | 정상 5종목, 손절 5% / 익절 6% |
 | 그 외 | `neutral` | 정상 5종목, 손절 5% / 익절 6% |
@@ -111,23 +121,25 @@
 ```
 1. 서킷브레이커 발동 상태?
    |-- YES --> NXT 갭 >= +3%?
-   |           |-- YES --> 해제 (절반 투입, bearish 모드)
+   |           |-- YES --> 해제 (정상 복귀: 5종목, neutral 모드)
    |           |-- NO  --> 매수 완전 중단 (circuit_breaker)
    |
-   |-- NO  --> 심리 = extreme_bearish?
+   |-- NO  --> 심리 = extreme_bearish (NXT <= -0.9)?
                |-- YES --> 매수 완전 중단 (조건3: NXT 자체 극약세)
-               |-- NO  --> 심리 = bearish?
-                           |-- YES --> 복합 조건2 체크
-                           |           |-- 발동 --> 매수 중단
-                           |           |-- 미발동 --> 3종목, bearish 모드
-                           |-- NO  --> 정상 운영 (5종목)
+               |-- NO  --> 심리 = very_bearish (NXT <= -0.7)?
+                           |-- YES --> 3종목, 손절 3%/익절 4% (매수 허용)
+                           |-- NO  --> 심리 = bearish (NXT <= -0.3)?
+                                       |-- YES --> 복합 조건2 체크
+                                       |           |-- 발동 --> 매수 중단
+                                       |           |-- 미발동 --> 3종목, bearish 모드
+                                       |-- NO  --> 정상 운영 (5종목)
 ```
 
 ### 조건3: NXT 자체 극약세 (전일 지수 무관)
 
-서킷브레이커 조건1,2는 "전일 지수 하락"이 전제입니다. 하지만 전일이 급등이더라도 NXT에서 극약세(-0.7 이하)가 감지되면 매수를 중단합니다.
+서킷브레이커 조건1,2는 "전일 지수 하락"이 전제입니다. 하지만 전일이 급등이더라도 NXT에서 극약세(-0.9 이하)가 감지되면 매수를 중단합니다. -0.7~-0.9 구간은 very_bearish로 매수는 허용하되 손절을 축소합니다.
 
-- 설정: `EXTREME_BEARISH_THRESHOLD = -0.7`
+- 설정: `EXTREME_BEARISH_THRESHOLD = -0.9`, `VERY_BEARISH_THRESHOLD = -0.7`
 - 전형적 발동 패턴: 전일 급등 -> 당일 갭다운 되돌림
 
 ---
@@ -152,24 +164,44 @@ if current_holding >= effective_max:
 `config/strategy_settings.py` > `PreMarket` 클래스:
 
 ```python
-# 심리 임계값
+# 심리 임계값 (5단계: extreme_bearish / very_bearish / bearish / neutral / bullish)
 BEARISH_THRESHOLD = -0.3
-EXTREME_BEARISH_THRESHOLD = -0.7
+VERY_BEARISH_THRESHOLD = -0.7       # 강약세 (손절축소, 매수 허용)
+EXTREME_BEARISH_THRESHOLD = -0.9    # 극약세 (매수 완전 중단)
 BULLISH_THRESHOLD = 0.3
 
-# 약세장 파라미터
+# 약세장 파라미터 (bearish: -0.3 이하)
 BEARISH_MAX_POSITIONS = 3
-BEARISH_STOP_LOSS_RATIO = 0.03    # 3%
-BEARISH_TAKE_PROFIT_RATIO = 0.04  # 4%
+BEARISH_STOP_LOSS_RATIO = 0.03    # 5% → 3%
+BEARISH_TAKE_PROFIT_RATIO = 0.04  # 6% → 4%
 
-# 극약세장
+# 강약세장 파라미터 (very_bearish: -0.7 ~ -0.9)
+VERY_BEARISH_MAX_POSITIONS = 3
+VERY_BEARISH_STOP_LOSS_RATIO = 0.03   # 3%
+VERY_BEARISH_TAKE_PROFIT_RATIO = 0.04 # 4%
+
+# 극약세장 (extreme_bearish: -0.9 이하)
 EXTREME_BEARISH_MAX_POSITIONS = 0  # 매수 중단
 
-# 서킷브레이커
-CIRCUIT_BREAKER_PREV_DAY_PCT = -2.0           # 조건1: 전일 -2%
+# 서킷브레이커: 전일 지수 기반
+CIRCUIT_BREAKER_PREV_DAY_PCT = -3.0           # 조건1: 전일 -3% → 매수 중단
+PREV_DAY_DECLINE_THRESHOLD = -1.0             # 조건1b: 전일 -1% → 손절 축소
+PREV_DAY_DECLINE_STOP_LOSS_RATIO = 0.03       # 조건1b: 손절 3%
+PREV_DAY_DECLINE_TAKE_PROFIT_RATIO = 0.04     # 조건1b: 익절 4%
 CIRCUIT_BREAKER_PREV_DAY_PCT_WITH_GAP = -1.0  # 조건2: 전일 -1%
 CIRCUIT_BREAKER_NXT_GAP_PCT = -0.5            # 조건2: + NXT 갭 -0.5%
-CIRCUIT_BREAKER_RELEASE_GAP_PCT = 3.0         # 해제: NXT 갭 +3%
+CIRCUIT_BREAKER_RELEASE_GAP_PCT = 3.0         # 해제: NXT 갭 +3% → 정상 복귀 (5종목, neutral)
+
+# 장 시작 갭 체크
+MARKET_OPEN_GAP_CHECK_ENABLED = True
+MARKET_OPEN_GAP_THRESHOLD_PCT = -1.5          # 지수 시가 갭 -1.5% 이하 → 매수 중단
+MARKET_OPEN_GAP_CHECK_MINUTE = 1              # 09:01에 체크
+
+# 장중 지수 모니터링
+INTRADAY_INDEX_CHECK_ENABLED = True
+INTRADAY_INDEX_CHECK_INTERVAL_MINUTES = 30    # 30분 주기
+INTRADAY_INDEX_DROP_THRESHOLD_PCT = -2.0      # 전일 대비 -2% 이하 → 매수 중단
+INTRADAY_INDEX_RECOVERY_PCT = -1.0            # -1% 이상 회복 시 → 매수 재개
 ```
 
 ---

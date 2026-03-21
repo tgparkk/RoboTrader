@@ -8,8 +8,9 @@ config/
 ├── strategy_settings.py         # 전략/스크리너/프리마켓 설정
 ├── ml_settings.py               # ML 필터 설정 (현재 비활성)
 ├── advanced_filter_settings.py  # 고급 필터 설정 (pullback 전략용)
-├── market_hours.py              # 장 시간 설정
-├── settings.py                  # 일반 설정
+├── market_hours.py              # 장 시간 설정 (EOD 청산 15:00, 특별일 시프트)
+├── settings.py                  # 일반 설정 (DB 접속 정보)
+├── dynamic_profit_loss_config.py # 동적 손익비 설정 (현재 비활성)
 └── key.ini                      # API 키 (git 제외)
 ```
 
@@ -20,19 +21,40 @@ config/
 ### 현재 설정
 ```json
 {
+  "data_collection": {
+    "interval_seconds": 30,            // 데이터 수집 주기
+    "candidate_stocks": []             // 수동 후보 종목 (비어있으면 스크리너 사용)
+  },
   "order_management": {
-    "buy_budget_ratio": 0.20,      // 건당 투자 비율 (20% = 1/5)
-    "buy_cooldown_minutes": 25     // 동일 종목 재매수 대기
+    "buy_timeout_seconds": 300,        // 매수 주문 타임아웃 (5분)
+    "sell_timeout_seconds": 180,       // 매도 주문 타임아웃 (3분)
+    "max_adjustments": 3,              // 주문 정정 최대 횟수
+    "adjustment_threshold_percent": 0.5, // 정정 임계값 (%)
+    "market_order_threshold_percent": 2.0, // 시장가 전환 임계값 (%)
+    "buy_budget_ratio": 0.20,          // 건당 투자 비율 (20% = 1/5)
+    "buy_cooldown_minutes": 25         // 동일 종목 재매수 대기
   },
   "risk_management": {
-    "max_position_count": 20,       // 최대 보유 종목 수
-    "max_position_ratio": 0.3,      // 종목당 최대 비율
-    "stop_loss_ratio": 0.05,        // 손절 (-5.0%)
-    "take_profit_ratio": 0.06,      // 익절 (+6.0%)
-    "use_dynamic_profit_loss": false  // 동적 손익비 (비활성화)
+    "max_position_count": 20,          // 최대 보유 종목 수
+    "max_position_ratio": 0.3,         // 종목당 최대 비율
+    "stop_loss_ratio": 0.05,           // 손절 (-5.0%)
+    "take_profit_ratio": 0.06,         // 익절 (+6.0%)
+    "max_daily_loss": 0.1,             // 일일 최대 손실 (10%)
+    "use_dynamic_profit_loss": false   // 동적 손익비 (비활성화)
+  },
+  "fee": {
+    "tax_rate": 0.0018,                // 매도 세금 (0.18%)
+    "commission_rate": 0.00014         // 수수료 (0.014%)
+  },
+  "logging": {
+    "level": "INFO",
+    "file_retention_days": 30,
+    "enable_pattern_logging": true     // 패턴 상세 로깅
   }
 }
 ```
+
+> **참고**: `strategy` 섹션(`simple_momentum`)과 `duplicate_signal_prevention` 섹션은 레거시 설정으로 현재 코드에서 미참조. 실제 전략은 `strategy_settings.py`에서 관리.
 
 ### 투자 비율 권장값
 
@@ -163,15 +185,44 @@ class Screener:
 ### 프리마켓 & 서킷브레이커 (PreMarket)
 ```python
 class PreMarket:
-    # NXT 심리 판단 임계값
-    BEARISH_THRESHOLD = -0.3         # 약세 → 포지션 3개, 손절3%/익절4%
-    EXTREME_BEARISH_THRESHOLD = -0.7 # 극약세 → 매수 완전 중단
+    ENABLED = True
+    SNAPSHOT_INTERVAL_SECONDS = 300   # NXT 스냅샷 5분 간격
+    MAX_BELLWETHER_STOCKS = 30        # 모니터링 대표 종목 수
+
+    # NXT 심리 판단 임계값 (5단계)
+    BEARISH_THRESHOLD = -0.3         # 약세 → 3종목, 손절3%/익절4%
+    VERY_BEARISH_THRESHOLD = -0.7    # 강약세 → 3종목, 손절3%/익절4% (매수 허용)
+    EXTREME_BEARISH_THRESHOLD = -0.9 # 극약세 → 매수 완전 중단 (0종목)
+    BULLISH_THRESHOLD = 0.3          # 강세 → 정상 5종목
+
+    # 약세장 파라미터
+    BEARISH_MAX_POSITIONS = 3
+    BEARISH_STOP_LOSS_RATIO = 0.03   # 5% → 3%
+    BEARISH_TAKE_PROFIT_RATIO = 0.04 # 6% → 4%
+
+    # 강약세장 파라미터 (-0.7 ~ -0.9)
+    VERY_BEARISH_MAX_POSITIONS = 3
+    VERY_BEARISH_STOP_LOSS_RATIO = 0.03
+    VERY_BEARISH_TAKE_PROFIT_RATIO = 0.04
+
+    # 극약세장 (<= -0.9)
+    EXTREME_BEARISH_MAX_POSITIONS = 0
 
     # 서킷브레이커 (전일 지수 기반)
-    CIRCUIT_BREAKER_PREV_DAY_PCT = -2.0          # 조건1: 전일 -2% → 매수 중단
+    CIRCUIT_BREAKER_PREV_DAY_PCT = -3.0          # 조건1: 전일 -3% → 매수 중단
+    PREV_DAY_DECLINE_THRESHOLD = -1.0            # 조건1b: 전일 -1% → 손절 축소
+    PREV_DAY_DECLINE_STOP_LOSS_RATIO = 0.03      # 조건1b: 손절 3%
+    PREV_DAY_DECLINE_TAKE_PROFIT_RATIO = 0.04    # 조건1b: 익절 4%
     CIRCUIT_BREAKER_PREV_DAY_PCT_WITH_GAP = -1.0 # 조건2: 전일 -1% +
     CIRCUIT_BREAKER_NXT_GAP_PCT = -0.5           #        NXT 갭 -0.5% → 매수 중단
-    CIRCUIT_BREAKER_RELEASE_GAP_PCT = 3.0        # 해제: NXT 갭 +3% → 2종목으로 재개
+    CIRCUIT_BREAKER_RELEASE_GAP_PCT = 3.0        # 해제: NXT 갭 +3% → 정상 복귀 (5종목)
+
+    # 장 시작 갭 체크 (09:01)
+    MARKET_OPEN_GAP_THRESHOLD_PCT = -1.5         # 지수 시가 갭 -1.5% → 매수 중단
+
+    # 장중 지수 모니터링 (30분 주기)
+    INTRADAY_INDEX_DROP_THRESHOLD_PCT = -2.0     # 전일 대비 -2% → 매수 중단
+    INTRADAY_INDEX_RECOVERY_PCT = -1.0           # -1% 이상 회복 시 → 매수 재개
 ```
 
 상세: [docs/pre_market_circuit_breaker.md](docs/pre_market_circuit_breaker.md)

@@ -65,8 +65,7 @@ self.stocks_by_state: Dict[StockState, Dict[str, TradingStock]] = {}
 
 **주요 메서드**:
 - `add_selected_stock()`: 조건검색 종목 추가
-- `move_to_buy_candidate()`: 매수 후보로 변경
-- `execute_buy_order()`: 매수 주문 실행
+- `execute_buy_order()`: 매수 주문 실행 (SELECTED → BUY_PENDING)
 - `move_to_sell_candidate()`: 매도 후보로 변경
 - `execute_sell_order()`: 매도 주문 실행
 
@@ -171,23 +170,19 @@ class Order:
 ### 1. 조건검색 → 매수 → 매도 완료 (정상 케이스)
 
 ```python
-# 1. 조건검색으로 종목 선정
+# 1. 조건검색으로 종목 선정 (스크리너에 의해)
 trading_manager.add_selected_stock("005930", "삼성전자", "급등 패턴")
 # 상태: SELECTED
 
-# 2. 분석 후 매수 후보로 변경
-trading_manager.move_to_buy_candidate("005930", "이동평균선 돌파")
-# 상태: BUY_CANDIDATE
-
-# 3. 매수 주문 실행
+# 2. 매수 신호 발생 → 매수 주문 실행 (SELECTED → BUY_PENDING 직접 전이)
 await trading_manager.execute_buy_order("005930", 100, 75000, "강세 신호")
 # 상태: BUY_PENDING → 체결 시 POSITIONED
 
-# 4. 수익 실현 시점에 매도 후보로 변경
+# 3. 수익 실현 시점에 매도 후보로 변경
 trading_manager.move_to_sell_candidate("005930", "목표가 달성")
 # 상태: SELL_CANDIDATE
 
-# 5. 매도 주문 실행
+# 4. 매도 주문 실행
 await trading_manager.execute_sell_order("005930", 100, 78000, "수익 실현")
 # 상태: SELL_PENDING → 체결 시 COMPLETED
 ```
@@ -199,7 +194,7 @@ await trading_manager.execute_sell_order("005930", 100, 78000, "수익 실현")
 await trading_manager.execute_buy_order("005930", 100, 75000)
 # 상태: BUY_PENDING
 
-# 주문 실패 시 자동으로 BUY_CANDIDATE로 복귀
+# 주문 실패 시 자동으로 SELECTED로 복귀
 # 재시도 가능
 
 # 다시 매수 주문 실행
@@ -214,7 +209,7 @@ summary = trading_manager.get_portfolio_summary()
 
 # 특정 상태의 종목들 조회
 positioned_stocks = trading_manager.get_stocks_by_state(StockState.POSITIONED)
-buy_candidates = trading_manager.get_stocks_by_state(StockState.BUY_CANDIDATE)
+sell_candidates = trading_manager.get_stocks_by_state(StockState.SELL_CANDIDATE)
 
 # 개별 종목 정보 조회
 trading_stock = trading_manager.get_trading_stock("005930")

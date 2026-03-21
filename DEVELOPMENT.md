@@ -4,17 +4,23 @@
 
 ### 실시간 매매 흐름 (price_position 전략)
 ```
-1. 프리마켓 분석 (pre_market_analyzer.py)
+1. 프리마켓 분석 (pre_market_analyzer.py) — _pre_market_task()
    - NXT 스냅샷 수집 → 시장 심리 판단
    - 서킷브레이커 체크 (전일 지수 + NXT 갭)
    ↓
 2. 실시간 종목 스크리너 (stock_screener.py)
-   - Phase 1: KOSPI+KOSDAQ 거래량순위 API (4회 호출) → ~80개 후보
-   - Phase 2: 기본 필터 (등락률, 가격, 거래대금) → ~20개
+   - Phase 1: KOSPI+KOSDAQ 거래량순위 API (4회 호출) → ~80-100개 후보
+   - Phase 2: 기본 필터 (등락률, 가격, 거래대금) → ~20-30개
    - Phase 3: 현재가 API 정밀 검증 (시가대비 0.8~4.0%, 갭 <3%) → 최대 5개 추가
    ↓
-3. 1분봉 데이터 수집 (data_collector.py)
-   ↓
+   ┌────────────── 매수 트랙 ──────────────┐  ┌──── 매도 트랙 ────┐
+   │                                        │  │                    │
+3. _system_monitoring_task() (매 13~45초)    │  │ _trading_decision_ │
+   → _update_intraday_data()                │  │ task() (매 5초)    │
+     → intraday_manager.batch_update_       │  │ → 손절/익절 체크   │
+       realtime_data()                      │  │ → 장마감 청산      │
+     → 캔들 완성 시점에만 매수 판단 실행    │  │ → emergency_sync   │
+   ↓                                        │  └────────────────────┘
 4. 가격 위치 전략 평가 (price_position_strategy.py)
    - 시가 대비 1~3% 상승 구간 확인
    - 진입 시간(9~12시), 변동성/모멘텀 필터
@@ -24,11 +30,13 @@
 6. 주문 실행 (trade_executor.py → order_manager.py)
    ↓
 7. 포지션 관리 (trading_stock_manager.py)
-   - 손절 -5%, 익절 +6%, 장마감 청산
+   - 손절 -5%, 익절 +6%, 장마감 청산 (15:00)
    ↓
 8. 장 마감 데이터 저장 (post_market_data_saver.py)
    - 분봉/일봉 저장 + 지수 일봉 자동 저장 (yfinance)
 ```
+
+> **주의**: 매수 판단은 `_trading_decision_task()`가 아닌 `_system_monitoring_task()` → `_update_intraday_data()`에서 캔들 완성 시점(minute % interval == 0, second >= 10)에 트리거됩니다. `_trading_decision_task()`는 매도 판단과 포지션 동기화만 담당합니다.
 
 ---
 
@@ -52,8 +60,8 @@
 # 1. 서킷브레이커 발동 여부
 grep "서킷브레이커" logs/trading_YYYYMMDD.log
 
-# 2. 최대 종목 수 도달
-grep "최대 5종목" logs/trading_YYYYMMDD.log
+# 2. 최대 종목 수 도달 (실제 로그 형식: "동시 보유 최대 N종목 도달")
+grep "동시 보유 최대.*종목 도달" logs/trading_YYYYMMDD.log
 
 # 3. 시가 대비 범위 미충족
 grep "시가 대비" logs/trading_YYYYMMDD.log
@@ -64,11 +72,11 @@ grep "고급 필터 차단" logs/trading_YYYYMMDD.log
 
 ### 실시간 거래 로그 분석
 ```bash
-# 매수 신호
+# 매수 신호 (실제: "🚀 [가격위치전략] 매수 신호!")
 grep "가격위치전략.*매수 신호" logs/trading_YYYYMMDD.log
 
-# 거래 기록 확인
-grep "거래 기록 추가" logs/trading_YYYYMMDD.log
+# 매수 주문 실행 (실제: "🔥 XXXXXX 실제 매수 주문 완료: N주 @가격원")
+grep "실제 매수 주문 완료" logs/trading_YYYYMMDD.log
 
 # 스크리너 결과
 grep "\[스크리너\]" logs/trading_YYYYMMDD.log
@@ -100,12 +108,12 @@ conn.close()
 ### 실시간 거래 로그
 **위치**: `logs/trading_YYYYMMDD.log`
 
-**주요 메시지**:
+**주요 메시지** (실제 코드 기반):
 ```
-✅ 006280(녹십자) 선정 완료 - 시간: 10:45:29
-🔍 매수 판단 시작: 006280(녹십자)
-🚀 006280(녹십자) 매수 신호 발생
-📊 거래 기록 추가: 006280(녹십자) 매수 12,500원
+✅ 006280(녹십자) 선정 완료 - 시간: 10:45:29           # trading_stock_manager.py
+🚀 [가격위치전략] 매수 신호!                            # trading_decision_engine.py (INFO)
+🔥 006280 실제 매수 주문 완료: 10주 @12,500원           # trade_executor.py (INFO)
+✅ 006280 매수 완료                                     # trading_stock_manager.py (INFO)
 ```
 
 ---

@@ -105,8 +105,8 @@ class StrategySettings:
 
         # 약세장 파라미터 조정
         BEARISH_MAX_POSITIONS = 3               # 5 → 3
-        BEARISH_STOP_LOSS_RATIO = 0.03          # 4% → 3%
-        BEARISH_TAKE_PROFIT_RATIO = 0.04        # 5% → 4%
+        BEARISH_STOP_LOSS_RATIO = 0.03          # 5% → 3%
+        BEARISH_TAKE_PROFIT_RATIO = 0.04        # 6% → 4%
 
         # 강약세장 (sentiment -0.7~-0.9: 손절축소, 매수 허용)
         VERY_BEARISH_MAX_POSITIONS = 3          # 포지션 축소
