@@ -67,7 +67,7 @@ ACTIVE_STRATEGY = 'price_position'
 
 ### 서킷브레이커 (config/strategy_settings.py > PreMarket)
 - 전일 KOSPI/KOSDAQ -3% → 매수 완전 중단 (4년 시뮬: -3% 이하만 마이너스)
-- 전일 -1% 이하 → 손절 3%/익절 4%로 축소 (매수는 허용)
+- 전일 -1% 이하 → SL/TP 정상 유지 (03-24 멀티버스: 축소는 역효과)
 - 전일 -1% + NXT 갭 -0.5% → 매수 완전 중단
 - NXT sentiment -0.7~-0.9 → very_bearish (손절축소, 매수 허용)
 - NXT sentiment <= -0.9 → extreme_bearish (매수 완전 중단)
@@ -127,7 +127,7 @@ analysis/                        # 분석/시뮬레이션 스크립트
 ## 안전장치
 
 - **서킷브레이커**: 전일 -3% → 매수 중단, NXT ≤ -0.9 → 매수 중단 (상세: docs/pre_market_circuit_breaker.md)
-- **동적 TP/SL**: 약세장 시 손절 5%→3%, 익절 6%→4%로 자동 축소
+- **동적 TP/SL**: 비활성화 (03-24 멀티버스 검증: 축소는 역효과, 항상 5%/6% 유지가 최적)
 - **매수 쿨다운**: 동일 종목 25분 내 재매수 차단
 - **자금 관리**: 건당 가용잔고 20%, 총 투자 90% 상한 (core/fund_manager.py)
 - **포지션 제한**: 정상 5종목, 약세 3종목, 극약세 0종목
