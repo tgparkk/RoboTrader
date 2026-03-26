@@ -51,7 +51,7 @@ class StrategySettings:
 
         # 거래 제한
         ONE_TRADE_PER_STOCK_PER_DAY = True  # 하루에 종목당 1회만 거래
-        MAX_DAILY_POSITIONS = 5              # 최대 동시 보유 종목 수 (청산 시 새 매수 가능)
+        MAX_DAILY_POSITIONS = 3              # 최대 동시 보유 종목 수 (시뮬 검증: 3종목이 5종목 대비 +0.17%p 개선)
 
     # ========================================
     # 실시간 종목 스크리너 설정
@@ -137,13 +137,19 @@ class StrategySettings:
 
         # 장중 지수 모니터링 (09:30~ 장 마감까지 주기적 체크)
         INTRADAY_INDEX_CHECK_ENABLED = True           # 장중 지수 체크 사용 여부
-        INTRADAY_INDEX_CHECK_INTERVAL_MINUTES = 30    # 체크 주기 (분)
+        INTRADAY_INDEX_CHECK_INTERVAL_MINUTES = 10    # 체크 주기 (분) — 동적SL 반응속도 위해 30→10분
         INTRADAY_INDEX_DROP_THRESHOLD_PCT = -2.0      # 전일 대비 이 값 이하 → 매수 중단
         INTRADAY_INDEX_RECOVERY_PCT = -1.0            # 이 값 이상 회복 시 → 매수 재개
 
+        # 장중 동적 손절 (시뮬 검증: 시장-0.7%→SL3%가 두 기간 모두 1위)
+        INTRADAY_DYNAMIC_SL_ENABLED = True            # 장중 동적 SL 사용 여부
+        INTRADAY_SL_TIGHTEN_THRESHOLD_PCT = -0.7      # 지수 -0.7% 이하 → SL 축소
+        INTRADAY_TIGHTENED_STOP_LOSS_RATIO = 0.03     # 축소된 SL (3%)
+        INTRADAY_SL_RECOVERY_PCT = -0.3               # 지수 -0.3% 이상 회복 → SL 원복
+
         # NXT 실패 시 기본값
         FALLBACK_SENTIMENT = 'neutral'
-        FALLBACK_MAX_POSITIONS = 5
+        FALLBACK_MAX_POSITIONS = 3
 
     # ========================================
     # 눌림목 캔들패턴 전략 설정 (pullback)

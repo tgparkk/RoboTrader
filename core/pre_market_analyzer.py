@@ -80,7 +80,7 @@ class PreMarketReport:
     expected_gap_pct: float         # 예상 갭 %
     volatility_level: str           # 'low', 'normal', 'high'
     top_movers: List[Dict] = field(default_factory=list)
-    recommended_max_positions: int = 5
+    recommended_max_positions: int = 3
     recommended_stop_loss_pct: float = 0.05
     recommended_take_profit_pct: float = 0.06
     nxt_available: bool = False
@@ -227,7 +227,7 @@ class PreMarketAnalyzer:
                     )
                     self._circuit_breaker_reason = release_reason
                     logger.info(f"[서킷브레이커] {release_reason}")
-                    rec_max_pos = pm.FALLBACK_MAX_POSITIONS
+                    rec_max_pos = pm.FALLBACK_MAX_POSITIONS  # 3종목
                     rec_stop_loss = 0.05
                     rec_take_profit = 0.06
                     sentiment = 'neutral'  # 정상 모드 복귀
@@ -524,6 +524,53 @@ class PreMarketAnalyzer:
                     self._report.recommended_stop_loss_pct = pm.BEARISH_STOP_LOSS_RATIO
                     self._report.recommended_take_profit_pct = pm.BEARISH_TAKE_PROFIT_RATIO
                     self._report.log_lines.insert(0, f"장중지수 회복: {reason}")
+                return self._report
+
+            # Case 3: 동적 SL — 지수 -0.7% 이하 시 SL 축소 (서킷브레이커 미만)
+            if (not is_currently_blocked and
+                    getattr(pm, 'INTRADAY_DYNAMIC_SL_ENABLED', False) and
+                    worst_gap <= getattr(pm, 'INTRADAY_SL_TIGHTEN_THRESHOLD_PCT', -0.7) and
+                    worst_gap > pm.INTRADAY_INDEX_DROP_THRESHOLD_PCT):
+                tightened_sl = getattr(pm, 'INTRADAY_TIGHTENED_STOP_LOSS_RATIO', 0.03)
+                reason = (
+                    f"장중 지수 하락 {worst_gap:+.2f}% "
+                    f"(임계값 {pm.INTRADAY_SL_TIGHTEN_THRESHOLD_PCT}%) → SL {tightened_sl:.0%}로 축소"
+                )
+                logger.info(f"[장중지수] 동적 SL 축소: {reason}")
+
+                if self._report:
+                    self._report.recommended_stop_loss_pct = tightened_sl
+                    self._report.log_lines.insert(0, f"동적SL: {reason}")
+                else:
+                    self._report = PreMarketReport(
+                        report_time=now_kst(),
+                        market_sentiment='bearish',
+                        sentiment_score=-0.5,
+                        gap_direction='gap_down',
+                        expected_gap_pct=worst_gap,
+                        volatility_level='high',
+                        recommended_max_positions=pm.FALLBACK_MAX_POSITIONS,
+                        recommended_stop_loss_pct=tightened_sl,
+                        recommended_take_profit_pct=0.06,
+                        nxt_available=True,
+                        snapshot_count=0,
+                        log_lines=[f"동적SL: {reason}"],
+                    )
+                return self._report
+
+            # Case 4: 동적 SL 회복 — 지수가 -0.3% 이상으로 회복 시 SL 원복
+            if (not is_currently_blocked and
+                    getattr(pm, 'INTRADAY_DYNAMIC_SL_ENABLED', False) and
+                    self._report and
+                    self._report.recommended_stop_loss_pct < 0.05 and
+                    worst_gap >= getattr(pm, 'INTRADAY_SL_RECOVERY_PCT', -0.3)):
+                reason = (
+                    f"장중 지수 회복 {worst_gap:+.2f}% "
+                    f"(회복 임계값 {pm.INTRADAY_SL_RECOVERY_PCT}%) → SL 5% 원복"
+                )
+                logger.info(f"[장중지수] 동적 SL 원복: {reason}")
+                self._report.recommended_stop_loss_pct = 0.05
+                self._report.log_lines.insert(0, f"동적SL 원복: {reason}")
                 return self._report
 
             return None
