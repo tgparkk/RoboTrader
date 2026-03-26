@@ -118,8 +118,13 @@ class StockScreener:
         """
         Phase 1: 거래량순위 API 2회 호출하여 후보 풀 구성
 
-        KOSPI/KOSDAQ 각각 거래금액순 + 거래증가율 = 4회 호출
-        → 중복 제거 후 ~80-100개 후보
+        KOSPI/KOSDAQ 각각 거래금액순 = 2회 호출
+        → 중복 제거 후 ~40-60개 후보
+
+        거래증가율(sort=1) 제거 사유:
+        - 시뮬 vs 실거래 종목풀 79.5% 불일치의 근본 원인
+        - 거래증가율 = 급등주/테마주 → 되돌림 확률 높음
+        - 시뮬(거래금액순)은 71.5% 승률, 실거래(급등주 혼합)는 ~5%
 
         Returns:
             중복 제거된 종목 딕셔너리 리스트
@@ -129,12 +134,10 @@ class StockScreener:
         min_price = str(self.config.get('min_price', 5000))
         max_price = str(self.config.get('max_price', 500000))
 
-        # 시장별 × 정렬기준별 스캔 (4회 호출)
+        # 시장별 거래금액순 스캔 (2회 호출)
         scan_configs = [
             ("0001", "3", "KOSPI-거래금액순"),
-            ("0001", "1", "KOSPI-거래증가율"),
             ("1001", "3", "KOSDAQ-거래금액순"),
-            ("1001", "1", "KOSDAQ-거래증가율"),
         ]
 
         for market_code, sort_code, label in scan_configs:
