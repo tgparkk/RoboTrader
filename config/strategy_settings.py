@@ -51,7 +51,7 @@ class StrategySettings:
 
         # 거래 제한
         ONE_TRADE_PER_STOCK_PER_DAY = True  # 하루에 종목당 1회만 거래
-        MAX_DAILY_POSITIONS = 3              # 최대 동시 보유 종목 수 (시뮬 검증: 3종목이 5종목 대비 +0.17%p 개선)
+        MAX_DAILY_POSITIONS = 5              # 최대 동시 보유 종목 수 (거래금액순 통일 후 5종목이 +325% vs 3종목 +187%)
 
     # ========================================
     # 실시간 종목 스크리너 설정
