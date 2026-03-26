@@ -93,6 +93,9 @@ def apply_screener_filter(
     min_amount=1_000_000_000,
     max_gap_pct=3.0,
     min_gap_down_pct=-2.0,
+    min_change_rate=0.5,
+    max_change_rate=5.0,
+    max_candidates=15,
 ):
     """
     스크리너 필터 적용 (Phase 1 + Phase 2 시뮬레이션)
@@ -120,7 +123,7 @@ def apply_screener_filter(
     # 실거래에서도 스캔 시점 누적 거래대금으로 필터링함
     min_early_amount = min_amount * 0.15
 
-    passed = set()
+    passed = []
     for stock_code, metrics in ranked:
         day_open = metrics['day_open']
 
@@ -137,18 +140,53 @@ def apply_screener_filter(
         if early_amt < min_early_amount:
             continue
 
-        # 갭 필터 (시가 vs 전일종가)
+        # 등락률 + 갭 필터 (시가 vs 전일종가)
         prev_close = prev_close_map.get(stock_code)
         if prev_close and prev_close > 0:
             signed_gap_pct = (day_open / prev_close - 1) * 100
+            # 등락률 필터 (Phase 2: 실전 스크리너 MIN/MAX_CHANGE_RATE)
+            if signed_gap_pct < min_change_rate or signed_gap_pct > max_change_rate:
+                continue
             if abs(signed_gap_pct) > max_gap_pct:
                 continue
             if signed_gap_pct < min_gap_down_pct:
                 continue
 
-        passed.add(stock_code)
+        passed.append(stock_code)
 
-    return passed
+    # 일일 최대 후보 제한 (실전 스크리너 MAX_TOTAL_CANDIDATES)
+    if max_candidates > 0 and len(passed) > max_candidates:
+        passed = passed[:max_candidates]
+
+    return set(passed)
+
+
+def check_circuit_breaker(cur, prev_date, prev_prev_date, threshold=-3.0):
+    """전일 KOSPI/KOSDAQ 지수 급락 체크 — 매수 중단 여부 반환"""
+    if not prev_date or not prev_prev_date:
+        return False, None
+
+    cur.execute('''
+        SELECT stock_code, stck_bsop_date, CAST(stck_clpr AS FLOAT)
+        FROM daily_candles
+        WHERE stock_code IN ('KS11', 'KQ11')
+          AND stck_bsop_date IN (%s, %s)
+    ''', [prev_date, prev_prev_date])
+
+    closes = {}
+    for row in cur.fetchall():
+        code, date, close = row
+        if code not in closes:
+            closes[code] = {}
+        closes[code][date] = close
+
+    for code in ['KS11', 'KQ11']:
+        if code in closes and prev_date in closes[code] and prev_prev_date in closes[code]:
+            change_pct = (closes[code][prev_date] / closes[code][prev_prev_date] - 1) * 100
+            if change_pct <= threshold:
+                return True, f"{code} {change_pct:+.1f}%"
+
+    return False, None
 
 
 def apply_daily_limit(trades_df, max_daily):
@@ -374,6 +412,10 @@ def run_simulation(
     screener_max_gap=3.0,
     screener_min_price=5000,
     screener_max_price=500000,
+    screener_min_change=0.5,
+    screener_max_change=5.0,
+    max_candidates_per_day=15,
+    circuit_breaker_pct=-3.0,
     verbose=True,
     cost_pct=0.33,
     max_holding_minutes=0,
@@ -390,8 +432,13 @@ def run_simulation(
           f"익절 {info['exit_conditions']['take_profit']}")
     print(f"스크리너: 거래대금 상위 {screener_top_n}개, "
           f"거래대금>{screener_min_amount/1e8:.0f}억, "
+          f"등락률{screener_min_change}~{screener_max_change}%, "
           f"갭<{screener_max_gap}%, "
           f"가격 {screener_min_price:,}~{screener_max_price:,}원")
+    cand_str = f"{max_candidates_per_day}종목" if max_candidates_per_day > 0 else "무제한"
+    print(f"후보제한: 일일 {cand_str}")
+    cb_str = f"전일 지수 {circuit_breaker_pct}% 이하 → 매수중단" if circuit_breaker_pct else "비활성"
+    print(f"서킷브레이커: {cb_str}")
     print(f"동시보유: {max_daily}종목")
     print(f"비용: {cost_pct:.2f}%/건 (수수료+세금+슬리피지)")
     hold_str = f"{max_holding_minutes}분" if max_holding_minutes > 0 else "제한없음"
@@ -410,7 +457,8 @@ def run_simulation(
     print(f'\n총 거래일: {len(trading_dates)}일')
 
     all_trades = []
-    screener_stats = {'total_stocks': 0, 'screened_stocks': 0, 'days': 0}
+    screener_stats = {'total_stocks': 0, 'screened_stocks': 0, 'days': 0,
+                      'circuit_breaker_days': 0}
 
     for day_idx, trade_date in enumerate(trading_dates):
         try:
@@ -425,6 +473,18 @@ def run_simulation(
 
         # 전일 날짜 (이전 거래일)
         prev_date = trading_dates[day_idx - 1] if day_idx > 0 else None
+
+        # 서킷브레이커 체크 (전일 KOSPI/KOSDAQ 급락 시 매수 중단)
+        if circuit_breaker_pct and day_idx > 1:
+            prev_prev_date = trading_dates[day_idx - 2]
+            is_cb, cb_reason = check_circuit_breaker(
+                cur, prev_date, prev_prev_date, circuit_breaker_pct
+            )
+            if is_cb:
+                if verbose:
+                    print(f'  {trade_date}: 서킷브레이커 ({cb_reason}) → 매수중단')
+                screener_stats['circuit_breaker_days'] += 1
+                continue
 
         # 일간 지표 계산 (전 종목)
         daily_metrics = get_daily_metrics(cur, trade_date)
@@ -444,6 +504,9 @@ def run_simulation(
             max_price=screener_max_price,
             min_amount=screener_min_amount,
             max_gap_pct=screener_max_gap,
+            min_change_rate=screener_min_change,
+            max_change_rate=screener_max_change,
+            max_candidates=max_candidates_per_day,
         )
 
         screener_stats['total_stocks'] += len(daily_metrics)
@@ -522,8 +585,11 @@ def run_simulation(
     # 결과 출력
     avg_total = screener_stats['total_stocks'] / max(screener_stats['days'], 1)
     avg_screened = screener_stats['screened_stocks'] / max(screener_stats['days'], 1)
+    cb_days = screener_stats.get('circuit_breaker_days', 0)
     print(f'\n스크리너 통계: 일평균 {avg_total:.0f}개 → {avg_screened:.0f}개 통과 '
           f'({avg_screened/max(avg_total,1)*100:.0f}%)')
+    if cb_days > 0:
+        print(f'서킷브레이커 발동: {cb_days}일 (매수 중단)')
     print(f'총 거래: {len(all_trades)}건')
 
     if not all_trades:
@@ -621,6 +687,14 @@ def main():
                         help='최소 거래대금 (원)')
     parser.add_argument('--screener-max-gap', type=float, default=3.0,
                         help='최대 갭 %%')
+    parser.add_argument('--screener-min-change', type=float, default=0.5,
+                        help='최소 등락률 %% (기본 0.5%%)')
+    parser.add_argument('--screener-max-change', type=float, default=5.0,
+                        help='최대 등락률 %% (기본 5.0%%)')
+    parser.add_argument('--max-candidates', type=int, default=15,
+                        help='일일 최대 후보 종목 수 (기본 15, 0=무제한)')
+    parser.add_argument('--circuit-breaker', type=float, default=-3.0,
+                        help='서킷브레이커 임계값 (전일 지수 하락률 %%, 기본 -3.0)')
     parser.add_argument('--cost', type=float, default=0.33,
                         help='건당 왕복 비용 %% (수수료+세금+슬리피지, 기본 0.33%%)')
     parser.add_argument('--max-hold', type=int, default=0,
@@ -652,6 +726,10 @@ def main():
         screener_top_n=args.screener_top,
         screener_min_amount=args.screener_min_amount,
         screener_max_gap=args.screener_max_gap,
+        screener_min_change=args.screener_min_change,
+        screener_max_change=args.screener_max_change,
+        max_candidates_per_day=args.max_candidates,
+        circuit_breaker_pct=args.circuit_breaker,
         verbose=not args.quiet,
         cost_pct=args.cost,
         max_holding_minutes=args.max_hold,
