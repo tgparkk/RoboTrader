@@ -105,6 +105,7 @@ class DayTradingBot:
             'min_pct_from_open': sc.MIN_PCT_FROM_OPEN,
             'max_pct_from_open': sc.MAX_PCT_FROM_OPEN,
             'max_gap_pct': sc.MAX_GAP_PCT,
+            'min_gap_down_pct': sc.MIN_GAP_DOWN_PCT,
             'max_phase3_checks': sc.MAX_PHASE3_CHECKS,
             'max_candidates_per_scan': sc.MAX_CANDIDATES_PER_SCAN,
             'max_total_candidates': sc.MAX_TOTAL_CANDIDATES,

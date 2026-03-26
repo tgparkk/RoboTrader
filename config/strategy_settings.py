@@ -74,7 +74,8 @@ class StrategySettings:
         # Phase 3 정밀 필터 (현재가 API 기반)
         MIN_PCT_FROM_OPEN = 0.8                 # 시가 대비 최소 상승률 (%)
         MAX_PCT_FROM_OPEN = 4.0                 # 시가 대비 최대 상승률 (%)
-        MAX_GAP_PCT = 3.0                       # 시가 vs 전일종가 갭 최대 (%)
+        MAX_GAP_PCT = 3.0                       # 시가 vs 전일종가 갭 최대 (%, 상방)
+        MIN_GAP_DOWN_PCT = -2.0                 # 시가 vs 전일종가 갭다운 하한 (실거래: -2% 이하 승률 9%)
         MAX_PHASE3_CHECKS = 15                  # Phase3 최대 검증 종목 수
 
         # 제한

@@ -86,6 +86,7 @@ def apply_screener_filter(
     min_price=5000, max_price=500000,
     min_amount=1_000_000_000,
     max_gap_pct=3.0,
+    min_gap_down_pct=-2.0,
 ):
     """
     스크리너 필터 적용 (Phase 1 + Phase 2 시뮬레이션)
@@ -127,8 +128,10 @@ def apply_screener_filter(
         # 갭 필터 (시가 vs 전일종가)
         prev_close = prev_close_map.get(stock_code)
         if prev_close and prev_close > 0:
-            gap_pct = abs(day_open / prev_close - 1) * 100
-            if gap_pct > max_gap_pct:
+            signed_gap_pct = (day_open / prev_close - 1) * 100
+            if abs(signed_gap_pct) > max_gap_pct:
+                continue
+            if signed_gap_pct < min_gap_down_pct:
                 continue
 
         passed.add(stock_code)

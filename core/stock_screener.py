@@ -262,6 +262,7 @@ class StockScreener:
         min_pct = self.config.get('min_pct_from_open', 0.8)
         max_pct = self.config.get('max_pct_from_open', 4.0)
         max_gap = self.config.get('max_gap_pct', 3.0)
+        min_gap_down = self.config.get('min_gap_down_pct', -2.0)
         max_per_scan = self.config.get('max_candidates_per_scan', 5)
 
         candidates = []
@@ -319,11 +320,21 @@ class StockScreener:
 
                 # 갭 필터 (시가 vs 전일종가)
                 if prev_close > 0:
-                    gap_pct = abs(open_price / prev_close - 1) * 100
-                    if gap_pct > max_gap:
+                    signed_gap_pct = (open_price / prev_close - 1) * 100
+                    # 상방 갭 제한 (abs 기존 유지)
+                    if abs(signed_gap_pct) > max_gap:
                         self.logger.debug(
                             f"[스크리너] {code}({name}): "
-                            f"갭 {gap_pct:.1f}% > {max_gap}%"
+                            f"갭 {signed_gap_pct:+.1f}% (상한 {max_gap}%)"
+                        )
+                        self._rejected_stocks.add(code)
+                        rejected_reasons['gap_filter'] += 1
+                        continue
+                    # 갭다운 하한 제한 (실거래 검증: -2% 이하 승률 9%)
+                    if signed_gap_pct < min_gap_down:
+                        self.logger.debug(
+                            f"[스크리너] {code}({name}): "
+                            f"갭다운 {signed_gap_pct:+.1f}% < {min_gap_down}%"
                         )
                         self._rejected_stocks.add(code)
                         rejected_reasons['gap_filter'] += 1
