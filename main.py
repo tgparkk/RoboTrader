@@ -565,6 +565,7 @@ class DayTradingBot:
                     else:
                         minute_normalized = (raw_candle_time.minute // 3) * 3  # 3분 단위
                     current_candle_time = raw_candle_time.replace(minute=minute_normalized, second=0, microsecond=0)
+
                     await self.decision_engine.execute_real_buy(
                         trading_stock,
                         buy_reason,
@@ -828,10 +829,10 @@ class DayTradingBot:
                     await self._refresh_api()
                     last_api_refresh = current_time
 
-                # 🆕 장중 종목 실시간 데이터 업데이트 (매분 13~45초 사이에 실행)
-                # 13~45초 구간에서는 이전 실행으로부터 최소 13초 이상 간격만 유지
+                # 장중 종목 실시간 데이터 업데이트 (매분 3~55초 사이에 실행)
+                # 캔들 완성 후 빠른 감지를 위해 3초부터 시작 (기존 13초 → 3초)
                 # 장 마감 후 분봉 조회는 불필요 (데이터 저장은 아래 별도 블록에서 처리)
-                if 13 <= current_time.second <= 45 and (current_time - last_intraday_update).total_seconds() >= 13:
+                if 3 <= current_time.second <= 55 and (current_time - last_intraday_update).total_seconds() >= 5:
                     if is_market_open():
                         await self._update_intraday_data()
                         last_intraday_update = current_time
@@ -1313,8 +1314,8 @@ class DayTradingBot:
             # 모든 관리 종목의 실시간 데이터 업데이트 (재거래를 위해 COMPLETED, FAILED 상태도 포함)
             await self.intraday_manager.batch_update_realtime_data()
 
-            # 🆕 데이터 수집 후 1초 대기 (데이터 안정화)
-            await asyncio.sleep(1)
+            # 데이터 수집 후 0.3초 대기 (reconfirm이 2차 검증하므로 최소 대기)
+            await asyncio.sleep(0.3)
 
             # 🆕 최근 3분 데이터 재확인 (volume=0 but price changed 감지 및 재조회)
             updated_stocks = await reconfirm_intraday_data(
@@ -1324,21 +1325,22 @@ class DayTradingBot:
             if updated_stocks:
                 self.logger.info(f"🔄 데이터 재확인 완료: {len(updated_stocks)}개 종목 업데이트됨")
 
-            # 🆕 n분봉 완성 + 10초 후 시점 체크 (전략 설정 기반)
+            # n분봉 완성 + 3초 후 시점 체크 (전략 설정 기반)
             from config.strategy_settings import get_candle_interval
             candle_interval = get_candle_interval()
 
             minute_in_cycle = current_time.minute % candle_interval
             current_second = current_time.second
 
-            # n분봉 사이클의 첫 번째 분이고 10초 이후일 때만 매수 판단
-            is_candle_completed = (minute_in_cycle == 0 and current_second >= 10)
+            # n분봉 사이클의 첫 번째 분이고 5초 이후일 때만 매수 판단
+            # 기존 10초 → 5초: 슬리피지 감소 + 데이터 안정성 균형
+            is_candle_completed = (minute_in_cycle == 0 and current_second >= 5)
 
             if not is_candle_completed:
-                self.logger.debug(f"⏱️ {candle_interval}분봉 미완성 또는 10초 미경과: {current_time.strftime('%H:%M:%S')} - 매수 판단 건너뜀")
+                self.logger.debug(f"⏱️ {candle_interval}분봉 미완성 또는 5초 미경과: {current_time.strftime('%H:%M:%S')} - 매수 판단 건너뜀")
                 return
 
-            # 🆕 데이터 업데이트 직후 매수 판단 실행 (3분봉 완성 + 10초 후)
+            # 데이터 업데이트 직후 매수 판단 실행
             # 매수 중단 시간 전이고 SELECTED/COMPLETED 상태 종목만 매수 판단 - 동적 시간 적용
             should_stop_buy = MarketHours.should_stop_buying('KRX', current_time)
 
