@@ -451,6 +451,108 @@ class StockScreener:
 
         return round(score, 1)
 
+    # ===== 프리로드 메서드 =====
+
+    def preload_previous_day_stocks(self, top_n: int = 30) -> List[ScreenedStock]:
+        """
+        전일 거래대금 상위 종목을 프리로드 (장 시작 전 호출)
+
+        시뮬레이션 분석 결과, 09:00 첫 분봉 진입이 가장 수익률 높음.
+        장 시작 전에 전일 상위 종목을 후보로 등록하여 09:00부터 매수 판단 가능.
+
+        Args:
+            top_n: 전일 거래대금 상위 N개 종목
+
+        Returns:
+            프리로드된 종목 리스트
+        """
+        import psycopg2
+        from config.settings import PG_HOST, PG_PORT, PG_DATABASE, PG_USER, PG_PASSWORD
+
+        try:
+            conn = psycopg2.connect(
+                host=PG_HOST, port=PG_PORT, database=PG_DATABASE,
+                user=PG_USER, password=PG_PASSWORD
+            )
+            cur = conn.cursor()
+
+            # 최근 거래일 조회
+            cur.execute('''
+                SELECT DISTINCT trade_date FROM minute_candles
+                ORDER BY trade_date DESC LIMIT 2
+            ''')
+            dates = [row[0] for row in cur.fetchall()]
+            if not dates:
+                self.logger.warning("[프리로드] minute_candles에 데이터 없음")
+                cur.close()
+                conn.close()
+                return []
+
+            prev_date = dates[0]  # 가장 최근 거래일
+
+            # 전일 거래대금 상위 종목 조회
+            min_price = self.config.get('min_price', 5000)
+            max_price = self.config.get('max_price', 500000)
+
+            cur.execute('''
+                SELECT
+                    stock_code,
+                    MIN(CASE WHEN time >= '090000' AND time <= '090300' THEN open END) as day_open,
+                    SUM(amount) as daily_amount,
+                    MAX(close) as last_close
+                FROM minute_candles
+                WHERE trade_date = %s
+                GROUP BY stock_code
+                HAVING MIN(CASE WHEN time >= '090000' AND time <= '090300' THEN open END) IS NOT NULL
+                ORDER BY SUM(amount) DESC
+                LIMIT %s
+            ''', [prev_date, top_n * 2])  # 필터링 여유분
+
+            candidates = []
+            for row in cur.fetchall():
+                stock_code, day_open, daily_amount, last_close = row
+
+                # 우선주 제외
+                if stock_code[-1] == '5':
+                    continue
+
+                # 가격 필터
+                if not (min_price <= float(last_close or 0) <= max_price):
+                    continue
+
+                # 이미 추가된 종목 스킵
+                if stock_code in self._added_stocks:
+                    continue
+
+                candidates.append(ScreenedStock(
+                    code=stock_code,
+                    name=f"PRE_{stock_code}",  # 실제 이름은 main.py에서 API 조회
+                    market='KOSPI',
+                    current_price=int(last_close or 0),
+                    change_rate=0.0,
+                    open_price=int(day_open or 0),
+                    pct_from_open=0.0,
+                    volume=0,
+                    trading_amount=int(daily_amount or 0),
+                    score=float(daily_amount or 0) / 1_000_000_000,  # 거래대금(억) 기준
+                    reason=f"전일거래대금상위(거래대금:{int(daily_amount or 0) / 100_000_000:.0f}억)",
+                ))
+
+                if len(candidates) >= top_n:
+                    break
+
+            cur.close()
+            conn.close()
+
+            self.logger.info(
+                f"[프리로드] 전일({prev_date}) 거래대금 상위 {len(candidates)}개 종목 선정"
+            )
+            return candidates
+
+        except Exception as e:
+            self.logger.error(f"[프리로드] 오류: {e}")
+            return []
+
     # ===== 유틸리티 메서드 =====
 
     def _extract_stock_code(self, stock: Dict) -> str:

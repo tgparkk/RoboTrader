@@ -311,13 +311,20 @@ class DayTradingBot:
         try:
 
             self.logger.info("🤖 매매 의사결정 태스크 시작")
-            
+
             last_condition_check = datetime(2000, 1, 1, tzinfo=KST)  # 초기값
-            
+            preload_done_today = None  # 프리로드 실행 날짜 추적
+
             while self.is_running:
                 if not is_market_open():
                     await asyncio.sleep(60)  # 장 마감 시 1분 대기
                     continue
+
+                # 전일 상위 종목 프리로드 (장 시작 시 1회)
+                today_date = now_kst().date()
+                if preload_done_today != today_date:
+                    preload_done_today = today_date
+                    await self._preload_stock_candidates()
                 
                 current_time = now_kst()
 
@@ -1228,6 +1235,69 @@ class DayTradingBot:
         except Exception as e:
             self.logger.error(f"[스크리너] 스크리닝 오류: {e}")
             await self.telegram.notify_error("Stock Screener", e)
+
+    async def _preload_stock_candidates(self):
+        """전일 거래대금 상위 종목을 장 시작 전 프리로드
+
+        시뮬 분석: 09:00 진입이 가장 수익률 높음 (전체 거래의 55%, 평균 +1.66%)
+        기존 스크리너 첫 스캔 09:05 → 실제 진입 09:15+ → 최적 타이밍 놓침
+        프리로드로 09:00 첫 분봉부터 매수 판단 가능
+        """
+        try:
+            from core.candidate_selector import CandidateStock
+
+            self.logger.info("[프리로드] 전일 상위 종목 프리로드 시작")
+
+            loop = asyncio.get_event_loop()
+            preloaded = await loop.run_in_executor(
+                None, self.stock_screener.preload_previous_day_stocks
+            )
+
+            if not preloaded:
+                self.logger.info("[프리로드] 프리로드 대상 종목 없음")
+                return
+
+            added_count = 0
+            candidates_to_save = []
+            for stock in preloaded:
+                if not stock.code:
+                    continue
+
+                # 전날 종가 = 프리로드 시 current_price에 저장해둔 값
+                prev_close = float(stock.current_price) if stock.current_price else 0.0
+
+                selection_reason = f"프리로드: {stock.reason}"
+                success = await self.trading_manager.add_selected_stock(
+                    stock_code=stock.code,
+                    stock_name=stock.name,
+                    selection_reason=selection_reason,
+                    prev_close=prev_close
+                )
+
+                if success:
+                    self.stock_screener.mark_stock_added(stock.code)
+                    added_count += 1
+                    candidates_to_save.append(
+                        CandidateStock(
+                            code=stock.code,
+                            name=stock.name,
+                            market=stock.market,
+                            score=stock.score,
+                            reason=selection_reason
+                        )
+                    )
+
+            # DB 저장
+            if candidates_to_save:
+                try:
+                    self.db_manager.save_candidate_stocks(candidates_to_save)
+                except Exception as db_err:
+                    self.logger.error(f"[프리로드] DB 저장 오류: {db_err}")
+
+            self.logger.info(f"[프리로드] {added_count}개 종목 거래 풀 추가 완료")
+
+        except Exception as e:
+            self.logger.error(f"[프리로드] 오류: {e}")
 
     async def _update_intraday_data(self):
         """장중 종목 실시간 데이터 업데이트 + 매수 판단 실행 (완성된 분봉만 수집)"""

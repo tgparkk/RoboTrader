@@ -47,17 +47,22 @@ def get_prev_close_map(cur, trade_date, prev_date):
     return {row[0]: row[1] for row in cur.fetchall()}
 
 
-def get_daily_metrics(cur, trade_date):
+def get_daily_metrics(cur, trade_date, volume_cutoff='093000'):
     """
     해당 거래일의 종목별 일간 지표 계산
 
+    Args:
+        volume_cutoff: 스크리너 거래대금 랭킹 기준 시간 (기본 09:30, 미래참조 방지)
+                       실거래 스크리너는 09:05부터 2분 주기 스캔하므로 초반 데이터만 사용
+
     Returns:
-        {stock_code: {day_open, daily_amount, first_close, last_close, max_price, min_price}}
+        {stock_code: {day_open, early_amount, daily_amount, max_price, min_price}}
     """
     cur.execute('''
         SELECT
             stock_code,
             MIN(CASE WHEN time >= '090000' AND time <= '090300' THEN open END) as day_open,
+            SUM(CASE WHEN time <= %s THEN amount ELSE 0 END) as early_amount,
             SUM(amount) as daily_amount,
             MAX(close) as max_price,
             MIN(close) as min_price
@@ -65,14 +70,15 @@ def get_daily_metrics(cur, trade_date):
         WHERE trade_date = %s
         GROUP BY stock_code
         HAVING COUNT(*) >= 50
-    ''', [trade_date])
+    ''', [volume_cutoff, trade_date])
 
     metrics = {}
     for row in cur.fetchall():
-        stock_code, day_open, daily_amount, max_price, min_price = row
+        stock_code, day_open, early_amount, daily_amount, max_price, min_price = row
         if day_open and day_open > 0 and daily_amount:
             metrics[stock_code] = {
                 'day_open': float(day_open),
+                'early_amount': float(early_amount or 0),
                 'daily_amount': float(daily_amount),
                 'max_price': float(max_price),
                 'min_price': float(min_price),
@@ -91,23 +97,28 @@ def apply_screener_filter(
     """
     스크리너 필터 적용 (Phase 1 + Phase 2 시뮬레이션)
 
-    Phase 1 시뮬: 거래대금 상위 top_n개 선별 (거래량순위 API 대용)
+    Phase 1 시뮬: 초반 거래대금(~09:30) 상위 top_n개 선별 (거래량순위 API 대용)
     Phase 2: 가격 범위, 거래대금, 갭 필터
 
     Args:
-        daily_metrics: {stock_code: {day_open, daily_amount, max_price, min_price}}
+        daily_metrics: {stock_code: {day_open, early_amount, daily_amount, ...}}
         prev_close_map: {stock_code: prev_close}
         top_n: 거래대금 상위 N개 (volume rank API 시뮬)
 
     Returns:
         스크리너 통과 종목 set
     """
-    # Phase 1: 거래대금 상위 N개
+    # Phase 1: 초반 거래대금 상위 N개 (미래참조 제거)
+    # 실거래: 09:05부터 거래량순위 API → 그 시점 누적 거래대금 기준
     ranked = sorted(
         daily_metrics.items(),
-        key=lambda x: x[1]['daily_amount'],
+        key=lambda x: x[1].get('early_amount', x[1]['daily_amount']),
         reverse=True
     )[:top_n]
+
+    # 초반 거래대금 최소 기준 (종일 10억의 15% ≈ 1.5억)
+    # 실거래에서도 스캔 시점 누적 거래대금으로 필터링함
+    min_early_amount = min_amount * 0.15
 
     passed = set()
     for stock_code, metrics in ranked:
@@ -121,8 +132,9 @@ def apply_screener_filter(
         if not (min_price <= day_open <= max_price):
             continue
 
-        # 거래대금 필터
-        if metrics['daily_amount'] < min_amount:
+        # 거래대금 필터 (초반 거래대금 기준)
+        early_amt = metrics.get('early_amount', metrics['daily_amount'])
+        if early_amt < min_early_amount:
             continue
 
         # 갭 필터 (시가 vs 전일종가)
