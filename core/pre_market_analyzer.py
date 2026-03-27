@@ -189,11 +189,9 @@ class PreMarketAnalyzer:
                     report.log_lines.insert(0, f"서킷브레이커: {self._circuit_breaker_reason}")
                     logger.warning(f"[프리마켓] 서킷브레이커 발동 (NXT 없음): {self._circuit_breaker_reason}")
                 elif self._prev_day_decline_active:
-                    # 전일 하락 → 손절/익절 축소 (매수는 유지)
-                    report.recommended_stop_loss_pct = pm.PREV_DAY_DECLINE_STOP_LOSS_RATIO
-                    report.recommended_take_profit_pct = pm.PREV_DAY_DECLINE_TAKE_PROFIT_RATIO
-                    report.log_lines.insert(0, f"전일 하락 -> 손절 {pm.PREV_DAY_DECLINE_STOP_LOSS_RATIO:.0%}/익절 {pm.PREV_DAY_DECLINE_TAKE_PROFIT_RATIO:.0%} 축소")
-                    logger.info(f"[프리마켓] 전일 하락 손절축소 적용 (NXT 없음)")
+                    # 전일 하락 감지 (로깅 전용 — SL/TP는 5%/6% 유지)
+                    report.log_lines.insert(0, "전일 하락 감지 -> SL/TP 정상 유지 (03-24 멀티버스: 축소 역효과)")
+                    logger.info("[프리마켓] 전일 하락 감지 (NXT 없음) — SL/TP 정상 유지")
                 self._report = report
                 return self._report
 
@@ -215,63 +213,46 @@ class PreMarketAnalyzer:
             from config.strategy_settings import StrategySettings
             pm = StrategySettings.PreMarket
 
-            # 서킷브레이커 발동 시 → NXT 갭으로 해제 가능 여부 체크
+            # SL/TP는 항상 5%/6% (03-24 멀티버스: 축소는 모든 시나리오에서 역효과)
+            # 장중 동적 SL(지수 -0.7%→3%)만 check_intraday_index()에서 별도 적용
+            rec_stop_loss = 0.05
+            rec_take_profit = 0.06
+
+            # 포지션 수만 sentiment별 조정
             if self._circuit_breaker_active:
                 if gap_pct >= pm.CIRCUIT_BREAKER_RELEASE_GAP_PCT:
                     # 강한 반등 신호 → 서킷브레이커 해제, 정상 모드 복귀
                     self._circuit_breaker_active = False
-                    self._prev_day_decline_active = False  # 손절축소도 해제
+                    self._prev_day_decline_active = False
                     release_reason = (
                         f"NXT 갭 {gap_pct:+.2f}% >= {pm.CIRCUIT_BREAKER_RELEASE_GAP_PCT}%로 "
                         f"서킷브레이커 해제 (정상 복귀)"
                     )
                     self._circuit_breaker_reason = release_reason
                     logger.info(f"[서킷브레이커] {release_reason}")
-                    rec_max_pos = pm.FALLBACK_MAX_POSITIONS  # 3종목
-                    rec_stop_loss = 0.05
-                    rec_take_profit = 0.06
-                    sentiment = 'neutral'  # 정상 모드 복귀
+                    rec_max_pos = pm.FALLBACK_MAX_POSITIONS
+                    sentiment = 'neutral'
                 else:
                     rec_max_pos = 0
-                    rec_stop_loss = pm.BEARISH_STOP_LOSS_RATIO
-                    rec_take_profit = pm.BEARISH_TAKE_PROFIT_RATIO
                     sentiment = 'circuit_breaker'
             elif sentiment == 'extreme_bearish':
-                # NXT 급락 → 전일 상관없이 매수 완전 중단
                 rec_max_pos = pm.EXTREME_BEARISH_MAX_POSITIONS
-                rec_stop_loss = pm.BEARISH_STOP_LOSS_RATIO
-                rec_take_profit = pm.BEARISH_TAKE_PROFIT_RATIO
                 logger.warning(
                     f"[프리마켓] 극약세 감지 (sentiment={sentiment_score:+.2f}) -> 매수 완전 중단"
                 )
             elif sentiment == 'very_bearish':
-                # NXT 강약세 → 손절축소, 매수는 허용
                 rec_max_pos = pm.VERY_BEARISH_MAX_POSITIONS
-                rec_stop_loss = pm.VERY_BEARISH_STOP_LOSS_RATIO
-                rec_take_profit = pm.VERY_BEARISH_TAKE_PROFIT_RATIO
                 logger.warning(
-                    f"[프리마켓] 강약세 감지 (sentiment={sentiment_score:+.2f}) -> 손절축소 {rec_stop_loss:.0%}/{rec_take_profit:.0%}, 매수 허용(최대 {rec_max_pos}종목)"
+                    f"[프리마켓] 강약세 감지 (sentiment={sentiment_score:+.2f}) -> 포지션 축소(최대 {rec_max_pos}종목)"
                 )
             elif sentiment == 'bearish':
-                # 서킷브레이커 미발동이지만 NXT 약세 → 복합 조건 체크
                 if self._check_circuit_breaker_with_gap(gap_pct):
                     rec_max_pos = 0
-                    rec_stop_loss = pm.BEARISH_STOP_LOSS_RATIO
-                    rec_take_profit = pm.BEARISH_TAKE_PROFIT_RATIO
                     sentiment = 'circuit_breaker'
                 else:
                     rec_max_pos = pm.BEARISH_MAX_POSITIONS
-                    rec_stop_loss = pm.BEARISH_STOP_LOSS_RATIO
-                    rec_take_profit = pm.BEARISH_TAKE_PROFIT_RATIO
             else:
                 rec_max_pos = pm.FALLBACK_MAX_POSITIONS
-                # 전일 하락 시 손절/익절 축소 (매수는 유지)
-                if self._prev_day_decline_active:
-                    rec_stop_loss = pm.PREV_DAY_DECLINE_STOP_LOSS_RATIO
-                    rec_take_profit = pm.PREV_DAY_DECLINE_TAKE_PROFIT_RATIO
-                else:
-                    rec_stop_loss = 0.05
-                    rec_take_profit = 0.06
 
             # 로그 라인 생성
             log_lines = []
@@ -282,7 +263,7 @@ class PreMarketAnalyzer:
             if sentiment == 'very_bearish':
                 log_lines.append(f"강약세: NXT sentiment {sentiment_score:+.2f} <= {pm.VERY_BEARISH_THRESHOLD} -> 손절축소, 매수 허용")
             if self._prev_day_decline_active and sentiment not in ('circuit_breaker', 'extreme_bearish', 'very_bearish', 'bearish'):
-                log_lines.append(f"전일 하락 -> 손절 {rec_stop_loss:.0%}/익절 {rec_take_profit:.0%} 축소")
+                log_lines.append("전일 하락 감지 -> SL/TP 정상 유지")
             log_lines.extend([
                 f"시장 심리: {sentiment.upper()} ({sentiment_score:+.2f})",
                 f"예상 갭: {gap_direction} ({gap_pct:+.2f}%)",
@@ -397,8 +378,8 @@ class PreMarketAnalyzer:
                         expected_gap_pct=worst_gap,
                         volatility_level='high',
                         recommended_max_positions=0,
-                        recommended_stop_loss_pct=pm.BEARISH_STOP_LOSS_RATIO,
-                        recommended_take_profit_pct=pm.BEARISH_TAKE_PROFIT_RATIO,
+                        recommended_stop_loss_pct=0.05,
+                        recommended_take_profit_pct=0.06,
                         nxt_available=True,
                         snapshot_count=0,
                         log_lines=[f"장시작갭 서킷브레이커: {reason}"],
@@ -502,8 +483,8 @@ class PreMarketAnalyzer:
                         expected_gap_pct=worst_gap,
                         volatility_level='high',
                         recommended_max_positions=0,
-                        recommended_stop_loss_pct=pm.BEARISH_STOP_LOSS_RATIO,
-                        recommended_take_profit_pct=pm.BEARISH_TAKE_PROFIT_RATIO,
+                        recommended_stop_loss_pct=0.05,
+                        recommended_take_profit_pct=0.06,
                         nxt_available=True,
                         snapshot_count=0,
                         log_lines=[f"장중지수 서킷브레이커: {reason}"],
@@ -521,8 +502,8 @@ class PreMarketAnalyzer:
                 if self._report:
                     self._report.recommended_max_positions = max(1, pm.BEARISH_MAX_POSITIONS // 2)
                     self._report.market_sentiment = 'bearish'
-                    self._report.recommended_stop_loss_pct = pm.BEARISH_STOP_LOSS_RATIO
-                    self._report.recommended_take_profit_pct = pm.BEARISH_TAKE_PROFIT_RATIO
+                    self._report.recommended_stop_loss_pct = 0.05
+                    self._report.recommended_take_profit_pct = 0.06
                     self._report.log_lines.insert(0, f"장중지수 회복: {reason}")
                 return self._report
 
@@ -634,10 +615,10 @@ class PreMarketAnalyzer:
 
     def _check_circuit_breaker(self):
         """
-        전일 지수 등락률 기반 서킷브레이커 + 손절축소 체크
+        전일 지수 등락률 기반 서킷브레이커 체크
 
         조건1: 전일 KOSPI 또는 KOSDAQ -3% 이상 하락 → 매수 완전 중단
-        조건1b: 전일 -1% 이하 → 매수는 유지하되 손절 3%/익절 4%로 축소
+        조건1b: 전일 -1% 이하 → 로깅 전용 (SL/TP는 5%/6% 유지, 03-24 멀티버스 결과)
         """
         from config.strategy_settings import StrategySettings
         pm = StrategySettings.PreMarket
@@ -668,12 +649,12 @@ class PreMarketAnalyzer:
                     f"[서킷브레이커] 발동! {self._circuit_breaker_reason} -> 매수 완전 중단"
                 )
             elif worst_ret <= pm.PREV_DAY_DECLINE_THRESHOLD:
-                # 서킷브레이커는 아니지만 전일 하락 → 손절/익절 축소 플래그
+                # 서킷브레이커는 아니지만 전일 하락 감지 (로깅 전용)
                 self._prev_day_decline_active = True
                 idx_name = "KOSPI" if kospi_ret <= kosdaq_ret else "KOSDAQ"
                 logger.info(
                     f"[서킷브레이커] 전일 {idx_name} {worst_ret:+.2f}% "
-                    f"(임계값 {pm.PREV_DAY_DECLINE_THRESHOLD}%) -> 손절/익절 축소 적용"
+                    f"(임계값 {pm.PREV_DAY_DECLINE_THRESHOLD}%) -> 전일 하락 감지 (SL/TP 정상 유지)"
                 )
 
         except Exception as e:

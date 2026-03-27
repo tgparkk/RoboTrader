@@ -104,15 +104,11 @@ class StrategySettings:
         EXTREME_BEARISH_THRESHOLD = -0.9        # 이 이하면 극약세 (매수 중단)
         BULLISH_THRESHOLD = 0.3                 # 이 이상이면 강세
 
-        # 약세장 파라미터 조정
+        # 약세장 포지션 축소 (SL/TP는 항상 5%/6% — 03-24 멀티버스: 축소는 모든 시나리오에서 역효과)
         BEARISH_MAX_POSITIONS = 3               # 5 → 3
-        BEARISH_STOP_LOSS_RATIO = 0.05          # 멀티버스 검증: 축소 없이 5% 유지가 최적 (03-24)
-        BEARISH_TAKE_PROFIT_RATIO = 0.06        # 멀티버스 검증: 축소 없이 6% 유지가 최적 (03-24)
 
         # 강약세장 (sentiment -0.7~-0.9: 매수 허용, 포지션 축소)
         VERY_BEARISH_MAX_POSITIONS = 3          # 포지션 축소
-        VERY_BEARISH_STOP_LOSS_RATIO = 0.05     # 멀티버스 검증: 축소 없이 5% 유지가 최적 (03-24)
-        VERY_BEARISH_TAKE_PROFIT_RATIO = 0.06   # 멀티버스 검증: 축소 없이 6% 유지가 최적 (03-24)
 
         # 극약세장 (sentiment <= -0.9: 매수 완전 중단)
         EXTREME_BEARISH_MAX_POSITIONS = 0       # 매수 중단
@@ -121,10 +117,8 @@ class StrategySettings:
         # 조건1: 전일 KOSPI 또는 KOSDAQ 등락률이 이 값 이하 → 매수 중단
         CIRCUIT_BREAKER_PREV_DAY_PCT = -3.0     # 전일 -3% 이상 하락 (4년 시뮬: -3% 이하만 마이너스)
 
-        # 조건1b: 전일 -1% 이하 감지 (로깅용, SL/TP는 정상 유지)
-        PREV_DAY_DECLINE_THRESHOLD = -1.0       # 전일 -1% 이하 시
-        PREV_DAY_DECLINE_STOP_LOSS_RATIO = 0.05  # 멀티버스 검증: 축소 없이 5% 유지가 최적 (03-24)
-        PREV_DAY_DECLINE_TAKE_PROFIT_RATIO = 0.06  # 멀티버스 검증: 축소 없이 6% 유지가 최적 (03-24)
+        # 조건1b: 전일 -1% 이하 감지 (로깅 전용 — SL/TP는 항상 5%/6% 유지)
+        PREV_DAY_DECLINE_THRESHOLD = -1.0       # 전일 -1% 이하 시 로깅
         # 조건2: 전일 -1% 이하 + 당일 NXT 갭 이 값 이하 → 매수 중단
         CIRCUIT_BREAKER_PREV_DAY_PCT_WITH_GAP = -1.0  # 전일 -1% 하락
         CIRCUIT_BREAKER_NXT_GAP_PCT = -0.5            # + NXT 갭 -0.5%
@@ -150,7 +144,7 @@ class StrategySettings:
 
         # NXT 실패 시 기본값
         FALLBACK_SENTIMENT = 'neutral'
-        FALLBACK_MAX_POSITIONS = 3
+        FALLBACK_MAX_POSITIONS = 5               # 정상=5종목 (3→5 수정: NXT 성공 시에도 neutral/bullish는 5종목이어야 함)
 
     # ========================================
     # 눌림목 캔들패턴 전략 설정 (pullback)
