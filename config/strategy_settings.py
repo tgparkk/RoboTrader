@@ -44,6 +44,8 @@ class StrategySettings:
         MAX_PRE_VOLATILITY = 1.2     # 진입 전 10봉 변동성 상한 (%) — 0.8→1.2 (익절 특성 분석 최적화)
         MAX_PRE20_MOMENTUM = 2.0     # 진입 전 20봉 모멘텀 상한 (%) — 1.5→2.0 (시뮬 최적화)
         MIN_RISING_CANDLES = 3       # 직전 N봉 대비 상승 확인 (0이면 비활성)
+        MIN_VOLUME_RATIO = 0         # 신호 캔들 거래량 > 직전 5봉 평균 × 이 값 (0이면 비활성)
+                                         # 03-28 멀티버스: 5종목+vol1.2x는 최근1M 개선되나, 7종목에서는 역효과 (+15.6%→+7.6%)
 
         # 손익 설정 (trading_config.json의 설정을 따름)
         # stop_loss_ratio: 0.05 (-5.0%)
@@ -51,7 +53,7 @@ class StrategySettings:
 
         # 거래 제한
         ONE_TRADE_PER_STOCK_PER_DAY = True  # 하루에 종목당 1회만 거래
-        MAX_DAILY_POSITIONS = 5              # 최대 동시 보유 종목 수 (거래금액순 통일 후 5종목이 +325% vs 3종목 +187%)
+        MAX_DAILY_POSITIONS = 7              # 최대 동시 보유 종목 수 (03-28 멀티버스: 7종목 +280% vs 5종목 +216%)
 
     # ========================================
     # 실시간 종목 스크리너 설정
@@ -144,7 +146,7 @@ class StrategySettings:
 
         # NXT 실패 시 기본값
         FALLBACK_SENTIMENT = 'neutral'
-        FALLBACK_MAX_POSITIONS = 5               # 정상=5종목 (3→5 수정: NXT 성공 시에도 neutral/bullish는 5종목이어야 함)
+        FALLBACK_MAX_POSITIONS = 7               # 정상=7종목 (5→7: 03-28 멀티버스 최적화)
 
     # ========================================
     # 눌림목 캔들패턴 전략 설정 (pullback)

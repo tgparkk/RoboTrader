@@ -51,6 +51,7 @@ class PricePositionStrategy:
             'max_pre_volatility': pp.MAX_PRE_VOLATILITY,
             'max_pre20_momentum': pp.MAX_PRE20_MOMENTUM,
             'min_rising_candles': pp.MIN_RISING_CANDLES,
+            'min_volume_ratio': pp.MIN_VOLUME_RATIO,
         }
 
     # 기본 설정값 (설정 파일에서 로드, 클래스 초기화 시 사용)
@@ -188,6 +189,17 @@ class PricePositionStrategy:
                 pre20_momentum = (pre20_candles.iloc[-1]['close'] / pre20_candles.iloc[0]['open'] - 1) * 100
                 if pre20_momentum > max_mom:
                     return False, f"20봉 모멘텀 {pre20_momentum:+.2f}% > +{max_mom}%"
+
+        # 거래량 확인 필터: 신호 캔들 거래량 > 직전 5봉 평균 × N배
+        vol_ratio = self.config.get('min_volume_ratio', 0)
+        if vol_ratio and vol_ratio > 0 and 'volume' in df.columns:
+            pre5_start = max(0, candle_idx - 5)
+            pre5_vol = df.iloc[pre5_start:candle_idx]['volume']
+            if len(pre5_vol) >= 3:
+                avg_vol = pre5_vol.mean()
+                cur_vol = df.iloc[candle_idx]['volume']
+                if avg_vol > 0 and cur_vol < avg_vol * vol_ratio:
+                    return False, f"거래량 부족 {cur_vol:.0f} < {avg_vol:.0f}x{vol_ratio}"
 
         # 방향성 필터: 직전 N봉 대비 상승 확인
         rising_n = self.config.get('min_rising_candles', 0)
