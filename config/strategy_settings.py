@@ -62,7 +62,7 @@ class StrategySettings:
         ENABLED = True                          # 스크리너 사용 여부
         SCAN_INTERVAL_SECONDS = 120             # 스캔 주기 (2분)
         SCAN_START_HOUR = 9                     # 스캔 시작 시 (9시)
-        SCAN_START_MINUTE = 5                   # 스캔 시작 분 (9:05)
+        SCAN_START_MINUTE = 1                   # 스캔 시작 분 (9:01) — 09:05→09:01: 09:10 진입 가능하도록 앞당김
         SCAN_END_HOUR = 11                      # 스캔 종료 시 (11시)
         SCAN_END_MINUTE = 50                    # 스캔 종료 분 (11:50)
 

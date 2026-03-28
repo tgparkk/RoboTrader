@@ -430,7 +430,7 @@ class DayTradingBot:
             self.logger.error(f"❌ 매매 판단 시스템 오류: {e}")
     
     async def _analyze_buy_decision(self, trading_stock, available_funds: float = None):
-        """매수 판단 분석 (완성된 3분봉만 사용)
+        """매수 판단 분석 (완성된 1분봉 기준)
 
         Args:
             trading_stock: 거래 대상 주식
