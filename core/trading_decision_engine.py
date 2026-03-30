@@ -643,7 +643,18 @@ class TradingDecisionEngine:
                 # 플래그가 false이거나 없으면 기본값 사용 (프리마켓 동적 조정 적용)
                 take_profit_percent = self.get_effective_take_profit() * 100
                 stop_loss_percent = self.get_effective_stop_loss() * 100
-            
+
+            # === ATR 동적 TP/SL 오버라이드 ===
+            from config.strategy_settings import StrategySettings as _SS
+            _PP = _SS.PricePosition
+            if _PP.ATR_DYNAMIC_TP_SL_ENABLED:
+                if trading_stock.atr_take_profit_pct is not None:
+                    # TP: ATR 값과 기존 값 중 작은 값 (서킷브레이커 TP 축소 보호)
+                    take_profit_percent = min(trading_stock.atr_take_profit_pct, take_profit_percent)
+                if trading_stock.atr_stop_loss_pct is not None:
+                    # SL: ATR 값과 기존 값 중 작은 값 (장중 동적 SL 보호)
+                    stop_loss_percent = min(trading_stock.atr_stop_loss_pct, stop_loss_percent)
+
             # 익절 조건: config에서 설정한 % 이상
             if profit_rate_percent >= take_profit_percent:
                 return True, f"익절 {profit_rate_percent:.1f}% (기준: +{take_profit_percent:.1f}%)"

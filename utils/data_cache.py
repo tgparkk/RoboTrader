@@ -459,3 +459,60 @@ class DailyDataCache:
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context Manager 종료"""
         pass
+
+
+def get_stock_atr(stock_code: str, trade_date: str = None, lookback_days: int = 20):
+    """
+    종목의 최근 N일 ATR(%) 계산. daily_candles 테이블 사용.
+
+    Returns:
+        ATR (%) 또는 None (데이터 부족 시)
+    """
+    if trade_date is None:
+        from datetime import datetime as _dt
+        trade_date = _dt.now().strftime('%Y%m%d')
+
+    pool = _get_pg_pool()
+    conn = pool.getconn()
+    try:
+        cur = conn.cursor()
+        cur.execute('''
+            SELECT AVG(atr_val) as atr_pct, COUNT(*) as cnt
+            FROM (
+                SELECT (CAST(stck_hgpr AS FLOAT) - CAST(stck_lwpr AS FLOAT))
+                       / NULLIF(CAST(stck_clpr AS FLOAT), 0) * 100 as atr_val
+                FROM daily_candles
+                WHERE stock_code = %s
+                  AND stck_bsop_date < %s
+                  AND CAST(stck_clpr AS FLOAT) > 0
+                  AND CAST(stck_hgpr AS FLOAT) > 0
+                  AND CAST(stck_lwpr AS FLOAT) > 0
+                ORDER BY stck_bsop_date DESC
+                LIMIT %s
+            ) sub
+        ''', [stock_code, trade_date, lookback_days])
+        row = cur.fetchone()
+        cur.close()
+        if row and row[0] and row[1] >= 10:
+            return float(row[0])
+        return None
+    except Exception:
+        return None
+    finally:
+        pool.putconn(conn)
+
+
+def calc_atr_tp_sl(atr_pct: float) -> tuple:
+    """
+    ATR 기반 TP/SL(%) 계산.
+
+    Returns:
+        (tp_pct, sl_pct) 튜플. 예: (6.7, 4.9)
+    """
+    from config.strategy_settings import StrategySettings
+    PP = StrategySettings.PricePosition
+    tp = atr_pct * PP.ATR_TP_MULTIPLIER
+    sl = atr_pct * PP.ATR_SL_MULTIPLIER
+    tp = max(PP.ATR_TP_MIN, min(tp, PP.ATR_TP_MAX))
+    sl = max(PP.ATR_SL_MIN, min(sl, PP.ATR_SL_MAX))
+    return (round(tp, 2), round(sl, 2))

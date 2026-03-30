@@ -1482,6 +1482,19 @@ class DayTradingBot:
                                     ts.clear_current_order()
                                     ts.is_buying = False
                                     ts.order_processed = True
+                                    # 📊 ATR 동적 TP/SL 복구
+                                    from config.strategy_settings import StrategySettings as _SS
+                                    if _SS.PricePosition.ATR_DYNAMIC_TP_SL_ENABLED:
+                                        try:
+                                            from utils.data_cache import get_stock_atr, calc_atr_tp_sl
+                                            _atr = get_stock_atr(code)
+                                            if _atr:
+                                                _tp, _sl = calc_atr_tp_sl(_atr)
+                                                ts.atr_pct = _atr
+                                                ts.atr_take_profit_pct = _tp
+                                                ts.atr_stop_loss_pct = _sl
+                                        except Exception:
+                                            pass
 
                                     self.trading_manager._change_stock_state(code, StockState.POSITIONED,
                                         f"미관리종목 복구: {quantity}주 @{avg_price:,.0f}원")
@@ -1566,6 +1579,19 @@ class DayTradingBot:
                     ts.clear_current_order()
                     ts.is_buying = False
                     ts.order_processed = True
+                    # 📊 ATR 동적 TP/SL 복구
+                    from config.strategy_settings import StrategySettings as _SS
+                    if _SS.PricePosition.ATR_DYNAMIC_TP_SL_ENABLED:
+                        try:
+                            from utils.data_cache import get_stock_atr, calc_atr_tp_sl
+                            _atr = get_stock_atr(code)
+                            if _atr:
+                                _tp, _sl = calc_atr_tp_sl(_atr)
+                                ts.atr_pct = _atr
+                                ts.atr_take_profit_pct = _tp
+                                ts.atr_stop_loss_pct = _sl
+                        except Exception:
+                            pass
                     self.trading_manager._change_stock_state(code, StockState.POSITIONED,
                         f"잔고복구: {quantity}주 @{buy_price:,.0f}원, 목표: +{take_profit_ratio*100:.1f}%/-{stop_loss_ratio*100:.1f}%")
 

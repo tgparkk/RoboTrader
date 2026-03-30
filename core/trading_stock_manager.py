@@ -413,6 +413,20 @@ class TradingStockManager:
                             # 🆕 매수 시간 기록
                             from utils.korean_time import now_kst
                             trading_stock.set_buy_time(now_kst())
+                            # 📊 ATR 동적 TP/SL 설정
+                            from config.strategy_settings import StrategySettings
+                            if StrategySettings.PricePosition.ATR_DYNAMIC_TP_SL_ENABLED:
+                                try:
+                                    from utils.data_cache import get_stock_atr, calc_atr_tp_sl
+                                    atr = get_stock_atr(trading_stock.stock_code)
+                                    if atr:
+                                        tp, sl = calc_atr_tp_sl(atr)
+                                        trading_stock.atr_pct = atr
+                                        trading_stock.atr_take_profit_pct = tp
+                                        trading_stock.atr_stop_loss_pct = sl
+                                        self.logger.info(f"📊 [ATR] {trading_stock.stock_code} ATR={atr:.1f}% → TP={tp:.1f}%, SL={sl:.1f}%")
+                                except Exception as e:
+                                    self.logger.warning(f"ATR 계산 실패 {trading_stock.stock_code}: {e}")
 
                             self._change_stock_state(
                                 trading_stock.stock_code,
@@ -713,12 +727,26 @@ class TradingStockManager:
                         # 🆕 체결 처리 플래그 설정
                         trading_stock.order_processed = True
                         trading_stock.is_buying = False  # 매수 완료
-                        
+
                         trading_stock.set_position(order.quantity, order.price)
                         trading_stock.clear_current_order()
                         # 🆕 매수 시간 기록 (콜백)
                         from utils.korean_time import now_kst
                         trading_stock.set_buy_time(now_kst())
+                        # 📊 ATR 동적 TP/SL 설정 (콜백)
+                        from config.strategy_settings import StrategySettings
+                        if StrategySettings.PricePosition.ATR_DYNAMIC_TP_SL_ENABLED:
+                            try:
+                                from utils.data_cache import get_stock_atr, calc_atr_tp_sl
+                                atr = get_stock_atr(trading_stock.stock_code)
+                                if atr:
+                                    tp, sl = calc_atr_tp_sl(atr)
+                                    trading_stock.atr_pct = atr
+                                    trading_stock.atr_take_profit_pct = tp
+                                    trading_stock.atr_stop_loss_pct = sl
+                                    self.logger.info(f"📊 [ATR] {trading_stock.stock_code} ATR={atr:.1f}% → TP={tp:.1f}%, SL={sl:.1f}%")
+                            except Exception as e:
+                                self.logger.warning(f"ATR 계산 실패 {trading_stock.stock_code}: {e}")
 
                         self._change_stock_state(
                             trading_stock.stock_code,

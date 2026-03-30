@@ -55,6 +55,16 @@ class StrategySettings:
         ONE_TRADE_PER_STOCK_PER_DAY = True  # 하루에 종목당 1회만 거래
         MAX_DAILY_POSITIONS = 7              # 최대 동시 보유 종목 수 (03-28 멀티버스: 7종목 +280% vs 5종목 +216%)
 
+        # === ATR 동적 TP/SL ===
+        ATR_DYNAMIC_TP_SL_ENABLED = True
+        ATR_LOOKBACK_DAYS = 20
+        ATR_TP_MULTIPLIER = 2.0
+        ATR_SL_MULTIPLIER = 1.0
+        ATR_TP_MIN = 2.0
+        ATR_TP_MAX = 10.0
+        ATR_SL_MIN = 2.0
+        ATR_SL_MAX = 6.0
+
     # ========================================
     # 실시간 종목 스크리너 설정
     # ========================================

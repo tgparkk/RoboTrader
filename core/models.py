@@ -153,7 +153,12 @@ class TradingStock:
     prev_close: float = 0.0  # 전날 종가 (일봉 기준)
     last_update: datetime = field(default_factory=datetime.now)
     target_profit_rate: float = 0.03  # 목표수익률 (기본값 3%)
-    
+
+    # ATR 동적 TP/SL (종목별)
+    atr_pct: Optional[float] = None           # 종목 ATR (%)
+    atr_take_profit_pct: Optional[float] = None  # ATR 기반 익절 (%)
+    atr_stop_loss_pct: Optional[float] = None    # ATR 기반 손절 (%)
+
     # 🆕 레이스 컨디션 방지 플래그
     order_processed: bool = False  # 주문 체결 처리 완료 플래그
     is_buying: bool = False        # 매수 진행 중 플래그
