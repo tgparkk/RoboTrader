@@ -649,10 +649,10 @@ class TradingDecisionEngine:
             _PP = _SS.PricePosition
             if _PP.ATR_DYNAMIC_TP_SL_ENABLED:
                 if trading_stock.atr_take_profit_pct is not None:
-                    # TP: ATR 값과 기존 값 중 작은 값 (서킷브레이커 TP 축소 보호)
-                    take_profit_percent = min(trading_stock.atr_take_profit_pct, take_profit_percent)
+                    # TP: ATR 값 직접 사용 (시뮬과 동일 — ATR 높은 종목에서 TP 확대가 핵심)
+                    take_profit_percent = trading_stock.atr_take_profit_pct
                 if trading_stock.atr_stop_loss_pct is not None:
-                    # SL: ATR 값과 기존 값 중 작은 값 (장중 동적 SL 보호)
+                    # SL: ATR 값과 기존 값 중 작은 값 (장중 동적 SL/서킷브레이커 보호)
                     stop_loss_percent = min(trading_stock.atr_stop_loss_pct, stop_loss_percent)
 
             # 익절 조건: config에서 설정한 % 이상
