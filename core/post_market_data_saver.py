@@ -155,7 +155,7 @@ class PostMarketDataSaver:
             self.logger.error(f"❌ 분봉 데이터 텍스트 파일 저장 실패: {e}")
             return None
 
-    def save_daily_data(self, stock_codes: List[str], target_date: str = None, days_back: int = 100) -> Dict[str, int]:
+    def save_daily_data(self, stock_codes: List[str], target_date: str = None, days_back: int = 100, force: bool = False) -> Dict[str, int]:
         """
         종목들의 일봉 데이터를 API로 조회하여 저장
 
@@ -163,6 +163,7 @@ class PostMarketDataSaver:
             stock_codes: 저장할 종목 코드 리스트
             target_date: 기준 날짜 (YYYYMMDD), None이면 오늘
             days_back: 과거 몇 일치 데이터 저장 (기본 100일)
+            force: True면 has_data 스킵 없이 무조건 수집
 
         Returns:
             Dict: {'total': 전체 종목 수, 'saved': 저장 성공 수, 'failed': 실패 수}
@@ -182,8 +183,8 @@ class PostMarketDataSaver:
 
             for stock_code in stock_codes:
                 try:
-                    # PostgreSQL에 이미 충분한 데이터가 있으면 스킵
-                    if self.daily_cache.has_data(stock_code, min_records=days_back):
+                    # PostgreSQL에 이미 충분한 데이터가 있으면 스킵 (force=True면 무조건 수집)
+                    if not force and self.daily_cache.has_data(stock_code, min_records=days_back):
                         self.logger.debug(f"⏭️ [{stock_code}] 일봉 데이터 이미 존재 (스킵)")
                         saved_count += 1
                         continue
