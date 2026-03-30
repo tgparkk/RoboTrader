@@ -1233,6 +1233,19 @@ class DayTradingBot:
                         f"[스크리너] 후보 종목 DB 저장 오류: {db_err}"
                     )
 
+                # 📊 ATR용 일봉 사전 수집 (스크리너 발견 종목)
+                from config.strategy_settings import StrategySettings as _SS
+                if _SS.PricePosition.ATR_DYNAMIC_TP_SL_ENABLED:
+                    try:
+                        from utils.atr_utils import collect_daily_candles_for_atr
+                        new_codes = [c.code for c in candidates_to_save]
+                        loop = asyncio.get_event_loop()
+                        await loop.run_in_executor(
+                            None, collect_daily_candles_for_atr, new_codes, self.api_manager
+                        )
+                    except Exception as dc_err:
+                        self.logger.warning(f"[스크리너] ATR 일봉 수집 오류: {dc_err}")
+
         except Exception as e:
             self.logger.error(f"[스크리너] 스크리닝 오류: {e}")
             await self.telegram.notify_error("Stock Screener", e)
@@ -1301,56 +1314,17 @@ class DayTradingBot:
             from config.strategy_settings import StrategySettings as _SS
             if _SS.PricePosition.ATR_DYNAMIC_TP_SL_ENABLED and preloaded:
                 try:
+                    from utils.atr_utils import collect_daily_candles_for_atr
                     preload_codes = [s.code for s in preloaded if s.code]
                     loop = asyncio.get_event_loop()
                     await loop.run_in_executor(
-                        None, self._collect_daily_candles_for_atr, preload_codes
+                        None, collect_daily_candles_for_atr, preload_codes, self.api_manager
                     )
                 except Exception as dc_err:
                     self.logger.warning(f"[프리로드] ATR 일봉 수집 오류: {dc_err}")
 
         except Exception as e:
             self.logger.error(f"[프리로드] 오류: {e}")
-
-    def _collect_daily_candles_for_atr(self, stock_codes):
-        """ATR 계산용 일봉 데이터 사전 수집 (동기 함수, run_in_executor로 호출)"""
-        from core.post_market_data_saver import PostMarketDataSaver
-        from utils.korean_time import now_kst
-
-        saver = PostMarketDataSaver(self.api_manager)
-        today = now_kst().strftime('%Y%m%d')
-
-        # 신선도 체크: 최근 5일 이내 데이터 없는 종목만 수집
-        from utils.data_cache import _get_pg_pool
-        pool = _get_pg_pool()
-        conn = pool.getconn()
-        try:
-            cur = conn.cursor()
-            stale_codes = []
-            for code in stock_codes:
-                cur.execute('''
-                    SELECT MAX(stck_bsop_date) FROM daily_candles
-                    WHERE stock_code = %s
-                ''', [code])
-                row = cur.fetchone()
-                if row and row[0]:
-                    # 최신 데이터가 5영업일 이상 오래됨
-                    days_gap = (int(today) - int(row[0]))
-                    if days_gap > 7:  # 달력일 기준 7일 (영업일 ~5일)
-                        stale_codes.append(code)
-                else:
-                    stale_codes.append(code)  # 데이터 없음
-            cur.close()
-        finally:
-            pool.putconn(conn)
-
-        if not stale_codes:
-            self.logger.info(f"[ATR 일봉] 모든 프리로드 종목 일봉 최신 — 수집 불필요")
-            return
-
-        self.logger.info(f"[ATR 일봉] {len(stale_codes)}개 종목 일봉 수집 시작 (총 {len(stock_codes)}개 중)")
-        result = saver.save_daily_data(stale_codes, target_date=today, days_back=30, force=True)
-        self.logger.info(f"[ATR 일봉] 수집 완료: {result}")
 
     async def _update_intraday_data(self):
         """장중 종목 실시간 데이터 업데이트 + 매수 판단 실행 (완성된 분봉만 수집)"""
