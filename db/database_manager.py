@@ -44,7 +44,6 @@ class DatabaseManager:
     """데이터베이스 관리자 (PostgreSQL 기반)
 
     - PostgreSQL connection pool 사용
-    - 기존 DuckDB API와 동일한 인터페이스 유지
     """
 
     _instance: Optional['DatabaseManager'] = None

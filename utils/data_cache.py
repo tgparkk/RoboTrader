@@ -114,7 +114,7 @@ def _ensure_tables_once():
 class DataCache:
     """PostgreSQL 기반 분봉 데이터 캐시 관리자"""
 
-    def __init__(self, cache_dir: str = "cache/minute_data", use_duckdb: bool = True):
+    def __init__(self, cache_dir: str = "cache/minute_data"):
         self.logger = setup_logger(__name__)
         _ensure_tables_once()
 
@@ -311,7 +311,7 @@ class DataCache:
 class DailyDataCache:
     """PostgreSQL 기반 일봉 데이터 캐시 관리자"""
 
-    def __init__(self, cache_dir: str = "cache/daily", use_duckdb: bool = True):
+    def __init__(self, cache_dir: str = "cache/daily"):
         self.logger = setup_logger(__name__)
         _ensure_tables_once()
 

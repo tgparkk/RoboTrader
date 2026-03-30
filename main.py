@@ -847,11 +847,6 @@ class DayTradingBot:
                         if 1 <= minutes_after_close <= 15:
                             try:
                                 self.logger.info("🏁 장 마감 후 데이터 저장 시작...")
-                                # DuckDB 폴백 read-only 연결 정리
-                                from utils.data_cache import DataCache, DailyDataCache
-                                DataCache.close_all_connections()
-                                DailyDataCache.close_all_connections()
-                                self.logger.info("🔌 DuckDB 폴백 연결 정리 완료")
                                 self.intraday_manager.data_saver.save_all_data(self.intraday_manager)
                                 post_market_data_saved_date = current_date
                                 self.logger.info("✅ 장 마감 후 데이터 저장 완료")

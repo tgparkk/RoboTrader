@@ -553,7 +553,7 @@ class CandidateSelector:
         """
         선정된 후보 종목에 대해 일봉 데이터 확보 (비동기)
 
-        일봉 필터가 정상 작동하려면 DuckDB에 해당 종목의 일봉 데이터가 있어야 함.
+        일봉 필터가 정상 작동하려면 PostgreSQL에 해당 종목의 일봉 데이터가 있어야 함.
         종목 선정 시점에 자동으로 수집하여 필터 효과 보장.
         """
         if not candidates:
@@ -585,7 +585,7 @@ class CandidateSelector:
         """
         조건검색 결과 종목에 대해 일봉 데이터 확보 (동기)
 
-        일봉 필터가 정상 작동하려면 DuckDB에 해당 종목의 일봉 데이터가 있어야 함.
+        일봉 필터가 정상 작동하려면 PostgreSQL에 해당 종목의 일봉 데이터가 있어야 함.
         """
         if not results:
             return
