@@ -418,7 +418,7 @@ class TradingStockManager:
                             if StrategySettings.PricePosition.ATR_DYNAMIC_TP_SL_ENABLED:
                                 try:
                                     from utils.data_cache import get_stock_atr, calc_atr_tp_sl
-                                    atr = get_stock_atr(trading_stock.stock_code)
+                                    atr = get_stock_atr(trading_stock.stock_code, lookback_days=StrategySettings.PricePosition.ATR_LOOKBACK_DAYS)
                                     if atr:
                                         tp, sl = calc_atr_tp_sl(atr)
                                         trading_stock.atr_pct = atr

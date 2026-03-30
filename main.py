@@ -1508,7 +1508,7 @@ class DayTradingBot:
                                     if _SS.PricePosition.ATR_DYNAMIC_TP_SL_ENABLED:
                                         try:
                                             from utils.data_cache import get_stock_atr, calc_atr_tp_sl
-                                            _atr = get_stock_atr(code)
+                                            _atr = get_stock_atr(code, lookback_days=_SS.PricePosition.ATR_LOOKBACK_DAYS)
                                             if _atr:
                                                 _tp, _sl = calc_atr_tp_sl(_atr)
                                                 ts.atr_pct = _atr
@@ -1605,7 +1605,7 @@ class DayTradingBot:
                     if _SS.PricePosition.ATR_DYNAMIC_TP_SL_ENABLED:
                         try:
                             from utils.data_cache import get_stock_atr, calc_atr_tp_sl
-                            _atr = get_stock_atr(code)
+                            _atr = get_stock_atr(code, lookback_days=_SS.PricePosition.ATR_LOOKBACK_DAYS)
                             if _atr:
                                 _tp, _sl = calc_atr_tp_sl(_atr)
                                 ts.atr_pct = _atr

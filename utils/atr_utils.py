@@ -8,6 +8,7 @@ ATR(Average True Range) 유틸리티
 """
 
 import logging
+from datetime import datetime
 from typing import List
 
 from utils.data_cache import _get_pg_pool
@@ -26,7 +27,7 @@ def collect_daily_candles_for_atr(stock_codes: List[str], api_manager=None):
 
     Args:
         stock_codes: 수집 대상 종목 코드 리스트
-        api_manager: KIS API 매니저 (PostMarketDataSaver 생성용)
+        api_manager: (미사용, 호환성 유지)
     """
     from core.post_market_data_saver import PostMarketDataSaver
     from utils.korean_time import now_kst
@@ -45,7 +46,7 @@ def collect_daily_candles_for_atr(stock_codes: List[str], api_manager=None):
 
     logger.info(f"[ATR 일봉] {len(stale_codes)}개 종목 일봉 수집 시작 (총 {len(stock_codes)}개 중)")
 
-    saver = PostMarketDataSaver(api_manager)
+    saver = PostMarketDataSaver()
     result = saver.save_daily_data(stale_codes, target_date=today, days_back=30, force=True)
     logger.info(f"[ATR 일봉] 수집 완료: {result}")
 
@@ -54,6 +55,7 @@ def _find_stale_stocks(stock_codes: List[str], today: str) -> List[str]:
     """daily_candles에서 데이터가 오래되었거나 없는 종목 필터링"""
     pool = _get_pg_pool()
     conn = pool.getconn()
+    today_dt = datetime.strptime(today, '%Y%m%d')
     try:
         cur = conn.cursor()
         stale_codes = []
@@ -64,7 +66,8 @@ def _find_stale_stocks(stock_codes: List[str], today: str) -> List[str]:
             ''', [code])
             row = cur.fetchone()
             if row and row[0]:
-                days_gap = int(today) - int(row[0])
+                last_dt = datetime.strptime(row[0], '%Y%m%d')
+                days_gap = (today_dt - last_dt).days
                 if days_gap > STALE_DAYS_THRESHOLD:
                     stale_codes.append(code)
             else:
