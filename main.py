@@ -233,7 +233,10 @@ class DayTradingBot:
             
             # 4. DB에서 오늘 날짜의 후보 종목 복원
             await self._restore_todays_candidates()
-            
+
+            # 5. 장중 재시작 시 DB에서 프리마켓 리포트 복원
+            await self._restore_pre_market_report()
+
             self.logger.info("✅ 시스템 초기화 완료")
             return True
             
@@ -1150,7 +1153,43 @@ class DayTradingBot:
             
         except Exception as e:
             self.logger.error(f"❌ 오늘 후보 종목 복원 실패: {e}")
-   
+
+    async def _restore_pre_market_report(self):
+        """장중 재시작 시 DB에서 당일 프리마켓 리포트 복원"""
+        try:
+            now = now_kst()
+            # 09:00 이전이면 복원 불필요 — 정상 프리마켓 루틴이 실행됨
+            if now.hour < 9:
+                return
+
+            trade_date = now.strftime('%Y%m%d')
+            data = self.db_manager.get_today_nxt_report(trade_date)
+            if not data:
+                self.logger.info("[프리마켓] DB에 당일 리포트 없음 — 복원 건너뜀")
+                return
+
+            from core.pre_market_analyzer import PreMarketReport
+            report = PreMarketReport(
+                report_time=now,
+                market_sentiment=data['market_sentiment'],
+                sentiment_score=data['sentiment_score'],
+                gap_direction='flat',
+                expected_gap_pct=data['expected_gap_pct'],
+                volatility_level='normal',
+                recommended_max_positions=data['recommended_max_positions'],
+                recommended_stop_loss_pct=0.05,
+                recommended_take_profit_pct=0.06,
+                nxt_available=True,
+            )
+            self.decision_engine.set_pre_market_report(report)
+            self.logger.info(
+                f"[프리마켓] DB에서 리포트 복원: "
+                f"sentiment={data['market_sentiment']}, "
+                f"max_positions={data['recommended_max_positions']}"
+            )
+        except Exception as e:
+            self.logger.error(f"❌ 프리마켓 리포트 복원 실패: {e}")
+
     async def _run_stock_screener(self):
         """장중 실시간 종목 스크리닝"""
         try:

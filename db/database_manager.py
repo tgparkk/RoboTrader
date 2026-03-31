@@ -1077,6 +1077,30 @@ class DatabaseManager:
             self.logger.error(f"NXT 리포트 요약 저장 실패: {e}")
             return False
 
+    def get_today_nxt_report(self, trade_date: str) -> dict:
+        """당일 NXT 리포트 요약 조회 (최신 snapshot_seq 기준)"""
+        try:
+            row = self._fetchone('''
+                SELECT market_sentiment, recommended_max_positions,
+                       sentiment_score, expected_gap_pct
+                FROM nxt_snapshots
+                WHERE trade_date = %s
+                  AND market_sentiment IS NOT NULL
+                ORDER BY snapshot_seq DESC
+                LIMIT 1
+            ''', (trade_date,))
+            if row:
+                return {
+                    'market_sentiment': row[0],
+                    'recommended_max_positions': row[1],
+                    'sentiment_score': row[2] if row[2] is not None else 0.0,
+                    'expected_gap_pct': row[3] if row[3] is not None else 0.0,
+                }
+            return {}
+        except Exception as e:
+            self.logger.error(f"당일 NXT 리포트 조회 실패: {e}")
+            return {}
+
     def get_nxt_history(self, days: int = 30) -> 'pd.DataFrame':
         """NXT 스냅샷 이력 조회 (일별 마지막 스냅샷 = 리포트 요약)"""
         try:
