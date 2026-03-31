@@ -353,7 +353,8 @@ class DayTradingBot:
                 
                 # 매매 판단 시스템 실행 (5초 주기)
                 # 실시간 잔고 조회 후 자금 관리자 업데이트
-                balance_info = self.api_manager.get_account_balance()
+                loop = asyncio.get_event_loop()
+                balance_info = await loop.run_in_executor(None, self.api_manager.get_account_balance)
                 if balance_info:
                     self.fund_manager.update_total_funds(float(balance_info.account_balance))
 
@@ -462,8 +463,8 @@ class DayTradingBot:
             if combined_data is None:
                 self.logger.debug(f"❌ {stock_code} 1분봉 데이터 없음 (None)")
                 return
-            if len(combined_data) < 15:
-                self.logger.debug(f"❌ {stock_code} 1분봉 데이터 부족: {len(combined_data)}개 (최소 15개 필요) - 실시간 데이터 대기 중")
+            if len(combined_data) < 10:
+                self.logger.debug(f"❌ {stock_code} 1분봉 데이터 부족: {len(combined_data)}개 (최소 10개 필요) - 실시간 데이터 대기 중")
                 # 실시간 환경에서는 메모리에 있는 데이터만 사용 (캐시 파일 체크 불필요)
                 return
             
@@ -608,7 +609,16 @@ class DayTradingBot:
             # 실시간 현재가 정보만 확인 (간단한 손절/익절 로직)
             current_price_info = self.intraday_manager.get_cached_current_price(stock_code)
             if current_price_info is None:
-                return
+                # 폴백: 캐시 없으면 API로 직접 조회 (재시작 직후 매도 판단 보장)
+                try:
+                    current_price_info = self.intraday_manager.get_current_price_for_sell(stock_code)
+                    if current_price_info is None:
+                        return
+                    # 조회 결과를 캐시에도 저장
+                    if stock_code in self.intraday_manager.selected_stocks:
+                        self.intraday_manager.selected_stocks[stock_code].current_price_info = current_price_info
+                except Exception:
+                    return
             
             # 매매 판단 엔진으로 매도 신호 확인 (combined_data 불필요)
             sell_signal, sell_reason = await self.decision_engine.analyze_sell_decision(trading_stock, None)
@@ -1380,7 +1390,8 @@ class DayTradingBot:
                         return
 
                 # 가용 자금 계산
-                balance_info = self.api_manager.get_account_balance()
+                loop = asyncio.get_event_loop()
+                balance_info = await loop.run_in_executor(None, self.api_manager.get_account_balance)
                 if balance_info:
                     self.fund_manager.update_total_funds(float(balance_info.account_balance))
 

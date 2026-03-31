@@ -3,6 +3,7 @@
 
 IntradayStockManager에서 분리된 실시간 데이터 업데이트 로직
 """
+import asyncio
 import pandas as pd
 from datetime import datetime, timedelta
 from typing import Optional
@@ -259,11 +260,15 @@ class RealtimeDataUpdater:
             # 분봉 API로 완성된 데이터 조회
             div_code = get_div_code_for_stock(stock_code)
 
-            result = get_inquire_time_itemchartprice(
-                div_code=div_code,
-                stock_code=stock_code,
-                input_hour=target_hour,
-                past_data_yn="Y"
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                lambda: get_inquire_time_itemchartprice(
+                    div_code=div_code,
+                    stock_code=stock_code,
+                    input_hour=target_hour,
+                    past_data_yn="Y"
+                )
             )
 
             if result is None:
