@@ -469,8 +469,8 @@ def get_stock_atr(stock_code: str, trade_date: str = None, lookback_days: int = 
         ATR (%) 또는 None (데이터 부족 시)
     """
     if trade_date is None:
-        from datetime import datetime as _dt
-        trade_date = _dt.now().strftime('%Y%m%d')
+        from utils.korean_time import now_kst
+        trade_date = now_kst().strftime('%Y%m%d')
 
     pool = _get_pg_pool()
     conn = pool.getconn()
