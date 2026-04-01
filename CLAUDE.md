@@ -39,13 +39,18 @@ ACTIVE_STRATEGY = 'price_position'
 | 고급 필터 | 변동성 < 1.2%, 모멘텀 < +2.0%, 갭다운 > -2% |
 
 ### 청산 조건
-- **손절**: -5.0%
-- **익절**: +6.0%
+- **기본 손절**: -5.0% / **기본 익절**: +6.0%
+- **ATR 동적 TP/SL** (비활성, 04-01): 멀티버스 검증 결과 고정 SL5/TP6 대비 효과 미미
+  - 설정: `config/strategy_settings.py` > `PricePosition.ATR_DYNAMIC_TP_SL_ENABLED = False`
 
-### 종목 발굴: 실시간 스크리너 (core/stock_screener.py)
-- 2분 주기로 KOSPI+KOSDAQ 거래금액순 API 스캔 (2회 호출)
-- 3단계 필터: 기본필터 → 정밀필터(시가대비, 갭) → 점수순 최대 5개 추가
-- 설정: `config/strategy_settings.py` > `Screener` 클래스
+### 종목 발굴: 프리로드 + 실시간 스크리너
+- **프리로드**: 전일 거래대금 상위 30개를 장 시작 전 사전 등록 → 09:00부터 매수 가능
+  - 09:00~09:15 골든타임 진입의 핵심 (승률 63%, +0.95%)
+  - 코드: `core/stock_screener.py` > `preload_previous_day_stocks()`
+- **실시간 스크리너**: 2분 주기 KOSPI+KOSDAQ 거래금액순 API 스캔
+  - 3단계 필터: 기본필터 → 정밀필터(시가대비, 갭) → 점수순 최대 5개 추가
+  - 설정: `config/strategy_settings.py` > `Screener` 클래스
+- **시뮬레이션에도 프리로드 반영** (04-01): `simulate_with_screener.py --preload-top 30`
 
 ### 관련 파일
 - `config/strategy_settings.py` - 전략/스크리너 설정
@@ -60,9 +65,10 @@ ACTIVE_STRATEGY = 'price_position'
 ### 투자 비율 (config/trading_config.json)
 - **buy_budget_ratio**: 0.20 (건당 가용잔고의 20%)
 
-### 손익비 (config/trading_config.json)
-- **stop_loss_ratio**: 0.05 (-5.0%)
-- **take_profit_ratio**: 0.06 (+6.0%)
+### 손익비
+- **기본값** (config/trading_config.json): SL 0.05 (-5.0%), TP 0.06 (+6.0%)
+- **ATR 동적 TP/SL** (비활성, 04-01 멀티버스 검증: 고정 대비 효과 미미)
+  - 코드: `core/trading_decision_engine.py` L647~656, `config/strategy_settings.py` > `ATR_DYNAMIC_TP_SL_ENABLED`
 - 장중 동적 SL: 지수 -0.7% 이하 → SL 3%로 축소, -0.3% 이상 회복 시 원복 (10분 주기 체크)
 
 ### 서킷브레이커 (config/strategy_settings.py > PreMarket)
@@ -86,7 +92,8 @@ config/
 ├── strategy_settings.py         # 전략/스크리너/프리마켓 설정
 ├── market_hours.py              # 장 시간 설정 (EOD 청산 15:00, 특별일 시프트)
 ├── settings.py                  # DB 접속 정보 (PG_HOST/PORT/DATABASE/USER/PASSWORD)
-├── dynamic_profit_loss_config.py # 동적 손익비 설정 (현재 비활성)
+├── dynamic_profit_loss_config.py # 동적 손익비 설정 (거래량/시간대 기반, 현재 비활성)
+├── strategy_settings.py > ATR_*  # ATR 동적 TP/SL 설정 (현재 활성)
 
 api/
 ├── kis_auth.py                  # KIS API 인증 & Rate Limiting

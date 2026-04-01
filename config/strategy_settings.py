@@ -56,7 +56,7 @@ class StrategySettings:
         MAX_DAILY_POSITIONS = 7              # 최대 동시 보유 종목 수 (03-28 멀티버스: 7종목 +280% vs 5종목 +216%)
 
         # === ATR 동적 TP/SL ===
-        ATR_DYNAMIC_TP_SL_ENABLED = True
+        ATR_DYNAMIC_TP_SL_ENABLED = False  # 멀티버스 검증: 고정 SL5/TP6 대비 효과 미미 (04-01)
         ATR_LOOKBACK_DAYS = 20
         ATR_TP_MULTIPLIER = 2.0
         ATR_SL_MULTIPLIER = 1.0

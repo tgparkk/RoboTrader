@@ -402,6 +402,20 @@ def print_stats(trades_df, daily_results, label, initial_capital=10_000_000, buy
     print(f'  월평균 거래: {total/num_months:.0f}건')
 
 
+def get_preload_stocks(cur, prev_date, top_n=30, min_price=5000, max_price=500000):
+    """전일 거래대금 상위 종목 (실거래 프리로드와 동일 로직)"""
+    cur.execute('''
+        SELECT stock_code
+        FROM minute_candles
+        WHERE trade_date = %s
+        GROUP BY stock_code
+        HAVING MAX(close) BETWEEN %s AND %s
+        ORDER BY SUM(amount) DESC
+        LIMIT %s
+    ''', [prev_date, min_price, max_price, top_n])
+    return set(r[0] for r in cur.fetchall() if not r[0].endswith('5'))
+
+
 def run_simulation(
     start_date='20250901',
     end_date=None,
@@ -419,6 +433,7 @@ def run_simulation(
     verbose=True,
     cost_pct=0.33,
     max_holding_minutes=0,
+    preload_top_n=30,
 ):
     strategy = PricePositionStrategy(config=config)
     info = strategy.get_strategy_info()
@@ -439,6 +454,8 @@ def run_simulation(
     print(f"후보제한: 일일 {cand_str}")
     cb_str = f"전일 지수 {circuit_breaker_pct}% 이하 → 매수중단" if circuit_breaker_pct else "비활성"
     print(f"서킷브레이커: {cb_str}")
+    preload_str = f"전일 거래대금 상위 {preload_top_n}개" if preload_top_n > 0 else "비활성"
+    print(f"프리로드: {preload_str}")
     print(f"동시보유: {max_daily}종목")
     print(f"비용: {cost_pct:.2f}%/건 (수수료+세금+슬리피지)")
     hold_str = f"{max_holding_minutes}분" if max_holding_minutes > 0 else "제한없음"
@@ -508,6 +525,16 @@ def run_simulation(
             max_change_rate=screener_max_change,
             max_candidates=max_candidates_per_day,
         )
+
+        # 프리로드 종목 추가 (전일 거래대금 상위, 실거래와 동일)
+        if preload_top_n > 0 and prev_date:
+            preload_set = get_preload_stocks(
+                cur, prev_date, preload_top_n, screener_min_price, screener_max_price
+            )
+            preload_valid = preload_set & set(daily_metrics.keys())
+            screened_set = set(screened)
+            preload_new = preload_valid - screened_set
+            screened = list(screened_set | preload_new)
 
         screener_stats['total_stocks'] += len(daily_metrics)
         screener_stats['screened_stocks'] += len(screened)
@@ -699,6 +726,8 @@ def main():
                         help='건당 왕복 비용 %% (수수료+세금+슬리피지, 기본 0.33%%)')
     parser.add_argument('--max-hold', type=int, default=0,
                         help='최대 보유 시간(분). 0이면 제한없음 (기본 0)')
+    parser.add_argument('--preload-top', type=int, default=30,
+                        help='프리로드 전일 거래대금 상위 N개 (기본 30, 0=비활성)')
     parser.add_argument('--quiet', action='store_true')
 
     args = parser.parse_args()
@@ -733,6 +762,7 @@ def main():
         verbose=not args.quiet,
         cost_pct=args.cost,
         max_holding_minutes=args.max_hold,
+        preload_top_n=args.preload_top,
     )
 
 
