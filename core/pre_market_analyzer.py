@@ -500,7 +500,7 @@ class PreMarketAnalyzer:
                 logger.info(f"[장중지수] 서킷브레이커 해제 (bearish 모드): {reason}")
 
                 if self._report:
-                    self._report.recommended_max_positions = max(1, pm.BEARISH_MAX_POSITIONS // 2)
+                    self._report.recommended_max_positions = min(2, pm.BEARISH_MAX_POSITIONS)
                     self._report.market_sentiment = 'bearish'
                     self._report.recommended_stop_loss_pct = 0.05
                     self._report.recommended_take_profit_pct = 0.06

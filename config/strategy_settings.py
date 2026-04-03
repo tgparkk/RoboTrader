@@ -144,7 +144,7 @@ class StrategySettings:
 
         # 장중 지수 모니터링 (09:30~ 장 마감까지 주기적 체크)
         INTRADAY_INDEX_CHECK_ENABLED = True           # 장중 지수 체크 사용 여부
-        INTRADAY_INDEX_CHECK_INTERVAL_MINUTES = 10    # 체크 주기 (분) — 동적SL 반응속도 위해 30→10분
+        INTRADAY_INDEX_CHECK_INTERVAL_MINUTES = 2     # 체크 주기 (분) — 후행신호 지연 최소화 위해 10→2분
         INTRADAY_INDEX_DROP_THRESHOLD_PCT = -2.0      # 전일 대비 이 값 이하 → 매수 중단
         INTRADAY_INDEX_RECOVERY_PCT = -1.0            # 이 값 이상 회복 시 → 매수 재개
 
