@@ -37,7 +37,7 @@ class PerformanceGate:
 
         # 당일 연속 손실 카운터
         self._daily_consec_loss = 0
-        self._current_date = None
+        self._current_date = now_kst().strftime('%Y%m%d')
 
         # 차단 상태 추적
         self._consecutive_block_days = 0
