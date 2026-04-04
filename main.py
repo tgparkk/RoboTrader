@@ -32,6 +32,13 @@ from config.market_hours import MarketHours
 from post_market_chart_generator import PostMarketChartGenerator
 
 
+_global_decision_engine = None
+
+def get_decision_engine():
+    """전역 decision_engine 접근 (순환참조 방지)"""
+    return _global_decision_engine
+
+
 class DayTradingBot:
     """주식 단타 거래 봇"""
     
@@ -65,6 +72,8 @@ class DayTradingBot:
             api_manager=self.api_manager,
             intraday_manager=self.intraday_manager
         )  # 🆕 매매 판단 엔진
+        global _global_decision_engine
+        _global_decision_engine = self.decision_engine
 
         # 🔧 price_position 전략 일별 거래 기록 초기화 (버그 수정 2026-02-04)
         TradingDecisionEngine.reset_daily_trades()
@@ -865,6 +874,13 @@ class DayTradingBot:
                                 self.logger.info("✅ 장 마감 후 데이터 저장 완료")
                             except Exception as e:
                                 self.logger.error(f"❌ 장 마감 후 데이터 저장 실패: {e}")
+                            # 성과 게이트 가상 추적 처리
+                            try:
+                                if self.decision_engine and hasattr(self.decision_engine, 'performance_gate'):
+                                    if self.decision_engine.performance_gate:
+                                        self.decision_engine.performance_gate.process_shadow_entries()
+                            except Exception as e:
+                                self.logger.warning(f"⚠️ 가상 추적 처리 실패: {e}")
 
                 # 장마감 청산 로직 제거: 15:00 시장가 매도로 대체됨
                 

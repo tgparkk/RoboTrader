@@ -505,6 +505,15 @@ class TradingStockManager:
                                 reason="체결",
                                 buy_record_id=buy_id
                             )
+                            # 성과 게이트에 결과 기록
+                            try:
+                                from main import get_decision_engine
+                                engine = get_decision_engine()
+                                if engine and hasattr(engine, 'performance_gate'):
+                                    if engine.performance_gate:
+                                        engine.performance_gate.record_result(profit_rate > 0)
+                            except Exception:
+                                pass
 
                         except Exception as db_err:
                             self.logger.warning(f"⚠️ 실거래 매도 기록 저장 실패: {db_err}")
@@ -802,7 +811,16 @@ class TradingStockManager:
                                 reason="체결(콜백)",
                                 buy_record_id=buy_id
                             )
-                            
+                            # 성과 게이트에 결과 기록
+                            try:
+                                from main import get_decision_engine
+                                engine = get_decision_engine()
+                                if engine and hasattr(engine, 'performance_gate'):
+                                    if engine.performance_gate:
+                                        engine.performance_gate.record_result(profit_rate > 0)
+                            except Exception:
+                                pass
+
                         except Exception as db_err:
                             self.logger.warning(f"⚠️ 실거래 매도 기록 저장 실패: {db_err}")
                         
