@@ -319,7 +319,26 @@ class TelegramNotifier:
         status_message = "📊 시스템 상태\n\n⏰ 시간: {}\n📈 시장: 장중\n🔄 상태: 정상 동작\n📊 데이터: 수집 중".format(
             datetime.now().strftime('%H:%M:%S')
         )
-        
+
+        # 성과 게이트 상태
+        try:
+            from main import get_decision_engine
+            engine = get_decision_engine()
+            if engine and hasattr(engine, 'performance_gate') and engine.performance_gate:
+                gate = engine.performance_gate.get_status()
+                gate_icon = "🟢" if gate['gate_allowed'] else "🔴"
+                status_message += (
+                    f"\n{gate_icon} 성과게이트: "
+                    f"승률 {gate['rolling_winrate']:.0f}% "
+                    f"({gate['rolling_n']}/{gate['rolling_max']}건)"
+                )
+                if not gate['gate_allowed']:
+                    status_message += f" — {gate['gate_reason']}"
+                if gate['daily_consec_loss'] > 0:
+                    status_message += f"\n  당일연패: {gate['daily_consec_loss']}"
+        except Exception:
+            pass
+
         await update.message.reply_text(status_message)
     
     async def _cmd_positions(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
