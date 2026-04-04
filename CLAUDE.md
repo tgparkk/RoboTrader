@@ -56,6 +56,7 @@ ACTIVE_STRATEGY = 'price_position'
 - `config/strategy_settings.py` - 전략/스크리너 설정
 - `core/strategies/price_position_strategy.py` - 전략 클래스
 - `core/stock_screener.py` - 실시간 종목 스크리너
+- `core/performance_gate.py` - 성과 기반 매수 게이트 (롤링승률 + 연속손실)
 - `simulate_with_screener.py` - 스크리너 통합 시뮬레이션
 
 ---
@@ -143,6 +144,7 @@ analysis/                        # 분석/시뮬레이션 스크립트
 - **API Rate Limiting**: 60ms 간격, 서킷 브레이커 연속 실패 시 차단 (api/kis_auth.py)
 - **상태 머신**: asyncio.Lock 기반 종목 상태 전이 보호 (core/trading_stock_manager.py)
 - **중복 매수 방지**: is_buying 플래그 + 쿨다운 이중 차단
+- **성과 게이트**: 최근 20건 승률 < 45% → 매수 차단 (가상 추적으로 자동 해제), 당일 3연패 → 당일 매수 중단
 
 ---
 
