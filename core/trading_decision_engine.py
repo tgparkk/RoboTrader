@@ -189,6 +189,21 @@ class TradingDecisionEngine:
 
         self.logger.info("🧠 매매 판단 엔진 초기화 완료")
 
+        # 성과 기반 매수 게이트 (롤링승률 + 연속손실)
+        from config.strategy_settings import StrategySettings
+        pg_settings = StrategySettings.PerformanceGate
+        if pg_settings.ENABLED:
+            from core.performance_gate import PerformanceGate
+            self.performance_gate = PerformanceGate(
+                rolling_n=pg_settings.ROLLING_N,
+                rolling_threshold=pg_settings.ROLLING_THRESHOLD,
+                consec_loss_limit=pg_settings.CONSEC_LOSS_LIMIT,
+                hard_cap_days=pg_settings.HARD_CAP_DAYS,
+            )
+            self.performance_gate.load_from_db(db_manager)
+        else:
+            self.performance_gate = None
+
     def _initialize_ml_predictor(self):
         """ML 예측기 초기화"""
         try:
@@ -286,15 +301,28 @@ class TradingDecisionEngine:
                 trading_stock.last_signal_candle_time == current_candle_time):
                 return False, f"동일 캔들 중복신호 차단 ({current_candle_time.strftime('%H:%M')})", buy_info
             
-            # 당일 손실 2회 이상이면 신규 매수 차단 (해제됨)
-            # try:
-            #     if self.db_manager and hasattr(self.db_manager, 'get_today_real_loss_count'):
-            #         today_losses = self.db_manager.get_today_real_loss_count(stock_code)
-            #         if today_losses >= 2:
-            #             return False, "당일 손실 2회 초과(매수 제한)", buy_info
-            # except Exception:
-            #     # 조회 실패 시 차단하지 않음
-            #     pass
+            # 성과 게이트 체크 (롤링승률 + 연속손실)
+            if self.performance_gate:
+                gate_allowed, gate_reason = self.performance_gate.check_gate()
+                if not gate_allowed:
+                    self.logger.info(
+                        f"성과 게이트 차단: {stock_code} ({gate_reason})"
+                    )
+                    # 가상 추적용 엔트리 기록 (EOD에 결과 계산)
+                    try:
+                        trade_date = now_kst().strftime('%Y%m%d')
+                        if combined_data is not None and len(combined_data) > 10:
+                            entry_idx = len(combined_data) - 2
+                            self.performance_gate.add_shadow_entry(
+                                stock_code=stock_code,
+                                entry_price=float(combined_data.iloc[-1]['close']),
+                                entry_idx=entry_idx,
+                                trade_date=trade_date,
+                                candle_df=None,
+                            )
+                    except Exception:
+                        pass
+                    return False, f"성과게이트: {gate_reason}", buy_info
 
             # 🆕 현재 처리 중인 종목 코드 저장 (디버깅용)
             self._current_stock_code = stock_code

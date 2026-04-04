@@ -159,6 +159,17 @@ class StrategySettings:
         FALLBACK_MAX_POSITIONS = 7               # 정상=7종목 (5→7: 03-28 멀티버스 최적화)
 
     # ========================================
+    # 성과 기반 매수 게이트 설정
+    # ========================================
+    class PerformanceGate:
+        """성과 기반 매수 게이트 설정"""
+        ENABLED = True
+        ROLLING_N = 20              # 롤링 윈도우 크기
+        ROLLING_THRESHOLD = 0.45    # 승률 임계값 (45%)
+        CONSEC_LOSS_LIMIT = 3       # 당일 연속 손실 제한
+        HARD_CAP_DAYS = 10          # 연속 차단일 하드캡
+
+    # ========================================
     # 눌림목 캔들패턴 전략 설정 (pullback)
     # ========================================
     class Pullback:
