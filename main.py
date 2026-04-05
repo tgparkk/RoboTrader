@@ -867,20 +867,22 @@ class DayTradingBot:
                         close_time = market_hours_info['market_close']
                         minutes_after_close = (current_time.hour * 60 + current_time.minute) - (close_time.hour * 60 + close_time.minute)
                         if 1 <= minutes_after_close <= 15:
+                            # 1단계: 데이터 저장
                             try:
                                 self.logger.info("🏁 장 마감 후 데이터 저장 시작...")
                                 self.intraday_manager.data_saver.save_all_data(self.intraday_manager)
-                                post_market_data_saved_date = current_date
                                 self.logger.info("✅ 장 마감 후 데이터 저장 완료")
                             except Exception as e:
                                 self.logger.error(f"❌ 장 마감 후 데이터 저장 실패: {e}")
-                            # 성과 게이트 가상 추적 처리
+                            # 2단계: 가상 추적 처리
                             try:
                                 if self.decision_engine and hasattr(self.decision_engine, 'performance_gate'):
                                     if self.decision_engine.performance_gate:
                                         self.decision_engine.performance_gate.process_shadow_entries()
                             except Exception as e:
                                 self.logger.warning(f"⚠️ 가상 추적 처리 실패: {e}")
+                            # 두 단계 모두 시도 후 날짜 플래그 설정
+                            post_market_data_saved_date = current_date
 
                 # 장마감 청산 로직 제거: 15:00 시장가 매도로 대체됨
                 

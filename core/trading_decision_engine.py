@@ -313,15 +313,20 @@ class TradingDecisionEngine:
                         trade_date = now_kst().strftime('%Y%m%d')
                         if combined_data is not None and len(combined_data) > 10:
                             entry_idx = len(combined_data) - 2
+                            # 현재 적용 중인 SL/TP 전달 (약세장 손절축소 반영)
+                            effective_sl = self.get_effective_stop_loss()    # 0.05 또는 0.03
+                            effective_tp = self.get_effective_take_profit()  # 0.06 또는 0.04
                             self.performance_gate.add_shadow_entry(
                                 stock_code=stock_code,
                                 entry_price=float(combined_data.iloc[-1]['close']),
                                 entry_idx=entry_idx,
                                 trade_date=trade_date,
                                 candle_df=None,
+                                stop_loss_pct=-effective_sl * 100,   # -5.0 또는 -3.0
+                                take_profit_pct=effective_tp * 100,  # 6.0 또는 4.0
                             )
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        self.logger.debug(f"가상 추적 엔트리 기록 실패: {e}")
                     return False, f"성과게이트: {gate_reason}", buy_info
 
             # 🆕 현재 처리 중인 종목 코드 저장 (디버깅용)
