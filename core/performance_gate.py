@@ -113,7 +113,7 @@ class PerformanceGate:
     # ------------------------------------------------------------------
 
     def load_from_db(self, db_manager):
-        """봇 시작 시 DB에서 최근 N건 매도 결과 로드 (실거래 + 가상추적 합산)"""
+        """봇 시작 시 DB에서 최근 N건 매도 결과 로드 (실거래만 — 가상추적은 런타임 deque에서만 관리)"""
         conn = None
         try:
             import psycopg2
@@ -124,23 +124,16 @@ class PerformanceGate:
             )
             cur = conn.cursor()
             cur.execute('''
-                SELECT profit_rate, timestamp, source FROM (
-                    SELECT profit_rate, timestamp, 'real' AS source
-                    FROM real_trading_records
-                    WHERE action = 'SELL'
-                    UNION ALL
-                    SELECT profit_rate, timestamp, 'shadow' AS source
-                    FROM virtual_trading_records
-                    WHERE strategy = 'gate_shadow' AND action = 'SELL'
-                ) combined
+                SELECT profit_rate, timestamp
+                FROM real_trading_records
+                WHERE action = 'SELL'
                 ORDER BY timestamp DESC
                 LIMIT %s
             ''', [self.rolling_n])
             rows = cur.fetchall()
             cur.close()
 
-            real_count = sum(1 for row in rows if row[2] == 'real')
-            shadow_count = sum(1 for row in rows if row[2] == 'shadow')
+            real_count = len(rows)
 
             # 역순으로 넣어야 최신이 마지막
             for row in reversed(rows):
@@ -150,7 +143,7 @@ class PerformanceGate:
             wr = self.get_rolling_winrate()
             self.logger.info(
                 f"📊 성과 게이트 초기화: 최근 {len(self.recent_results)}건 로드 "
-                f"(실거래 {real_count}건 + 가상추적 {shadow_count}건), "
+                f"(실거래 {real_count}건), "
                 f"롤링 승률 {wr:.0f}%"
             )
         except Exception as e:
