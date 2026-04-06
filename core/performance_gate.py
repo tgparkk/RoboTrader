@@ -363,9 +363,10 @@ class PerformanceGate:
                         )
 
                         # DB에 결과 저장 (strategy='gate_shadow'로 기존 가상매매와 구분)
+                        pnl = float(pnl)  # np.float64 → float (psycopg2 호환)
                         reason_str = f"{'WIN' if is_win else 'LOSS'} {pnl:+.2f}%"
-                        actual_entry = result.get('entry_price', entry['entry_price'])
-                        exit_price = actual_entry * (1 + pnl / 100)
+                        actual_entry = float(result.get('entry_price', entry['entry_price']))
+                        exit_price = float(actual_entry * (1 + pnl / 100))
                         ts = now_kst().strftime('%Y-%m-%d %H:%M:%S')
                         cur = conn.cursor()
                         cur.execute(
