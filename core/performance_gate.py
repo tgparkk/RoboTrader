@@ -391,6 +391,10 @@ class PerformanceGate:
 
                 except Exception as e:
                     self.logger.warning(f"⚠️ 가상 추적 실패 ({entry['stock_code']}): {e}")
+                    try:
+                        conn.rollback()  # 트랜잭션 중지 상태 리셋 (이후 쿼리 정상 실행 보장)
+                    except Exception:
+                        pass
                     self._shadow_entries.pop(0)  # 실패 시에도 제거 (무한 재시도 방지)
                     self._save_state()
 
