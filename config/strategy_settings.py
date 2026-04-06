@@ -165,7 +165,7 @@ class StrategySettings:
         """성과 기반 매수 게이트 설정"""
         ENABLED = True
         ROLLING_N = 20              # 롤링 윈도우 크기
-        ROLLING_THRESHOLD = 0.45    # 승률 임계값 (45%)
+        ROLLING_THRESHOLD = 0.40    # 승률 임계값 (40%) — 멀티버스 검증: 오경보 20%→12%, 감지율 99.5%
         CONSEC_LOSS_LIMIT = 3       # 당일 연속 손실 제한
         HARD_CAP_DAYS = 10          # 연속 차단일 하드캡
 

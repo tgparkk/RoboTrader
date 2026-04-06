@@ -301,38 +301,10 @@ class TradingDecisionEngine:
                 trading_stock.last_signal_candle_time == current_candle_time):
                 return False, f"동일 캔들 중복신호 차단 ({current_candle_time.strftime('%H:%M')})", buy_info
             
-            # 성과 게이트 체크 (롤링승률 + 연속손실)
-            if self.performance_gate:
-                gate_allowed, gate_reason = self.performance_gate.check_gate()
-                if not gate_allowed:
-                    self.logger.info(
-                        f"성과 게이트 차단: {stock_code} ({gate_reason})"
-                    )
-                    # 가상 추적용 엔트리 기록 (EOD에 결과 계산)
-                    try:
-                        trade_date = now_kst().strftime('%Y%m%d')
-                        if combined_data is not None and len(combined_data) > 10:
-                            entry_idx = len(combined_data) - 2
-                            # 현재 적용 중인 SL/TP 전달 (약세장 손절축소 반영)
-                            effective_sl = self.get_effective_stop_loss()    # 0.05 또는 0.03
-                            effective_tp = self.get_effective_take_profit()  # 0.06 또는 0.04
-                            self.performance_gate.add_shadow_entry(
-                                stock_code=stock_code,
-                                entry_price=float(combined_data.iloc[-1]['close']),
-                                entry_idx=entry_idx,
-                                trade_date=trade_date,
-                                candle_df=None,
-                                stop_loss_pct=-effective_sl * 100,   # -5.0 또는 -3.0
-                                take_profit_pct=effective_tp * 100,  # 6.0 또는 4.0
-                            )
-                    except Exception as e:
-                        self.logger.debug(f"가상 추적 엔트리 기록 실패: {e}")
-                    return False, f"성과게이트: {gate_reason}", buy_info
-
             # 🆕 현재 처리 중인 종목 코드 저장 (디버깅용)
             self._current_stock_code = stock_code
 
-            # 🆕 전략에 따라 매수 신호 확인 분기
+            # 🆕 전략에 따라 매수 신호 확인 분기 (게이트보다 먼저 — 전략 통과 종목만 가상 추적)
             if self.active_strategy == 'price_position':
                 # 가격 위치 기반 전략
                 signal_result, reason, price_info = self._check_price_position_buy_signal(combined_data, trading_stock)
@@ -340,6 +312,32 @@ class TradingDecisionEngine:
                 # 기존 눌림목 캔들패턴 전략 (기본값)
                 signal_result, reason, price_info = self._check_pullback_candle_buy_signal(combined_data, trading_stock)
             if signal_result and price_info:
+                # 성과 게이트 체크 (전략 신호 통과 후 — 가상 추적 정확도 보장)
+                if self.performance_gate:
+                    gate_allowed, gate_reason = self.performance_gate.check_gate()
+                    if not gate_allowed:
+                        self.logger.info(
+                            f"성과 게이트 차단: {stock_code} ({gate_reason})"
+                        )
+                        # 가상 추적용 엔트리 기록 (전략 신호 통과 종목만, EOD에 결과 계산)
+                        try:
+                            trade_date = now_kst().strftime('%Y%m%d')
+                            if combined_data is not None and len(combined_data) > 10:
+                                entry_idx = len(combined_data) - 2
+                                effective_sl = self.get_effective_stop_loss()
+                                effective_tp = self.get_effective_take_profit()
+                                self.performance_gate.add_shadow_entry(
+                                    stock_code=stock_code,
+                                    entry_price=float(combined_data.iloc[-1]['close']),
+                                    entry_idx=entry_idx,
+                                    trade_date=trade_date,
+                                    candle_df=None,
+                                    stop_loss_pct=-effective_sl * 100,
+                                    take_profit_pct=effective_tp * 100,
+                                )
+                        except Exception as e:
+                            self.logger.debug(f"가상 추적 엔트리 기록 실패: {e}")
+                        return False, f"성과게이트: {gate_reason}", buy_info
                 # 매수 신호 발생 시 가격과 수량 계산
                 buy_price = price_info['buy_price']
                 if buy_price <= 0:
