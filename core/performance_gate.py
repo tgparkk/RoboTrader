@@ -123,8 +123,7 @@ class PerformanceGate:
                 user=PG_USER, password=PG_PASSWORD
             )
             cur = conn.cursor()
-            # 가상추적은 하루 최대 7건만 로드 (실거래 보유 한도와 동일)
-            # ROW_NUMBER()로 같은 날 gate_shadow 중 최신 7건만 선택
+            # 가상추적은 is_overflow=FALSE만 로드 (하루 최대 7건)
             cur.execute('''
                 SELECT profit_rate, timestamp, source FROM (
                     SELECT profit_rate, timestamp, 'real' AS source
@@ -132,13 +131,9 @@ class PerformanceGate:
                     WHERE action = 'SELL'
                     UNION ALL
                     SELECT profit_rate, timestamp, 'shadow' AS source
-                    FROM (
-                        SELECT profit_rate, timestamp,
-                               ROW_NUMBER() OVER (PARTITION BY timestamp::date ORDER BY id) as rn
-                        FROM virtual_trading_records
-                        WHERE strategy = 'gate_shadow' AND action = 'SELL'
-                    ) ranked
-                    WHERE rn <= 7
+                    FROM virtual_trading_records
+                    WHERE strategy = 'gate_shadow' AND action = 'SELL'
+                      AND (is_overflow IS NULL OR is_overflow = FALSE)
                 ) combined
                 ORDER BY timestamp DESC
                 LIMIT %s
@@ -280,6 +275,14 @@ class PerformanceGate:
             stop_loss_pct: 실제 적용 손절 비율 (예: -5.0 또는 -3.0). None이면 전략 기본값 사용.
             take_profit_pct: 실제 적용 익절 비율 (예: 6.0 또는 4.0). None이면 전략 기본값 사용.
         """
+        # 하루 최대 7건 제한 (실거래 동시 보유 한도와 동일)
+        MAX_SHADOW_PER_DAY = 7
+        same_day_count = sum(
+            1 for e in self._shadow_entries
+            if e['trade_date'] == trade_date and not e.get('is_overflow', False)
+        )
+        is_overflow = same_day_count >= MAX_SHADOW_PER_DAY
+
         # 중복 방지: 같은 날 같은 종목은 스킵
         for existing in self._shadow_entries:
             if existing['stock_code'] == stock_code and existing['trade_date'] == trade_date:
@@ -288,6 +291,14 @@ class PerformanceGate:
                 )
                 return
 
+        if is_overflow:
+            self.logger.info(
+                f"👻 가상 추적 초과 등록(관찰용): {stock_code} ({trade_date}, 승률 미반영)"
+            )
+        else:
+            self.logger.info(
+                f"👻 가상 추적 등록: {stock_code} ({trade_date}, {same_day_count + 1}/{MAX_SHADOW_PER_DAY}건)"
+            )
         self._shadow_entries.append({
             'stock_code': stock_code,
             'entry_price': entry_price,
@@ -296,6 +307,7 @@ class PerformanceGate:
             'candle_df': candle_df,  # None이면 EOD에 DB에서 조회
             'stop_loss_pct': stop_loss_pct,
             'take_profit_pct': take_profit_pct,
+            'is_overflow': is_overflow,
         })
         self._save_state()
 
@@ -361,11 +373,17 @@ class PerformanceGate:
                     result = strategy.simulate_trade(df, entry['entry_idx'])
                     if result:
                         is_win = result['result'] == 'WIN'
-                        self.recent_results.append(1 if is_win else 0)
+                        is_overflow = entry.get('is_overflow', False)
+
+                        # overflow가 아닌 건만 승률 deque에 반영
+                        if not is_overflow:
+                            self.recent_results.append(1 if is_win else 0)
+
                         processed += 1
                         pnl = result['pnl']
+                        overflow_tag = " [초과-관찰용]" if is_overflow else ""
                         self.logger.debug(
-                            f"👻 가상 추적: {entry['stock_code']} → "
+                            f"👻 가상 추적{overflow_tag}: {entry['stock_code']} → "
                             f"{'WIN' if is_win else 'LOSS'} ({pnl:+.2f}%)"
                         )
 
@@ -379,8 +397,9 @@ class PerformanceGate:
                         cur.execute(
                             '''INSERT INTO virtual_trading_records
                                (stock_code, stock_name, action, quantity, price,
-                                timestamp, strategy, reason, profit_rate, profit_loss)
-                               VALUES (%s, %s, 'SELL', 0, %s, %s, 'gate_shadow', %s, %s, 0)''',
+                                timestamp, strategy, reason, profit_rate, profit_loss,
+                                is_overflow)
+                               VALUES (%s, %s, 'SELL', 0, %s, %s, 'gate_shadow', %s, %s, 0, %s)''',
                             (
                                 entry['stock_code'],
                                 entry.get('stock_name', ''),
@@ -388,6 +407,7 @@ class PerformanceGate:
                                 ts,
                                 reason_str,
                                 pnl,
+                                is_overflow,
                             )
                         )
                         cur.close()
