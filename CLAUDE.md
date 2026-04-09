@@ -74,7 +74,7 @@ ACTIVE_STRATEGY = 'price_position'
 - 전일 KOSPI/KOSDAQ -3% → 매수 완전 중단 (4년 시뮬: -3% 이하만 마이너스)
 - 전일 -1% 이하 → SL/TP 정상 유지 (03-24 멀티버스: 축소는 역효과)
 - 전일 -1% + NXT 갭 -0.5% → 매수 완전 중단
-- NXT sentiment -0.7~-0.9 → very_bearish (손절축소, 매수 허용)
+- NXT sentiment -0.7~-0.9 → very_bearish (3종목 축소, SL/TP는 5%/6% 고정)
 - NXT sentiment <= -0.9 → extreme_bearish (매수 완전 중단)
 - 장 시작 갭 -1.5% 이하 → 매수 중단 (09:01 체크)
 - 장중 지수 -0.7% 이하 → SL 3%로 동적 축소 (10분 주기, -0.3% 회복 시 원복)

@@ -112,7 +112,7 @@ class StrategySettings:
 
         # 심리 판단 임계값 (-1.0 ~ +1.0)
         BEARISH_THRESHOLD = -0.3                # 이 이하면 약세
-        VERY_BEARISH_THRESHOLD = -0.7           # 이 이하면 강약세 (손절축소, 매수 허용)
+        VERY_BEARISH_THRESHOLD = -0.7           # 이 이하면 강약세 (3종목 축소, SL/TP 고정)
         EXTREME_BEARISH_THRESHOLD = -0.9        # 이 이하면 극약세 (매수 중단)
         BULLISH_THRESHOLD = 0.3                 # 이 이상이면 강세
 

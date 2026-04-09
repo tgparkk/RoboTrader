@@ -261,7 +261,7 @@ class PreMarketAnalyzer:
             if sentiment == 'extreme_bearish':
                 log_lines.append(f"극약세: NXT sentiment {sentiment_score:+.2f} <= {pm.EXTREME_BEARISH_THRESHOLD} -> 매수 중단")
             if sentiment == 'very_bearish':
-                log_lines.append(f"강약세: NXT sentiment {sentiment_score:+.2f} <= {pm.VERY_BEARISH_THRESHOLD} -> 손절축소, 매수 허용")
+                log_lines.append(f"강약세: NXT sentiment {sentiment_score:+.2f} <= {pm.VERY_BEARISH_THRESHOLD} -> {rec_max_pos}종목 축소, SL/TP 고정")
             if self._prev_day_decline_active and sentiment not in ('circuit_breaker', 'extreme_bearish', 'very_bearish', 'bearish'):
                 log_lines.append("전일 하락 감지 -> SL/TP 정상 유지")
             log_lines.extend([
