@@ -774,15 +774,17 @@ class DayTradingBot:
                         None, self.pre_market_analyzer.check_market_open_gap
                     )
                     if updated_report:
-                        # 서킷브레이커 발동 → 매매 엔진에 업데이트된 리포트 재전달
+                        # 서킷브레이커/갭업필터 발동 → 매매 엔진에 업데이트된 리포트 재전달
                         self.decision_engine.set_pre_market_report(updated_report)
+                        is_gap_up = updated_report.market_sentiment == 'gap_up_filter'
+                        label = "갭업필터" if is_gap_up else "서킷브레이커"
                         self.logger.warning(
-                            f"[장시작갭] 서킷브레이커 발동! "
+                            f"[장시작갭] {label} 발동! "
                             f"추천포지션={updated_report.recommended_max_positions}"
                         )
                         # 텔레그램 긴급 알림
                         gap_msg = (
-                            f"[장시작갭 서킷브레이커]\n"
+                            f"[장시작갭 {label}]\n"
                             f"매수 중단! 포지션={updated_report.recommended_max_positions}\n"
                             f"{updated_report.log_lines[0] if updated_report.log_lines else ''}"
                         )

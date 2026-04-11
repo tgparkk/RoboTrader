@@ -74,7 +74,7 @@ class PreMarketSnapshot:
 class PreMarketReport:
     """최종 프리마켓 인텔리전스 리포트"""
     report_time: datetime
-    market_sentiment: str           # 'bullish', 'bearish', 'very_bearish', 'extreme_bearish', 'neutral', 'circuit_breaker'
+    market_sentiment: str           # 'bullish', 'bearish', 'very_bearish', 'extreme_bearish', 'neutral', 'circuit_breaker', 'gap_up_filter'
     sentiment_score: float          # -1.0 ~ +1.0
     gap_direction: str              # 'gap_up', 'gap_down', 'flat'
     expected_gap_pct: float         # 예상 갭 %
@@ -353,7 +353,39 @@ class PreMarketAnalyzer:
                 f"(임계값: {pm.MARKET_OPEN_GAP_THRESHOLD_PCT}%)"
             )
 
-            # 임계값 이하이면 서킷브레이커 발동
+            # 갭업 필터: KOSPI 시가갭 >= +1.0% → 매수 중단 (데드캣바운스 회피)
+            if (getattr(pm, 'MARKET_OPEN_GAP_UP_FILTER_ENABLED', False)
+                    and kospi_gap >= pm.MARKET_OPEN_GAP_UP_THRESHOLD_PCT):
+                reason = (
+                    f"장시작 KOSPI 갭업 {kospi_gap:+.2f}% "
+                    f"(임계값 +{pm.MARKET_OPEN_GAP_UP_THRESHOLD_PCT}%)"
+                )
+                logger.warning(f"[장시작갭업] 매수 중단! {reason}")
+
+                if self._report:
+                    self._report.recommended_max_positions = 0
+                    self._report.market_sentiment = 'gap_up_filter'
+                    self._report.nxt_available = True
+                    self._report.log_lines.insert(0, f"갭업필터: {reason}")
+                else:
+                    self._report = PreMarketReport(
+                        report_time=now_kst(),
+                        market_sentiment='gap_up_filter',
+                        sentiment_score=0.0,
+                        gap_direction='gap_up',
+                        expected_gap_pct=kospi_gap,
+                        volatility_level='normal',
+                        recommended_max_positions=0,
+                        recommended_stop_loss_pct=0.05,
+                        recommended_take_profit_pct=0.06,
+                        nxt_available=True,
+                        snapshot_count=0,
+                        log_lines=[f"갭업필터: {reason}"],
+                    )
+
+                return self._report
+
+            # 임계값 이하이면 서킷브레이커 발동 (갭다운)
             if worst_gap <= pm.MARKET_OPEN_GAP_THRESHOLD_PCT:
                 idx_name = "KOSPI" if kospi_gap <= kosdaq_gap else "KOSDAQ"
                 reason = (
@@ -453,7 +485,7 @@ class PreMarketAnalyzer:
             worst_gap = min(kospi_gap, kosdaq_gap)
 
             current_sentiment = self._report.market_sentiment if self._report else 'neutral'
-            is_currently_blocked = current_sentiment == 'circuit_breaker'
+            is_currently_blocked = current_sentiment in ('circuit_breaker', 'gap_up_filter')
 
             logger.info(
                 f"[장중지수] KOSPI: {kospi_gap:+.2f}%, KOSDAQ: {kosdaq_gap:+.2f}% "

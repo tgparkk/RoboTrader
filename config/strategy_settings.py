@@ -142,6 +142,10 @@ class StrategySettings:
         MARKET_OPEN_GAP_THRESHOLD_PCT = -1.5          # 지수 시가 갭 이 값 이하 → 매수 중단
         MARKET_OPEN_GAP_CHECK_MINUTE = 1              # 장 시작 후 N분에 체크 (09:01)
 
+        # 장 시작 갭업 필터 (데드캣바운스 회피, 04-11 멀티버스 검증: 강건성 0.5~2.0% 전구간 유효)
+        MARKET_OPEN_GAP_UP_FILTER_ENABLED = True      # 갭업 필터 사용 여부
+        MARKET_OPEN_GAP_UP_THRESHOLD_PCT = 1.0        # KOSPI 시가갭 이 값 이상 → 매수 중단
+
         # 장중 지수 모니터링 (09:30~ 장 마감까지 주기적 체크)
         INTRADAY_INDEX_CHECK_ENABLED = True           # 장중 지수 체크 사용 여부
         INTRADAY_INDEX_CHECK_INTERVAL_MINUTES = 2     # 체크 주기 (분) — 후행신호 지연 최소화 위해 10→2분
