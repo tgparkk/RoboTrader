@@ -33,7 +33,7 @@ ACTIVE_STRATEGY = 'price_position'
 |------|--------|
 | 시가 대비 | 1% ~ 3% 상승 |
 | 매수 진입 시간 | 9:00 ~ 12:00 (PricePosition.ENTRY_START/END_HOUR) |
-| 스크리너 스캔 시간 | 9:05 ~ 11:50 (Screener.SCAN_START/END) — 진입 창과 별도 |
+| 스크리너 스캔 시간 | 9:01 ~ 11:50 (Screener.SCAN_START/END) — 진입 창과 별도 |
 | 거래 요일 | 월~금 전체 |
 | 동시 보유 최대 | 7종목 (03-28 멀티버스: 7종목 +280% vs 5종목 +216%) |
 | 고급 필터 | 변동성 < 1.2%, 모멘텀 < +2.0%, 갭다운 > -2% |
@@ -77,7 +77,8 @@ ACTIVE_STRATEGY = 'price_position'
 - NXT sentiment -0.7~-0.9 → very_bearish (3종목 축소, SL/TP는 5%/6% 고정)
 - NXT sentiment <= -0.9 → extreme_bearish (매수 완전 중단)
 - 장 시작 갭 -1.5% 이하 → 매수 중단 (09:01 체크)
-- 장중 지수 -0.7% 이하 → SL 3%로 동적 축소 (10분 주기, -0.3% 회복 시 원복)
+- **장 시작 KOSPI 갭업 +1.0% 이상 → 매수 중단** (09:01 체크, 04-11 멀티버스: 강건성 검증 완료)
+- 장중 지수 -0.7% 이하 → SL 3%로 동적 축소 (2분 주기, -0.3% 회복 시 원복)
 - 장중 지수 -2% 이하 → 매수 중단 (-1% 이상 회복 시 재개)
 - 상세: [docs/pre_market_circuit_breaker.md](docs/pre_market_circuit_breaker.md)
 
@@ -133,7 +134,7 @@ analysis/                        # 분석/시뮬레이션 스크립트
 
 ## 안전장치
 
-- **서킷브레이커**: 전일 -3% → 매수 중단, NXT ≤ -0.9 → 매수 중단 (상세: docs/pre_market_circuit_breaker.md)
+- **서킷브레이커**: 전일 -3% → 매수 중단, NXT ≤ -0.9 → 매수 중단, KOSPI갭업 +1.0% → 매수 중단 (상세: docs/pre_market_circuit_breaker.md)
 - **장중 동적 SL**: 지수 -0.7% 이하 시 SL 3%로 축소 (03-26 멀티버스: 두 기간 모두 1위)
 - **매수 쿨다운**: 동일 종목 25분 내 재매수 차단
 - **자금 관리**: 건당 가용잔고 20%, 총 투자 90% 상한 (core/fund_manager.py)

@@ -54,13 +54,13 @@
 - 설정: `CIRCUIT_BREAKER_PREV_DAY_PCT = -3.0` (4년 일봉 시뮬: -3% 이하만 마이너스)
 - 코드: `_check_circuit_breaker()`
 
-### 조건1b: 전일 소폭 하락 → 손절 축소
+### 조건1b: 전일 소폭 하락 → 로깅 전용 (SL/TP 정상 유지)
 
 ```
-전일 KOSPI 또는 KOSDAQ 등락률 <= -1.0%  -->  매수 유지, 손절 3%/익절 4%로 축소
+전일 KOSPI 또는 KOSDAQ 등락률 <= -1.0%  -->  매수 유지, SL/TP 정상 유지 (5%/6%)
 ```
 
-- 설정: `PREV_DAY_DECLINE_THRESHOLD = -1.0`, `PREV_DAY_DECLINE_STOP_LOSS_RATIO = 0.03`
+- 설정: `PREV_DAY_DECLINE_THRESHOLD = -1.0` (로깅 전용 — 03-24 멀티버스: 축소는 역효과)
 - 코드: `_check_circuit_breaker()`
 
 ### 조건2: 전일 하락 + NXT 갭다운 복합
@@ -79,8 +79,19 @@
 서킷브레이커 발동 상태에서 NXT 갭 >= +3.0%  -->  해제 (정상 복귀)
 ```
 
-- 해제 시: 최대 포지션 5종목, neutral 모드(손절 5% / 익절 6%) — 정상 운영으로 전면 복귀
+- 해제 시: 최대 포지션 7종목, neutral 모드(손절 5% / 익절 6%) — 정상 운영으로 전면 복귀
 - 설정: `CIRCUIT_BREAKER_RELEASE_GAP_PCT = 3.0`
+
+### 조건4: 장 시작 KOSPI 갭업 필터 (04-11 추가)
+
+```
+장 시작 KOSPI 시가갭 >= +1.0%  -->  매수 중단 (데드캣바운스 회피)
+```
+
+- 설정: `MARKET_OPEN_GAP_UP_FILTER_ENABLED = True`, `MARKET_OPEN_GAP_UP_THRESHOLD_PCT = 1.0`
+- 코드: `check_market_open_gap()` (09:01에 기존 갭다운 체크와 함께 실행)
+- 멀티버스 검증: 임계값 0.5~2.0% 전구간 유효 (강건성 확인), 6명 전문가 만장일치
+- 성과 게이트와 조합 시 MDD 29.6%→4.9%, 하락기(3~4월) -30.9%→+5.6%
 
 ---
 
@@ -105,10 +116,10 @@
 | 점수 범위 | 분류 | 동작 |
 |-----------|------|------|
 | <= -0.9 | `extreme_bearish` | 매수 완전 중단 (0종목) |
-| <= -0.7 | `very_bearish` | 최대 3종목, 손절 3% / 익절 4% (매수 허용) |
-| <= -0.3 | `bearish` | 최대 3종목, 손절 3% / 익절 4% |
-| >= +0.3 | `bullish` | 정상 5종목, 손절 5% / 익절 6% |
-| 그 외 | `neutral` | 정상 5종목, 손절 5% / 익절 6% |
+| <= -0.7 | `very_bearish` | 최대 3종목, 손절 5% / 익절 6% (SL/TP 고정) |
+| <= -0.3 | `bearish` | 최대 3종목, 손절 5% / 익절 6% |
+| >= +0.3 | `bullish` | 정상 7종목, 손절 5% / 익절 6% |
+| 그 외 | `neutral` | 정상 7종목, 손절 5% / 익절 6% |
 
 코드: `_calculate_sentiment_score()`, `_score_to_sentiment()`
 
@@ -171,35 +182,33 @@ EXTREME_BEARISH_THRESHOLD = -0.9    # 극약세 (매수 완전 중단)
 BULLISH_THRESHOLD = 0.3
 
 # 약세장 파라미터 (bearish: -0.3 이하)
-BEARISH_MAX_POSITIONS = 3
-BEARISH_STOP_LOSS_RATIO = 0.03    # 5% → 3%
-BEARISH_TAKE_PROFIT_RATIO = 0.04  # 6% → 4%
+BEARISH_MAX_POSITIONS = 3               # 7 → 3종목 축소
 
 # 강약세장 파라미터 (very_bearish: -0.7 ~ -0.9)
-VERY_BEARISH_MAX_POSITIONS = 3
-VERY_BEARISH_STOP_LOSS_RATIO = 0.03   # 3%
-VERY_BEARISH_TAKE_PROFIT_RATIO = 0.04 # 4%
+VERY_BEARISH_MAX_POSITIONS = 3          # 3종목 축소, SL/TP는 5%/6% 고정
 
 # 극약세장 (extreme_bearish: -0.9 이하)
 EXTREME_BEARISH_MAX_POSITIONS = 0  # 매수 중단
 
 # 서킷브레이커: 전일 지수 기반
 CIRCUIT_BREAKER_PREV_DAY_PCT = -3.0           # 조건1: 전일 -3% → 매수 중단
-PREV_DAY_DECLINE_THRESHOLD = -1.0             # 조건1b: 전일 -1% → 손절 축소
-PREV_DAY_DECLINE_STOP_LOSS_RATIO = 0.03       # 조건1b: 손절 3%
-PREV_DAY_DECLINE_TAKE_PROFIT_RATIO = 0.04     # 조건1b: 익절 4%
+PREV_DAY_DECLINE_THRESHOLD = -1.0             # 조건1b: 전일 -1% → 로깅 전용 (SL/TP 정상 유지)
 CIRCUIT_BREAKER_PREV_DAY_PCT_WITH_GAP = -1.0  # 조건2: 전일 -1%
 CIRCUIT_BREAKER_NXT_GAP_PCT = -0.5            # 조건2: + NXT 갭 -0.5%
-CIRCUIT_BREAKER_RELEASE_GAP_PCT = 3.0         # 해제: NXT 갭 +3% → 정상 복귀 (5종목, neutral)
+CIRCUIT_BREAKER_RELEASE_GAP_PCT = 3.0         # 해제: NXT 갭 +3% → 정상 복귀 (7종목, neutral)
 
 # 장 시작 갭 체크
 MARKET_OPEN_GAP_CHECK_ENABLED = True
 MARKET_OPEN_GAP_THRESHOLD_PCT = -1.5          # 지수 시가 갭 -1.5% 이하 → 매수 중단
 MARKET_OPEN_GAP_CHECK_MINUTE = 1              # 09:01에 체크
 
+# 장 시작 갭업 필터 (04-11 추가, 데드캣바운스 회피)
+MARKET_OPEN_GAP_UP_FILTER_ENABLED = True      # 갭업 필터 사용 여부
+MARKET_OPEN_GAP_UP_THRESHOLD_PCT = 1.0        # KOSPI 시가갭 +1.0% 이상 → 매수 중단
+
 # 장중 지수 모니터링
 INTRADAY_INDEX_CHECK_ENABLED = True
-INTRADAY_INDEX_CHECK_INTERVAL_MINUTES = 30    # 30분 주기
+INTRADAY_INDEX_CHECK_INTERVAL_MINUTES = 2     # 2분 주기
 INTRADAY_INDEX_DROP_THRESHOLD_PCT = -2.0      # 전일 대비 -2% 이하 → 매수 중단
 INTRADAY_INDEX_RECOVERY_PCT = -1.0            # -1% 이상 회복 시 → 매수 재개
 ```
