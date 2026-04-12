@@ -839,6 +839,7 @@ class DayTradingBot:
             last_intraday_update = now_kst()  # 🆕 장중 데이터 업데이트 시간
             last_intraday_index_check = now_kst()  # 장중 지수 체크 시간
             post_market_data_saved_date = None  # 장 마감 후 데이터 저장 완료 날짜
+            expanded_minute_saved_date = None  # 분봉 확대 수집 완료 날짜 (15:45 1회 실행)
             # last_chart_generation = datetime(2000, 1, 1, tzinfo=KST)  # 🆕 장 마감 후 차트 생성 시간 (주석처리)
             # chart_generation_count = 0  # 🆕 차트 생성 횟수 카운터 (주석처리)
             # last_chart_reset_date = now_kst().date()  # 🆕 차트 카운터 리셋 기준 날짜 (주석처리)
@@ -885,6 +886,49 @@ class DayTradingBot:
                                 self.logger.warning(f"⚠️ 가상 추적 처리 실패: {e}")
                             # 두 단계 모두 시도 후 날짜 플래그 설정
                             post_market_data_saved_date = current_date
+
+                # 🆕 분봉 확대 수집 (15:45 1회 실행, 평일만)
+                # 목적: 거래대금 상위 300종목의 당일 분봉을 수집하여 시뮬-실거래 괴리 해소
+                if current_time.weekday() < 5:
+                    current_date = current_time.date()
+                    if expanded_minute_saved_date != current_date:
+                        # 15:45~16:00 사이 1회 실행
+                        if current_time.hour == 15 and 45 <= current_time.minute < 60:
+                            try:
+                                self.logger.info("📦 분봉 확대 수집 시작 (상위 300종목)")
+                                from core.expanded_minute_collector import ExpandedMinuteCollector
+                                collector = ExpandedMinuteCollector(logger=self.logger)
+                                stats = await collector.run_async(
+                                    target_date=current_time.strftime('%Y%m%d'),
+                                    top_n=300,
+                                )
+                                self.logger.info(
+                                    f"✅ 분봉 확대 수집 완료: "
+                                    f"성공 {stats['collected']}/{stats['target_count']}, "
+                                    f"실패 {stats['failed']}, "
+                                    f"소요 {stats['elapsed_sec']:.0f}초"
+                                )
+                                # 텔레그램 알림
+                                try:
+                                    if self.telegram:
+                                        success_rate = (
+                                            stats['collected'] / stats['target_count'] * 100
+                                            if stats['target_count'] > 0 else 0
+                                        )
+                                        notify_msg = (
+                                            f"[분봉 확대 수집 완료]\n"
+                                            f"대상: {stats['target_count']}종목 "
+                                            f"(스킵 {stats['skipped']})\n"
+                                            f"성공: {stats['collected']}건 ({success_rate:.0f}%)\n"
+                                            f"실패: {stats['failed']}건\n"
+                                            f"소요: {stats['elapsed_sec']:.0f}초"
+                                        )
+                                        await self.telegram.notify_system_status(notify_msg)
+                                except Exception as te:
+                                    self.logger.debug(f"텔레그램 알림 실패: {te}")
+                            except Exception as e:
+                                self.logger.error(f"❌ 분봉 확대 수집 실패: {e}")
+                            expanded_minute_saved_date = current_date
 
                 # 장마감 청산 로직 제거: 15:00 시장가 매도로 대체됨
                 
