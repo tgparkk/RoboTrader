@@ -44,6 +44,15 @@ def simulate_with_exit_strategy(df, entry_idx, strategy_type, params, base_sl=-5
     if entry_price <= 0:
         return None
 
+    # SL/TP 오버라이드 지원
+    effective_sl = params.get('override_sl', base_sl)
+    effective_tp = params.get('override_tp', base_tp)
+
+    # 시간기반 손절용: 진입 시간 파싱
+    entry_time_str = str(entry_time).replace(':', '').ljust(6, '0')[:6]
+    entry_time_int = int(entry_time_str)
+    entry_hour = entry_time_int // 10000
+
     max_profit_pct = 0.0
     max_price = entry_price
 
@@ -63,13 +72,13 @@ def simulate_with_exit_strategy(df, entry_idx, strategy_type, params, base_sl=-5
             max_profit_pct = high_pnl
 
         # 기본 익절 체크
-        if high_pnl >= base_tp:
-            return _result('WIN', base_tp, '익절', entry_time, row['time'], entry_price, i - entry_idx, max_profit_pct)
+        if high_pnl >= effective_tp:
+            return _result('WIN', effective_tp, '익절', entry_time, row['time'], entry_price, i - entry_idx, max_profit_pct)
 
         # 기본 손절 체크
         low_pnl = (low / entry_price - 1) * 100
-        if low_pnl <= base_sl:
-            return _result('LOSS', base_sl, '손절', entry_time, row['time'], entry_price, i - entry_idx, max_profit_pct)
+        if low_pnl <= effective_sl:
+            return _result('LOSS', effective_sl, '손절', entry_time, row['time'], entry_price, i - entry_idx, max_profit_pct)
 
         close_pnl = (close / entry_price - 1) * 100
 
@@ -98,6 +107,14 @@ def simulate_with_exit_strategy(df, entry_idx, strategy_type, params, base_sl=-5
                 if drop_from_peak <= trail_pct:
                     return _result('WIN' if close_pnl > 0 else 'LOSS', close_pnl, '오후트레일링',
                                    entry_time, row['time'], entry_price, i - entry_idx, max_profit_pct)
+
+        elif strategy_type == 'time_loss':
+            hours = params['hours']
+            max_loss = params.get('max_loss', 0.0)
+            cutoff_time_int = entry_time_int + hours * 10000
+            if row_time_int >= cutoff_time_int and close_pnl <= max_loss:
+                return _result('WIN' if close_pnl > 0 else 'LOSS', close_pnl, '시간손절',
+                               entry_time, row['time'], entry_price, i - entry_idx, max_profit_pct)
 
         elif strategy_type == 'profit_lock':
             threshold = params['threshold']  # e.g., +3.0 (3% 도달하면)
@@ -140,6 +157,20 @@ def run_multiverse(start_date='20250224', end_date=None, verbose=True):
         ('트레일-2.0%', 'trailing', {'trail_pct': -2.0}),
         ('트레일-2.5%', 'trailing', {'trail_pct': -2.5}),
         ('트레일-3.0%', 'trailing', {'trail_pct': -3.0}),
+
+        # 조기 손절: SL을 줄여서 실제로 발동되게
+        ('SL-2%/TP+6%', 'baseline', {'override_sl': -2.0}),
+        ('SL-3%/TP+6%', 'baseline', {'override_sl': -3.0}),
+        ('SL-2%/TP+4%', 'baseline', {'override_sl': -2.0, 'override_tp': 4.0}),
+        ('SL-3%/TP+4%', 'baseline', {'override_sl': -3.0, 'override_tp': 4.0}),
+        ('SL-2%/TP+3%', 'baseline', {'override_sl': -2.0, 'override_tp': 3.0}),
+        ('SL-3%/TP+3%', 'baseline', {'override_sl': -3.0, 'override_tp': 3.0}),
+
+        # 시간기반 손절: N시간 후 마이너스면 청산
+        ('2시간후-매도', 'time_loss', {'hours': 2, 'max_loss': 0.0}),
+        ('2시간후-1%이하매도', 'time_loss', {'hours': 2, 'max_loss': -1.0}),
+        ('3시간후-매도', 'time_loss', {'hours': 3, 'max_loss': 0.0}),
+        ('1시간후-매도', 'time_loss', {'hours': 1, 'max_loss': 0.0}),
 
         # 시간+수익 조건: N시에 수익이면 매도, 아니면 15시까지
         ('12시수익매도', 'time_profit', {'cutoff_time': 120000, 'min_profit': 0.0}),

@@ -353,6 +353,17 @@ class StockScreener:
                     low_price=low_price,
                 )
 
+                # 최소 점수 컷 (04-13 멀티버스: T65 = 5 fold 중 4 fold 우위)
+                min_score = self.config.get('min_score', 0)
+                if min_score > 0 and score < min_score:
+                    self.logger.debug(
+                        f"[스크리너] {code}({name}) 점수 부족: "
+                        f"{score:.0f} < {min_score}"
+                    )
+                    self._rejected_stocks.add(code)
+                    rejected_reasons['low_score'] = rejected_reasons.get('low_score', 0) + 1
+                    continue
+
                 candidates.append(ScreenedStock(
                     code=code,
                     name=name,

@@ -118,6 +118,7 @@ class DayTradingBot:
             'max_phase3_checks': sc.MAX_PHASE3_CHECKS,
             'max_candidates_per_scan': sc.MAX_CANDIDATES_PER_SCAN,
             'max_total_candidates': sc.MAX_TOTAL_CANDIDATES,
+            'min_score': sc.MIN_SCORE,
         }
 
     def _build_pre_market_config(self) -> dict:

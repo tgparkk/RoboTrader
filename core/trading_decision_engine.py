@@ -265,7 +265,55 @@ class TradingDecisionEngine:
             return float(str_value)
         except (ValueError, TypeError):
             return 0.0
-    
+
+    def _calc_preload_score(self, data, current_price: float,
+                            day_open: float, pct_from_open: float) -> float:
+        """프리로드 진입 시점 간이 점수 계산 (max 90, change_rate 제외).
+
+        stock_screener._calculate_score와 동일 가중치이나 전일종가 없는 상황에서
+        change_rate 항목(10점)은 제외. 실효 임계값은 원 T70 대비 65~67 수준이 근사.
+        """
+        score = 0.0
+
+        # 1. 시가대비 위치 (max 40)
+        if 1.5 <= pct_from_open <= 2.5:
+            score += 40
+        elif 1.0 <= pct_from_open < 1.5:
+            score += 30
+        elif 2.5 < pct_from_open <= 3.0:
+            score += 30
+        else:
+            score += 20
+
+        # 2. 당일 누적 거래대금 (max 30)
+        try:
+            tr_amount = float(data['amount'].sum()) if 'amount' in data.columns else 0.0
+        except Exception:
+            tr_amount = 0.0
+        if tr_amount >= 50_000_000_000:
+            score += 30
+        elif tr_amount >= 20_000_000_000:
+            score += 25
+        elif tr_amount >= 10_000_000_000:
+            score += 20
+        elif tr_amount >= 5_000_000_000:
+            score += 15
+        else:
+            score += 10
+
+        # 3. 당일 고가 대비 현재가 위치 (max 20)
+        try:
+            day_high = float(data['high'].max()) if 'high' in data.columns else current_price
+            day_low = float(data['low'].min()) if 'low' in data.columns else current_price
+        except Exception:
+            day_high = current_price
+            day_low = current_price
+        if day_high > day_low > 0:
+            position = (current_price - day_low) / (day_high - day_low)
+            score += position * 20
+
+        return round(score, 1)
+
     async def analyze_buy_decision(self, trading_stock, combined_data) -> Tuple[bool, str, dict]:
         """
         매수 판단 분석 (가격, 수량 계산 포함)
@@ -1001,6 +1049,23 @@ class TradingDecisionEngine:
                 )
                 if not adv_ok:
                     return False, f"고급필터: {adv_reason}", None
+
+            # 프리로드 종목 점수 필터 (04-13 멀티버스: 프리로드 T70 → +3.9%p, 3/5 fold 우위)
+            if trading_stock is not None:
+                stock_name = getattr(trading_stock, 'stock_name', '') or ''
+                if stock_name.startswith('PRE_'):
+                    from config.strategy_settings import StrategySettings
+                    preload_min = getattr(
+                        StrategySettings.Screener, 'PRELOAD_MIN_SCORE', 0
+                    )
+                    if preload_min > 0:
+                        preload_score = self._calc_preload_score(
+                            data, current_price, day_open, pct_from_open
+                        )
+                        if preload_score < preload_min:
+                            return False, (
+                                f"프리로드 점수 부족: {preload_score:.0f} < {preload_min}"
+                            ), None
 
             # 매수 신호 승인!
             # 🔧 거래 기록은 고급 필터 통과 후로 이동 (버그 수정 2026-02-04)
