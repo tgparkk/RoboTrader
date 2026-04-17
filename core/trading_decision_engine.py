@@ -172,11 +172,25 @@ class TradingDecisionEngine:
             else:
                 self.price_position_strategy = None
 
+            # 🆕 종가매매(오버나이트) 전략 초기화
+            if self.active_strategy == 'closing_trade':
+                from core.strategies.closing_trade_strategy import ClosingTradeStrategy
+                self.closing_trade_strategy = ClosingTradeStrategy(logger=self.logger)
+                ct = StrategySettings.ClosingTrade
+                self.logger.info(
+                    f"   진입조건: {ct.ENTRY_HHMM_START}~{ct.ENTRY_HHMM_END} "
+                    f"전일body>={ct.MIN_PREV_BODY_PCT}% 당일>={ct.MAX_DAY_DECLINE_PCT}% "
+                    f"익일{ct.EXIT_HHMM}시청산"
+                )
+            else:
+                self.closing_trade_strategy = None
+
         except Exception as e:
             self.logger.warning(f"⚠️ 전략 설정 로드 실패: {e}, 기본 전략(pullback) 사용")
             self.active_strategy = 'pullback'
             self.strategy_settings = None
             self.price_position_strategy = None
+            self.closing_trade_strategy = None
 
         # 🆕 매매 실행 모듈 초기화 (리팩토링)
         try:
@@ -308,6 +322,9 @@ class TradingDecisionEngine:
             if self.active_strategy == 'price_position':
                 # 가격 위치 기반 전략
                 signal_result, reason, price_info = self._check_price_position_buy_signal(combined_data, trading_stock)
+            elif self.active_strategy == 'closing_trade':
+                # 종가매매(오버나이트) 전략
+                signal_result, reason, price_info = self._check_closing_trade_buy_signal(combined_data, trading_stock)
             else:
                 # 기존 눌림목 캔들패턴 전략 (기본값)
                 signal_result, reason, price_info = self._check_pullback_candle_buy_signal(combined_data, trading_stock)
@@ -529,14 +546,19 @@ class TradingDecisionEngine:
     async def analyze_sell_decision(self, trading_stock, combined_data=None) -> Tuple[bool, str]:
         """
         매도 판단 분석 (간단한 손절/익절 로직)
-        
+
         Args:
             trading_stock: 거래 종목 객체
             combined_data: 분봉 데이터 (사용하지 않음, 호환성을 위해 유지)
-            
+
         Returns:
             Tuple[매도신호여부, 매도사유]
         """
+        # 🆕 오버나이트 홀드 (closing_trade): 장중 매도 신호 항상 False
+        # 실제 청산은 main.py overnight_exit 태스크가 익일 09:00에 트리거
+        if self.active_strategy == 'closing_trade':
+            return False, "오버나이트 홀드"
+
         try:
             # 실시간 현재가 정보만 사용 (간단한 손절/익절 로직)
             stock_code = trading_stock.stock_code
@@ -1032,6 +1054,106 @@ class TradingDecisionEngine:
 
         except Exception as e:
             self.logger.error(f"❌ 가격위치전략 매수 신호 확인 오류: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+            return False, f"오류: {e}", None
+
+    def _check_closing_trade_buy_signal(self, data, trading_stock=None) -> Tuple[bool, str, Optional[Dict[str, float]]]:
+        """
+        종가매매(오버나이트) 전략 매수 신호 확인.
+
+        조건:
+          - 14:00~14:20 진입 시간창
+          - 전일 양봉 몸통 ≥ 1.0%
+          - 당일 최저점 시가 대비 ≥ -3%
+          - 현재가 > 당일 시가 (본전)
+          - 현재가 > 당일 VWAP (상승 확정)
+
+        Returns:
+            Tuple[bool, str, Optional[Dict]]: (신호여부, 사유, 가격정보)
+        """
+        try:
+            if not self.closing_trade_strategy:
+                return False, "종가매매전략 미초기화", None
+
+            stock_code = trading_stock.stock_code if trading_stock else "UNKNOWN"
+
+            if data is None or len(data) < 20:
+                return False, "데이터 부족", None
+
+            current_time = now_kst()
+            trade_date = current_time.strftime('%Y%m%d')
+            weekday = current_time.weekday()
+            time_str = current_time.strftime('%H%M%S')
+
+            # 시가
+            day_open = self._get_day_open_price(stock_code, trade_date, data)
+            if day_open is None or day_open <= 0:
+                return False, "시가 데이터 없음", None
+
+            current_price = self._safe_float_convert(data.iloc[-1]['close'])
+            if current_price <= 0:
+                return False, "현재가 데이터 없음", None
+
+            # 1차 진입 조건 (시간·요일·전일몸통·본전)
+            can_enter, reason = self.closing_trade_strategy.check_entry_conditions(
+                stock_code=stock_code,
+                current_price=current_price,
+                day_open=day_open,
+                current_time=time_str,
+                trade_date=trade_date,
+                weekday=weekday,
+            )
+            if not can_enter:
+                return False, reason, None
+
+            # 동시 보유 제한 (POSITIONED + BUY_PENDING)
+            if self.trading_manager:
+                from core.models import StockState
+                positioned = self.trading_manager.get_stocks_by_state(StockState.POSITIONED)
+                buy_pending = self.trading_manager.get_stocks_by_state(StockState.BUY_PENDING)
+                current_holding = len(positioned) + len(buy_pending)
+                effective_max = self.closing_trade_strategy.config['max_daily_positions']
+                if current_holding >= effective_max:
+                    return False, f"동시 보유 {effective_max}종목 도달 (현재 {current_holding})", None
+
+            # 2차 고급 조건 (VWAP + 당일 최저 체크)
+            adv_ok, adv_reason = self.closing_trade_strategy.check_advanced_conditions(
+                df=data, candle_idx=len(data) - 1,
+            )
+            if not adv_ok:
+                return False, f"고급필터: {adv_reason}", None
+
+            pct_from_open = (current_price / day_open - 1) * 100
+            prev_body = self.closing_trade_strategy.prev_body_map.get(stock_code, 0)
+
+            price_info = {
+                'buy_price': current_price,
+                'entry_low': day_open * (1 + self.closing_trade_strategy.config['max_day_decline_pct'] / 100),
+                'target_profit': 0.0,  # 장중 익절 없음 (오버나이트)
+                'pattern_data': {
+                    'pct_from_open': pct_from_open,
+                    'day_open': day_open,
+                    'current_price': current_price,
+                    'prev_body_pct': prev_body,
+                    'entry_hhmm': int(time_str[:4]),
+                    'weekday': weekday,
+                    'strategy': 'closing_trade',
+                }
+            }
+
+            self.logger.info(f"🌙 [종가매매전략] 매수 신호!")
+            self.logger.info(f"  - 종목: {stock_code}")
+            self.logger.info(f"  - 시가: {day_open:,.0f}원 / 현재가: {current_price:,.0f}원 (시가+{pct_from_open:+.2f}%)")
+            self.logger.info(f"  - 전일 양봉: {prev_body:+.2f}%")
+            self.logger.info(f"  - 시간: {current_time.strftime('%H:%M')} (익일 09:00 청산 예정)")
+
+            signal_reason = (f"종가매매전략: 전일body+{prev_body:.2f}% 시가+{pct_from_open:.2f}% "
+                             f"(익일청산)")
+            return True, signal_reason, price_info
+
+        except Exception as e:
+            self.logger.error(f"❌ 종가매매전략 매수 신호 확인 오류: {e}")
             import traceback
             self.logger.error(traceback.format_exc())
             return False, f"오류: {e}", None

@@ -7,6 +7,46 @@ from typing import Dict, Optional
 import pytz
 
 
+# 한국 공휴일 (YYYYMMDD 문자열 set). 매년 갱신 필요.
+# 2025~2027 범위 (오버나이트 전략 금요일 진입 → 월요일 청산 대비)
+KOREAN_HOLIDAYS = {
+    # 2025
+    '20250101',  # 신정
+    '20250127', '20250128', '20250129', '20250130',  # 설날 연휴(포함 임시공휴일)
+    '20250301', '20250303',  # 삼일절(토) → 대체공휴일 월
+    '20250505', '20250506',  # 어린이날·석가탄신일 대체
+    '20250606',  # 현충일
+    '20250815',  # 광복절
+    '20251003', '20251006', '20251007', '20251008', '20251009',  # 개천절·추석·한글날
+    '20251225',  # 크리스마스
+    # 2026
+    '20260101',  # 신정
+    '20260216', '20260217', '20260218',  # 설날 연휴
+    '20260302',  # 삼일절(일) → 대체공휴일 월
+    '20260505',  # 어린이날
+    '20260525',  # 석가탄신일
+    '20260608',  # 현충일(월) — 6/6 토요일 보정
+    '20260817',  # 광복절(토) → 대체공휴일 월
+    '20260924', '20260925', '20260926',  # 추석 연휴
+    '20261005',  # 개천절(월)
+    '20261009',  # 한글날
+    '20261225',  # 크리스마스
+    '20261231',  # 연말 증시 휴장
+    # 2027
+    '20270101',  # 신정
+    '20270208', '20270209',  # 설날 연휴
+    '20270301',  # 삼일절
+    '20270505',  # 어린이날
+    '20270513',  # 석가탄신일
+    '20270607',  # 현충일 대체
+    '20270816',  # 광복절 대체
+    '20270914', '20270915', '20270916',  # 추석
+    '20271004',  # 개천절 대체
+    '20271011',  # 한글날 대체
+    '20271231',  # 연말 증시 휴장
+}
+
+
 class MarketHours:
     """시장별 거래시간 설정"""
 
@@ -111,6 +151,36 @@ class MarketHours:
             default_config['timezone'] = market_config['timezone']
             default_config['is_special_day'] = False
             return default_config
+
+    @classmethod
+    def is_trading_day(cls, market: str = 'KRX', dt: Optional[datetime] = None) -> bool:
+        """
+        주어진 날짜가 실제 거래일인지 확인.
+          - 주말(토/일) → False
+          - 공휴일(KOREAN_HOLIDAYS) → False
+          - 그 외 → True
+
+        현재 KRX만 공휴일 캘린더 지원. 해외 시장은 주말만 체크(향후 확장).
+        """
+        market_config = cls.MARKET_CONFIG.get(market)
+        if market_config is None:
+            raise ValueError(f"Unknown market: {market}")
+
+        if dt is None:
+            tz = pytz.timezone(market_config['timezone'])
+            dt = datetime.now(tz)
+
+        # 주말 체크
+        if dt.weekday() >= 5:
+            return False
+
+        # 한국 공휴일 체크
+        if market == 'KRX':
+            date_str = dt.strftime('%Y%m%d')
+            if date_str in KOREAN_HOLIDAYS:
+                return False
+
+        return True
 
     @classmethod
     def is_market_open(cls, market: str = 'KRX', dt: Optional[datetime] = None) -> bool:

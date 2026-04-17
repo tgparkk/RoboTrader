@@ -188,7 +188,13 @@ class TradingStockManager:
                     return False
 
                 # 🆕 25분 매수 쿨다운 확인
-                if trading_stock.is_buy_cooldown_active():
+                # 🌙 오버나이트 전략 시 쿨다운 우회
+                try:
+                    from config.strategy_settings import is_overnight_strategy as _is_overnight_ts
+                    _cooldown_skip_ts = _is_overnight_ts()
+                except Exception:
+                    _cooldown_skip_ts = False
+                if not _cooldown_skip_ts and trading_stock.is_buy_cooldown_active():
                     remaining_minutes = trading_stock.get_remaining_cooldown_minutes()
                     self.logger.warning(f"⚠️ {stock_code}: 매수 쿨다운 활성화 (남은 시간: {remaining_minutes}분)")
                     return False

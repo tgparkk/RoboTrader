@@ -267,6 +267,7 @@ class DayTradingBot:
                 'stock_monitoring': self.trading_manager.start_monitoring,
                 'trading_decision': self._trading_decision_task,
                 'system_monitoring': self._system_monitoring_task,
+                'overnight_exit': self._overnight_exit_task,
                 'telegram': self._telegram_task,
             }
 
@@ -462,7 +463,13 @@ class DayTradingBot:
                 return
 
             # 🆕 25분 매수 쿨다운 확인
-            if trading_stock.is_buy_cooldown_active():
+            # 🌙 오버나이트 전략(closing_trade)은 당일 1회 설계라 쿨다운 우회 — 전일 매매 이력이 당일 진입 차단하지 않도록
+            try:
+                from config.strategy_settings import is_overnight_strategy as _is_overnight
+                _cooldown_skip = _is_overnight()
+            except Exception:
+                _cooldown_skip = False
+            if not _cooldown_skip and trading_stock.is_buy_cooldown_active():
                 remaining_minutes = trading_stock.get_remaining_cooldown_minutes()
                 self.logger.debug(f"⚠️ {stock_code}: 매수 쿨다운 활성화 (남은 시간: {remaining_minutes}분)")
                 return
@@ -751,6 +758,28 @@ class DayTradingBot:
 
                         # 매매 엔진에 리포트 전달
                         self.decision_engine.set_pre_market_report(report)
+
+                        # 🆕 오버나이트 전략 활성 시 전일 양봉 몸통 맵 로드
+                        try:
+                            from config.strategy_settings import is_overnight_strategy
+                            from datetime import timedelta
+                            if is_overnight_strategy() and self.decision_engine.closing_trade_strategy:
+                                yesterday = (current_time - timedelta(days=1))
+                                # 주말 보정 (월요일이면 금요일)
+                                while yesterday.weekday() >= 5:
+                                    yesterday = yesterday - timedelta(days=1)
+                                prev_date = yesterday.strftime('%Y%m%d')
+                                loop_pb = asyncio.get_event_loop()
+                                loaded = await loop_pb.run_in_executor(
+                                    None,
+                                    self.decision_engine.closing_trade_strategy.load_prev_body_map_from_db,
+                                    prev_date, None,
+                                )
+                                self.logger.info(
+                                    f"🌙 [종가매매] 전일({prev_date}) 양봉 몸통 맵 로드: {loaded}종목"
+                                )
+                        except Exception as e:
+                            self.logger.warning(f"⚠️ 전일 양봉 맵 로드 실패: {e}")
 
                         self.logger.info(
                             f"[프리마켓] 리포트 완료: "
@@ -1046,8 +1075,21 @@ class DayTradingBot:
             self.logger.error(f"❌ 장마감 일괄청산 오류: {e}")
     
     async def _execute_end_of_day_liquidation(self):
-        """장마감 시간 모든 보유 종목 시장가 일괄매도 (동적 시간 적용)"""
+        """장마감 시간 모든 보유 종목 시장가 일괄매도 (동적 시간 적용)
+
+        🆕 오버나이트 전략(closing_trade) 활성 시 스킵.
+           익일 09:00 _overnight_exit_task가 청산을 담당.
+        """
         try:
+            # 오버나이트 홀드 스킵 분기
+            try:
+                from config.strategy_settings import is_overnight_strategy
+                if is_overnight_strategy():
+                    self.logger.info("🌙 오버나이트 홀드 모드 (closing_trade) → EOD 청산 스킵")
+                    return
+            except Exception as e:
+                self.logger.warning(f"⚠️ is_overnight_strategy 확인 실패: {e} — 기본 EOD 청산 진행")
+
             from core.models import StockState
 
             # 동적 청산 시간 가져오기
@@ -1100,7 +1142,153 @@ class DayTradingBot:
 
         except Exception as e:
             self.logger.error(f"❌ 장마감 시장가 매도 오류: {e}")
-    
+
+    async def _overnight_exit_task(self):
+        """
+        🌙 오버나이트 홀드 전략(closing_trade) 전용 청산 태스크.
+
+        동작:
+          - 매일 09:00 직후 1회만 실행 (거래일 기준)
+          - POSITIONED/SELL_CANDIDATE 상태 전 종목을 시장가 매도
+          - 체결 모니터링은 기존 _order_monitoring_task에 위임
+
+        활성 조건: StrategySettings.ACTIVE_STRATEGY == 'closing_trade'
+        비활성 시 루프만 돌고 아무 동작 안 함.
+        """
+        import asyncio as _asyncio
+        if not hasattr(self, '_overnight_exit_executed_date'):
+            self._overnight_exit_executed_date = None
+
+        while self.is_running:
+            try:
+                from config.strategy_settings import is_overnight_strategy
+                if not is_overnight_strategy():
+                    # 다른 전략 활성 시 이 태스크는 단순 대기
+                    await _asyncio.sleep(60)
+                    continue
+
+                current_time = now_kst()
+                trade_date = current_time.strftime('%Y%m%d')
+                hhmm = current_time.hour * 100 + current_time.minute
+
+                # 오늘 이미 실행했는지 체크
+                if self._overnight_exit_executed_date == trade_date:
+                    await _asyncio.sleep(30)
+                    continue
+
+                # 주말·공휴일 스킵 (is_trading_day 로 통합 체크)
+                if not MarketHours.is_trading_day('KRX', current_time):
+                    await _asyncio.sleep(600)
+                    continue
+
+                from config.strategy_settings import StrategySettings
+                exit_hhmm = StrategySettings.ClosingTrade.EXIT_HHMM
+                exit_deadline = StrategySettings.ClosingTrade.EXIT_DEADLINE_HHMM
+
+                if hhmm < exit_hhmm:
+                    # 아직 청산 시각 전
+                    await _asyncio.sleep(30)
+                    continue
+                if hhmm > exit_deadline:
+                    # 이미 데드라인 경과 → 오늘은 스킵 (재시작한 경우 위험 회피)
+                    self._overnight_exit_executed_date = trade_date
+                    self.logger.warning(
+                        f"🌙 오버나이트 청산 데드라인 {exit_deadline} 경과 ({hhmm}) → 오늘 스킵"
+                    )
+                    await _asyncio.sleep(30)
+                    continue
+
+                # 청산 실행
+                from core.models import StockState
+                positioned = self.trading_manager.get_stocks_by_state(StockState.POSITIONED)
+                sell_candidate = self.trading_manager.get_stocks_by_state(StockState.SELL_CANDIDATE)
+                raw_targets = positioned + sell_candidate
+
+                # 🌙 포지션 연령 검증: 오늘 진입한 포지션은 제외 (새벽 봇 재시작 오발 방지)
+                today_date = current_time.date()
+                targets = []
+                excluded_today = []
+                for ts in raw_targets:
+                    try:
+                        if ts.position and ts.position.entry_time:
+                            entry_date = ts.position.entry_time.date() if hasattr(ts.position.entry_time, 'date') else None
+                            if entry_date == today_date:
+                                excluded_today.append(ts.stock_code)
+                                continue
+                    except Exception:
+                        pass
+                    targets.append(ts)
+
+                if excluded_today:
+                    self.logger.info(
+                        f"🌙 오버나이트 청산: 당일 진입 포지션 제외 ({len(excluded_today)}종목): {excluded_today}"
+                    )
+
+                if not targets:
+                    self.logger.info(f"🌙 오버나이트 청산: 보유 포지션 없음 (09:00)")
+                    self._overnight_exit_executed_date = trade_date
+                    await _asyncio.sleep(30)
+                    continue
+
+                self.logger.info(
+                    f"🌙 오버나이트 청산 시작: {len(targets)}종목 "
+                    f"(POSITIONED={len(positioned)}, SELL_CANDIDATE={len(sell_candidate)})"
+                )
+                gap_sl_limit = StrategySettings.ClosingTrade.GAP_SL_LIMIT_PCT
+
+                for ts in targets:
+                    try:
+                        if not ts.position or ts.position.quantity <= 0:
+                            continue
+                        stock_code = ts.stock_code
+                        quantity = int(ts.position.quantity)
+                        entry_price = float(ts.position.avg_price or 0)
+
+                        # 갭다운 경고 (기록용 — 실제로는 시장가 매도)
+                        try:
+                            price_obj = self.api_manager.get_current_price(stock_code)
+                            cur_px = float(price_obj.current_price) if price_obj else 0
+                            if entry_price > 0 and cur_px > 0:
+                                gap_pct = (cur_px / entry_price - 1) * 100
+                                if gap_pct <= gap_sl_limit:
+                                    self.logger.warning(
+                                        f"🌙 [gap_forced_cut] {stock_code}: "
+                                        f"{gap_pct:+.2f}% (임계 {gap_sl_limit}%)"
+                                    )
+                                    await self.telegram.notify_system_status(
+                                        f"🌙 오버나이트 갭다운 손절: {stock_code} {gap_pct:+.2f}%"
+                                    )
+                        except Exception:
+                            pass
+
+                        # SELL_CANDIDATE는 상태 전환 불필요
+                        if ts.state == StockState.SELL_CANDIDATE:
+                            moved = True
+                        else:
+                            moved = await self.trading_manager.move_to_sell_candidate(
+                                stock_code, "오버나이트 09:00 청산"
+                            )
+                        if moved:
+                            await self.trading_manager.execute_sell_order(
+                                stock_code, quantity, 0.0,
+                                "오버나이트 09:00 시장가 청산", market=True
+                            )
+                            self.logger.info(
+                                f"🌙 오버나이트 청산 주문: {stock_code} {quantity}주 시장가"
+                            )
+                    except Exception as se:
+                        self.logger.error(
+                            f"❌ 오버나이트 청산 개별 처리 오류({ts.stock_code}): {se}"
+                        )
+
+                self._overnight_exit_executed_date = trade_date
+                self.logger.info("✅ 오버나이트 09:00 청산 요청 완료")
+                await _asyncio.sleep(60)
+
+            except Exception as e:
+                self.logger.error(f"❌ 오버나이트 청산 태스크 오류: {e}")
+                await _asyncio.sleep(60)
+
     async def _log_system_status(self):
         """시스템 상태 로깅"""
         try:

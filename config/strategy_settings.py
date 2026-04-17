@@ -3,14 +3,14 @@
 
 사용 가능한 전략:
 1. 'pullback' - 기존 눌림목 캔들패턴 전략 (기본값)
-2. 'price_position' - 가격 위치 기반 전략 (신규)
+2. 'price_position' - 가격 위치 기반 전략
+3. 'closing_trade' - 종가매매(오버나이트) 전략 (신규, 시뮬 +53.7%/MDD3.56%)
 
-가격 위치 기반 전략 (price_position):
-- 시가 대비 1~3% 상승 구간 진입
-- 월~금 전체 거래
-- 9시~12시 진입
-- 손절 -5.0%, 익절 +6.0%
-- 진입 전 변동성 > 1.2% 제외, 20봉 모멘텀 > +2.0% 제외
+종가매매 전략 (closing_trade):
+- 14:00~14:20 진입, 익일 09:00 시장가 청산
+- 신호: 전일 양봉 몸통 ≥ 1.0% + 당일 하락 -3% 이내 + 14:50 VWAP 상회
+- 장중 손절/익절 없음 (오버나이트 홀드)
+- EOD 15:00 청산 스킵 (main.py에서 분기)
 """
 
 
@@ -20,9 +20,10 @@ class StrategySettings:
     # ========================================
     # 사용할 전략 선택
     # ========================================
-    # 'pullback' : 기존 눌림목 캔들패턴 전략
-    # 'price_position' : 가격 위치 기반 전략 (신규)
-    ACTIVE_STRATEGY = 'price_position'  # <-- 여기서 전략 변경
+    # 'pullback'       : 기존 눌림목 캔들패턴 전략
+    # 'price_position' : 가격 위치 기반 전략 (폐기 예정, 롤백용 유지)
+    # 'closing_trade'  : 종가매매 오버나이트 전략 (현 운영)
+    ACTIVE_STRATEGY = 'closing_trade'  # <-- 여기서 전략 변경
 
     # ========================================
     # 가격 위치 기반 전략 설정 (price_position)
@@ -64,6 +65,44 @@ class StrategySettings:
         ATR_TP_MAX = 10.0
         ATR_SL_MIN = 2.0
         ATR_SL_MAX = 6.0
+
+    # ========================================
+    # 종가매매 전략 설정 (closing_trade, 오버나이트 홀드)
+    # ========================================
+    class ClosingTrade:
+        """
+        종가매매(오버나이트) 전략 파라미터.
+        멀티버스 시뮬 검증 (2025-04~2026-04, 보수화·자본제약):
+          +53.7% / MDD 3.56% / 승률 60.6% / 404건 / gap_down_rate 4.93%
+        최근 1개월(2026-04) 실적: +6.56%
+        """
+        # 캔들 간격 (분)
+        CANDLE_INTERVAL = 1
+
+        # 진입 시간대 (HHMM int)
+        ENTRY_HHMM_START = 1400       # 14:00
+        ENTRY_HHMM_END = 1420         # 14:20 (이 시각 초과 시 미체결 자동 취소)
+        EVAL_BAR_HHMM = 1450          # 14:50 봉 기준으로 VWAP/본전 평가
+
+        # 신호 조건 (prev_body_momentum)
+        MIN_PREV_BODY_PCT = 1.0       # 전일 양봉 몸통 최소 (%)
+        MAX_DAY_DECLINE_PCT = -3.0    # 당일 시가 대비 최저점 하한 (%)
+        REQUIRE_VWAP_ABOVE = True     # 14:50 종가 > 당일 VWAP 요구
+
+        # 청산 설정
+        EXIT_HHMM = 900               # 익일 09:00 시장가 청산
+        EXIT_DEADLINE_HHMM = 905      # 09:05까지 체결 대기
+        GAP_SL_LIMIT_PCT = -5.0       # 익일 시가 -5% 이하 경고 (시장가 매도라 기록용)
+
+        # 허용 요일 (0=월, 4=금). 금요일 매수 → 월요일 청산(2일 홀드)
+        ALLOWED_WEEKDAYS = [0, 1, 2, 3, 4]
+
+        # 포지션 제한
+        MAX_DAILY_POSITIONS = 5       # 동시 보유 5종목 (buy_ratio 0.18 = 90%/5)
+
+        # 서킷브레이커 상호작용
+        RESPECT_PREV_DAY_CIRCUIT = True    # 전일 -3% → 매수 중단 유지
+        CHECK_INTRADAY_INDEX_AT_ENTRY = True  # 14:00 직전 지수 -2% 이하면 매수 스킵
 
     # ========================================
     # 실시간 종목 스크리너 설정
@@ -187,14 +226,20 @@ def get_candle_interval() -> int:
     """현재 활성 전략의 캔들 간격(분) 반환"""
     if StrategySettings.ACTIVE_STRATEGY == 'price_position':
         return StrategySettings.PricePosition.CANDLE_INTERVAL
-    else:
-        return StrategySettings.Pullback.CANDLE_INTERVAL
+    if StrategySettings.ACTIVE_STRATEGY == 'closing_trade':
+        return StrategySettings.ClosingTrade.CANDLE_INTERVAL
+    return StrategySettings.Pullback.CANDLE_INTERVAL
+
+
+def is_overnight_strategy() -> bool:
+    """오버나이트 홀드 전략 여부 (EOD 청산 스킵 플래그)"""
+    return StrategySettings.ACTIVE_STRATEGY == 'closing_trade'
 
 
 # 설정 검증
 def validate_settings():
     """설정 유효성 검증"""
-    valid_strategies = ['pullback', 'price_position']
+    valid_strategies = ['pullback', 'price_position', 'closing_trade']
 
     if StrategySettings.ACTIVE_STRATEGY not in valid_strategies:
         raise ValueError(
@@ -209,6 +254,15 @@ def validate_settings():
         if pp.ENTRY_START_HOUR >= pp.ENTRY_END_HOUR:
             raise ValueError("ENTRY_START_HOUR은 ENTRY_END_HOUR보다 작아야 합니다")
         if not pp.ALLOWED_WEEKDAYS:
+            raise ValueError("ALLOWED_WEEKDAYS가 비어있습니다")
+
+    if StrategySettings.ACTIVE_STRATEGY == 'closing_trade':
+        ct = StrategySettings.ClosingTrade
+        if ct.ENTRY_HHMM_START >= ct.ENTRY_HHMM_END:
+            raise ValueError("ENTRY_HHMM_START는 ENTRY_HHMM_END보다 작아야 합니다")
+        if ct.MAX_DAILY_POSITIONS <= 0:
+            raise ValueError("MAX_DAILY_POSITIONS는 1 이상이어야 합니다")
+        if not ct.ALLOWED_WEEKDAYS:
             raise ValueError("ALLOWED_WEEKDAYS가 비어있습니다")
 
     return True
