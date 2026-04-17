@@ -539,8 +539,17 @@ class PreMarketAnalyzer:
                     self._report.log_lines.insert(0, f"장중지수 회복: {reason}")
                 return self._report
 
+            # 🌙 오버나이트 전략: 장중 동적 SL 변동 무효 (Case 3/4 스킵)
+            # — closing_trade는 오버나이트 홀드 약속. SL 축소가 장중 청산 유발하면 안 됨.
+            try:
+                from config.strategy_settings import is_overnight_strategy as _is_overnight
+                _overnight_mode = _is_overnight()
+            except Exception:
+                _overnight_mode = False
+
             # Case 3: 동적 SL — 지수 -0.7% 이하 시 SL 축소 (서킷브레이커 미만)
-            if (not is_currently_blocked and
+            if (not _overnight_mode and
+                    not is_currently_blocked and
                     getattr(pm, 'INTRADAY_DYNAMIC_SL_ENABLED', False) and
                     worst_gap <= getattr(pm, 'INTRADAY_SL_TIGHTEN_THRESHOLD_PCT', -0.7) and
                     worst_gap > pm.INTRADAY_INDEX_DROP_THRESHOLD_PCT):
@@ -572,7 +581,8 @@ class PreMarketAnalyzer:
                 return self._report
 
             # Case 4: 동적 SL 회복 — 지수가 -0.3% 이상으로 회복 시 SL 원복
-            if (not is_currently_blocked and
+            if (not _overnight_mode and
+                    not is_currently_blocked and
                     getattr(pm, 'INTRADAY_DYNAMIC_SL_ENABLED', False) and
                     self._report and
                     self._report.recommended_stop_loss_pct < 0.05 and
