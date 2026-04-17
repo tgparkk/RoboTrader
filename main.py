@@ -463,7 +463,13 @@ class DayTradingBot:
                 return
 
             # 🆕 25분 매수 쿨다운 확인
-            if trading_stock.is_buy_cooldown_active():
+            # 🌙 오버나이트 전략(closing_trade)은 당일 1회 설계라 쿨다운 우회 — 전일 매매 이력이 당일 진입 차단하지 않도록
+            try:
+                from config.strategy_settings import is_overnight_strategy as _is_overnight
+                _cooldown_skip = _is_overnight()
+            except Exception:
+                _cooldown_skip = False
+            if not _cooldown_skip and trading_stock.is_buy_cooldown_active():
                 remaining_minutes = trading_stock.get_remaining_cooldown_minutes()
                 self.logger.debug(f"⚠️ {stock_code}: 매수 쿨다운 활성화 (남은 시간: {remaining_minutes}분)")
                 return
@@ -1170,8 +1176,8 @@ class DayTradingBot:
                     await _asyncio.sleep(30)
                     continue
 
-                # 주말 스킵 (공휴일은 API 매도 주문이 자연스럽게 실패 → 다음 거래일에 재시도)
-                if current_time.weekday() >= 5:
+                # 주말·공휴일 스킵 (is_trading_day 로 통합 체크)
+                if not MarketHours.is_trading_day('KRX', current_time):
                     await _asyncio.sleep(600)
                     continue
 
@@ -1196,7 +1202,27 @@ class DayTradingBot:
                 from core.models import StockState
                 positioned = self.trading_manager.get_stocks_by_state(StockState.POSITIONED)
                 sell_candidate = self.trading_manager.get_stocks_by_state(StockState.SELL_CANDIDATE)
-                targets = positioned + sell_candidate
+                raw_targets = positioned + sell_candidate
+
+                # 🌙 포지션 연령 검증: 오늘 진입한 포지션은 제외 (새벽 봇 재시작 오발 방지)
+                today_date = current_time.date()
+                targets = []
+                excluded_today = []
+                for ts in raw_targets:
+                    try:
+                        if ts.position and ts.position.entry_time:
+                            entry_date = ts.position.entry_time.date() if hasattr(ts.position.entry_time, 'date') else None
+                            if entry_date == today_date:
+                                excluded_today.append(ts.stock_code)
+                                continue
+                    except Exception:
+                        pass
+                    targets.append(ts)
+
+                if excluded_today:
+                    self.logger.info(
+                        f"🌙 오버나이트 청산: 당일 진입 포지션 제외 ({len(excluded_today)}종목): {excluded_today}"
+                    )
 
                 if not targets:
                     self.logger.info(f"🌙 오버나이트 청산: 보유 포지션 없음 (09:00)")
