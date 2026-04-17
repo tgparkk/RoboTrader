@@ -21,9 +21,9 @@ class StrategySettings:
     # 사용할 전략 선택
     # ========================================
     # 'pullback'       : 기존 눌림목 캔들패턴 전략
-    # 'price_position' : 가격 위치 기반 전략 (현 운영)
-    # 'closing_trade'  : 종가매매 오버나이트 전략 (신규, 실거래 전환 시 변경)
-    ACTIVE_STRATEGY = 'price_position'  # <-- 여기서 전략 변경
+    # 'price_position' : 가격 위치 기반 전략 (폐기 예정, 롤백용 유지)
+    # 'closing_trade'  : 종가매매 오버나이트 전략 (현 운영)
+    ACTIVE_STRATEGY = 'closing_trade'  # <-- 여기서 전략 변경
 
     # ========================================
     # 가격 위치 기반 전략 설정 (price_position)
