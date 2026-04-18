@@ -4,7 +4,6 @@
 """
 import psycopg2
 import psycopg2.extras
-import psycopg2.pool
 import pandas as pd
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -12,6 +11,7 @@ from typing import List, Dict, Optional, Any
 from dataclasses import dataclass
 
 from core.candidate_selector import CandidateStock
+from db._connection import ConnectionPool
 from utils.logger import setup_logger
 from utils.korean_time import now_kst
 
@@ -43,11 +43,10 @@ class PriceRecord:
 class DatabaseManager:
     """데이터베이스 관리자 (PostgreSQL 기반)
 
-    - PostgreSQL connection pool 사용
+    - PostgreSQL connection pool 사용 (db._connection.ConnectionPool에 위임)
     """
 
     _instance: Optional['DatabaseManager'] = None
-    _pool: Optional[psycopg2.pool.ThreadedConnectionPool] = None
 
     def __init__(self, db_path: str = None):
         self.logger = setup_logger(__name__)
@@ -62,89 +61,39 @@ class DatabaseManager:
 
         self.logger.info(f"데이터베이스 초기화 (PostgreSQL): {self._pg_host}:{self._pg_port}/{self._pg_database}")
 
-        # Connection pool 초기화
-        self._init_pool()
+        # Connection pool 초기화 (싱글톤)
+        self._pool = ConnectionPool.get_or_create(
+            self._pg_host, self._pg_port, self._pg_database, self._pg_user, self._pg_password
+        )
 
         # 테이블 생성
         self._create_tables()
 
     def _init_pool(self):
-        """Connection pool 초기화 (싱글톤)"""
-        if DatabaseManager._pool is None or DatabaseManager._pool.closed:
-            try:
-                DatabaseManager._pool = psycopg2.pool.ThreadedConnectionPool(
-                    minconn=1,
-                    maxconn=5,
-                    host=self._pg_host,
-                    port=self._pg_port,
-                    database=self._pg_database,
-                    user=self._pg_user,
-                    password=self._pg_password,
-                    connect_timeout=10,
-                )
-                self.logger.info("PostgreSQL connection pool 초기화 완료")
-            except Exception as e:
-                self.logger.error(f"PostgreSQL connection pool 초기화 실패: {e}")
-                raise
+        """Connection pool 재초기화 (backward-compat)."""
+        self._pool = ConnectionPool.get_or_create(
+            self._pg_host, self._pg_port, self._pg_database, self._pg_user, self._pg_password
+        )
 
     def _get_connection(self):
-        """Pool에서 연결 획득"""
-        if DatabaseManager._pool is None or DatabaseManager._pool.closed:
-            self._init_pool()
-        return DatabaseManager._pool.getconn()
+        """Pool에서 연결 획득 (backward-compat)."""
+        return self._pool.getconn()
 
     def _put_connection(self, conn):
-        """Pool에 연결 반환"""
-        if DatabaseManager._pool is not None and not DatabaseManager._pool.closed:
-            DatabaseManager._pool.putconn(conn)
+        """Pool에 연결 반환 (backward-compat)."""
+        self._pool.putconn(conn)
 
     def _execute(self, query: str, params: tuple = None):
         """쿼리 실행 헬퍼 — INSERT/UPDATE/DELETE용 (결과 반환 없음)"""
-        conn = self._get_connection()
-        try:
-            cur = conn.cursor()
-            if params:
-                cur.execute(query, params)
-            else:
-                cur.execute(query)
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            self._put_connection(conn)
+        self._pool.execute(query, params)
 
     def _fetchone(self, query: str, params: tuple = None):
         """쿼리 실행 후 fetchone 결과 반환"""
-        conn = self._get_connection()
-        try:
-            cur = conn.cursor()
-            if params:
-                cur.execute(query, params)
-            else:
-                cur.execute(query)
-            return cur.fetchone()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            self._put_connection(conn)
+        return self._pool.fetchone(query, params)
 
     def _fetchall(self, query: str, params: tuple = None):
         """쿼리 실행 후 fetchall 결과 반환"""
-        conn = self._get_connection()
-        try:
-            cur = conn.cursor()
-            if params:
-                cur.execute(query, params)
-            else:
-                cur.execute(query)
-            return cur.fetchall()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            self._put_connection(conn)
+        return self._pool.fetchall(query, params)
 
     def _get_today_range_strings(self) -> tuple:
         """KST 기준 오늘의 시작과 내일 시작 시간 문자열(YYYY-MM-DD HH:MM:SS)을 반환."""
@@ -1030,9 +979,4 @@ class DatabaseManager:
     @classmethod
     def close_connection(cls):
         """PostgreSQL connection pool 닫기"""
-        if cls._pool is not None:
-            try:
-                cls._pool.closeall()
-            except Exception:
-                pass
-            cls._pool = None
+        ConnectionPool.close_singleton()
