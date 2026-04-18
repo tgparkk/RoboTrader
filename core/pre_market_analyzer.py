@@ -15,47 +15,11 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, List, Dict, Tuple
 
+from core.pre_market_bellwether import NXT_BELLWETHER_STOCKS
 from utils.logger import setup_logger
 from utils.korean_time import now_kst
 
 logger = setup_logger(__name__)
-
-# KOSPI200 / KOSDAQ150 대표 벨웨더 종목
-NXT_BELLWETHER_STOCKS = [
-    # KOSPI 대형주
-    ("005930", "삼성전자"),
-    ("000660", "SK하이닉스"),
-    ("035420", "NAVER"),
-    ("035720", "카카오"),
-    ("006400", "삼성SDI"),
-    ("051910", "LG화학"),
-    ("003670", "포스코홀딩스"),
-    ("005380", "현대차"),
-    ("000270", "기아"),
-    ("105560", "KB금융"),
-    ("055550", "신한지주"),
-    ("068270", "셀트리온"),
-    ("207940", "삼성바이오로직스"),
-    ("373220", "LG에너지솔루션"),
-    ("012330", "현대모비스"),
-    # KOSPI 중형주
-    ("034730", "SK"),
-    ("066570", "LG전자"),
-    ("003490", "대한항공"),
-    ("028260", "삼성물산"),
-    ("032830", "삼성생명"),
-    # KOSDAQ 대형주
-    ("247540", "에코프로비엠"),
-    ("086520", "에코프로"),
-    ("041510", "에스엠"),
-    ("263750", "펄어비스"),
-    ("328130", "루닛"),
-    ("196170", "알테오젠"),
-    ("403870", "HPSP"),
-    ("145020", "휴젤"),
-    ("377300", "카카오페이"),
-    ("036570", "엔씨소프트"),
-]
 
 
 @dataclass
