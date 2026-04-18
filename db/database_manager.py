@@ -133,16 +133,9 @@ class DatabaseManager:
         """데이터베이스 테이블 생성 (DDL은 db/schema.py에 정의)"""
         from db import schema
         try:
-            conn = self._get_connection()
-            try:
+            with self._pool.connection(commit=True) as conn:
                 schema.init_schema(conn)
-                conn.commit()
-                self.logger.info("데이터베이스 테이블 생성 완료 (PostgreSQL)")
-            except Exception:
-                conn.rollback()
-                raise
-            finally:
-                self._put_connection(conn)
+            self.logger.info("데이터베이스 테이블 생성 완료 (PostgreSQL)")
         except Exception as e:
             self.logger.error(f"테이블 생성 실패: {e}")
             raise
@@ -157,8 +150,10 @@ class DatabaseManager:
             if selection_date is None:
                 selection_date = now_kst()
 
-            conn = self._get_connection()
-            try:
+            new_candidates = 0
+            duplicate_candidates = 0
+
+            with self._pool.connection(commit=True) as conn:
                 cur = conn.cursor()
 
                 # 당일 이미 저장된 종목 조회
@@ -169,9 +164,6 @@ class DatabaseManager:
                 ''', (target_date,))
 
                 existing_stocks = {row[0] for row in cur.fetchall()}
-
-                new_candidates = 0
-                duplicate_candidates = 0
 
                 for candidate in candidates:
                     if candidate.code not in existing_stocks:
@@ -192,21 +184,13 @@ class DatabaseManager:
                     else:
                         duplicate_candidates += 1
 
-                conn.commit()
+            if new_candidates > 0:
+                self.logger.info(f"✅ 새로운 후보 종목 {new_candidates}개 저장 완료")
+                self.logger.info(f"   전체 후보: {len(candidates)}개, 날짜: {selection_date.strftime('%Y-%m-%d %H:%M:%S')}")
+            else:
+                self.logger.info(f"📝 모든 후보 종목이 당일 이미 저장되어 있음 ({len(candidates)}개 모두 중복)")
 
-                if new_candidates > 0:
-                    self.logger.info(f"✅ 새로운 후보 종목 {new_candidates}개 저장 완료")
-                    self.logger.info(f"   전체 후보: {len(candidates)}개, 날짜: {selection_date.strftime('%Y-%m-%d %H:%M:%S')}")
-                else:
-                    self.logger.info(f"📝 모든 후보 종목이 당일 이미 저장되어 있음 ({len(candidates)}개 모두 중복)")
-
-                return True
-
-            except Exception:
-                conn.rollback()
-                raise
-            finally:
-                self._put_connection(conn)
+            return True
 
         except Exception as e:
             self.logger.error(f"후보 종목 저장 실패: {e}")
@@ -218,10 +202,8 @@ class DatabaseManager:
             if not price_data:
                 return True
 
-            conn = self._get_connection()
-            try:
+            with self._pool.connection(commit=True) as conn:
                 cur = conn.cursor()
-
                 for record in price_data:
                     cur.execute('''
                         DELETE FROM stock_prices WHERE stock_code = %s AND date_time = %s
@@ -241,15 +223,8 @@ class DatabaseManager:
                         now_kst().strftime('%Y-%m-%d %H:%M:%S')
                     ))
 
-                conn.commit()
-                self.logger.debug(f"{stock_code} 가격 데이터 {len(price_data)}개 저장")
-                return True
-
-            except Exception:
-                conn.rollback()
-                raise
-            finally:
-                self._put_connection(conn)
+            self.logger.debug(f"{stock_code} 가격 데이터 {len(price_data)}개 저장")
+            return True
 
         except Exception as e:
             self.logger.error(f"가격 데이터 저장 실패 ({stock_code}): {e}")
@@ -261,13 +236,11 @@ class DatabaseManager:
             if df_minute is None or df_minute.empty:
                 return True
 
-            conn = self._get_connection()
-            try:
+            start_datetime = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 00:00:00"
+            end_datetime = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 23:59:59"
+
+            with self._pool.connection(commit=True) as conn:
                 cur = conn.cursor()
-
-                start_datetime = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 00:00:00"
-                end_datetime = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 23:59:59"
-
                 cur.execute('''
                     DELETE FROM stock_prices
                     WHERE stock_code = %s
@@ -298,15 +271,8 @@ class DatabaseManager:
                         page_size=500,
                     )
 
-                conn.commit()
-                self.logger.debug(f"{stock_code} 1분봉 데이터 {len(df_minute)}개 저장 ({date_str})")
-                return True
-
-            except Exception:
-                conn.rollback()
-                raise
-            finally:
-                self._put_connection(conn)
+            self.logger.debug(f"{stock_code} 1분봉 데이터 {len(df_minute)}개 저장 ({date_str})")
+            return True
 
         except Exception as e:
             self.logger.error(f"1분봉 데이터 저장 실패 ({stock_code}, {date_str}): {e}")
@@ -315,11 +281,10 @@ class DatabaseManager:
     def get_minute_data(self, stock_code: str, date_str: str) -> Optional[pd.DataFrame]:
         """1분봉 데이터를 기존 stock_prices 테이블에서 조회"""
         try:
-            conn = self._get_connection()
-            try:
-                start_datetime = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 00:00:00"
-                end_datetime = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 23:59:59"
+            start_datetime = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 00:00:00"
+            end_datetime = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 23:59:59"
 
+            with self._pool.connection() as conn:
                 df = pd.read_sql_query('''
                     SELECT date_time, open_price, high_price, low_price, close_price, volume
                     FROM stock_prices
@@ -329,24 +294,20 @@ class DatabaseManager:
                     ORDER BY date_time
                 ''', conn, params=(stock_code, start_datetime, end_datetime))
 
-                if df.empty:
-                    return None
+            if df.empty:
+                return None
 
-                df['datetime'] = pd.to_datetime(df['date_time'])
-                df = df.drop('date_time', axis=1)
+            df['datetime'] = pd.to_datetime(df['date_time'])
+            df = df.drop('date_time', axis=1)
+            df = df.rename(columns={
+                'open_price': 'open',
+                'high_price': 'high',
+                'low_price': 'low',
+                'close_price': 'close'
+            })
 
-                df = df.rename(columns={
-                    'open_price': 'open',
-                    'high_price': 'high',
-                    'low_price': 'low',
-                    'close_price': 'close'
-                })
-
-                self.logger.debug(f"{stock_code} 1분봉 데이터 {len(df)}개 조회 ({date_str})")
-                return df
-
-            finally:
-                self._put_connection(conn)
+            self.logger.debug(f"{stock_code} 1분봉 데이터 {len(df)}개 조회 ({date_str})")
+            return df
 
         except Exception as e:
             self.logger.error(f"1분봉 데이터 조회 실패 ({stock_code}, {date_str}): {e}")
@@ -376,8 +337,7 @@ class DatabaseManager:
         """후보 종목 선정 이력 조회"""
         try:
             start_date = now_kst() - timedelta(days=days)
-            conn = self._get_connection()
-            try:
+            with self._pool.connection() as conn:
                 df = pd.read_sql_query('''
                     SELECT
                         stock_code, stock_name, selection_date, score, reasons, status
@@ -386,11 +346,9 @@ class DatabaseManager:
                     ORDER BY selection_date DESC, score DESC
                 ''', conn, params=(start_date.strftime('%Y-%m-%d %H:%M:%S'),))
 
-                df['selection_date'] = pd.to_datetime(df['selection_date'])
-                self.logger.info(f"후보 종목 이력 {len(df)}건 조회 ({days}일)")
-                return df
-            finally:
-                self._put_connection(conn)
+            df['selection_date'] = pd.to_datetime(df['selection_date'])
+            self.logger.info(f"후보 종목 이력 {len(df)}건 조회 ({days}일)")
+            return df
 
         except Exception as e:
             self.logger.error(f"후보 종목 이력 조회 실패: {e}")
@@ -400,8 +358,7 @@ class DatabaseManager:
         """종목별 가격 이력 조회"""
         try:
             start_date = now_kst() - timedelta(days=days)
-            conn = self._get_connection()
-            try:
+            with self._pool.connection() as conn:
                 df = pd.read_sql_query('''
                     SELECT date_time, open_price, high_price, low_price, close_price, volume
                     FROM stock_prices
@@ -409,11 +366,9 @@ class DatabaseManager:
                     ORDER BY date_time ASC
                 ''', conn, params=(stock_code, start_date.strftime('%Y-%m-%d %H:%M:%S')))
 
-                df['date_time'] = pd.to_datetime(df['date_time'])
-                self.logger.debug(f"{stock_code} 가격 이력 {len(df)}건 조회")
-                return df
-            finally:
-                self._put_connection(conn)
+            df['date_time'] = pd.to_datetime(df['date_time'])
+            self.logger.debug(f"{stock_code} 가격 이력 {len(df)}건 조회")
+            return df
 
         except Exception as e:
             self.logger.error(f"가격 이력 조회 실패 ({stock_code}): {e}")
@@ -423,8 +378,7 @@ class DatabaseManager:
         """후보 종목 성과 분석"""
         try:
             start_date = now_kst() - timedelta(days=days)
-            conn = self._get_connection()
-            try:
+            with self._pool.connection() as conn:
                 df = pd.read_sql_query('''
                     SELECT
                         c.stock_code, c.stock_name, c.selection_date, c.score,
@@ -440,10 +394,8 @@ class DatabaseManager:
                     ORDER BY c.selection_date DESC, c.score DESC
                 ''', conn, params=(start_date.strftime('%Y-%m-%d %H:%M:%S'),))
 
-                df['selection_date'] = pd.to_datetime(df['selection_date'])
-                return df
-            finally:
-                self._put_connection(conn)
+            df['selection_date'] = pd.to_datetime(df['selection_date'])
+            return df
 
         except Exception as e:
             self.logger.error(f"성과 분석 조회 실패: {e}")
@@ -453,8 +405,7 @@ class DatabaseManager:
         """일별 후보 종목 선정 수"""
         try:
             start_date = now_kst() - timedelta(days=days)
-            conn = self._get_connection()
-            try:
+            with self._pool.connection() as conn:
                 df = pd.read_sql_query('''
                     SELECT
                         CAST(selection_date AS DATE) as date,
@@ -467,10 +418,8 @@ class DatabaseManager:
                     ORDER BY date DESC
                 ''', conn, params=(start_date.strftime('%Y-%m-%d %H:%M:%S'),))
 
-                df['date'] = pd.to_datetime(df['date'])
-                return df
-            finally:
-                self._put_connection(conn)
+            df['date'] = pd.to_datetime(df['date'])
+            return df
 
         except Exception as e:
             self.logger.error(f"일별 통계 조회 실패: {e}")
@@ -516,8 +465,7 @@ class DatabaseManager:
         try:
             if timestamp is None:
                 timestamp = now_kst()
-            conn = self._get_connection()
-            try:
+            with self._pool.connection(commit=True) as conn:
                 cur = conn.cursor()
                 cur.execute('''
                     INSERT INTO real_trading_records
@@ -530,14 +478,8 @@ class DatabaseManager:
                     now_kst().strftime('%Y-%m-%d %H:%M:%S')
                 ))
                 new_id = cur.fetchone()[0]
-                conn.commit()
-                self.logger.info(f"✅ 실거래 매수 기록 저장: {stock_code} {quantity}주 @{price:,.0f}")
-                return new_id
-            except Exception:
-                conn.rollback()
-                raise
-            finally:
-                self._put_connection(conn)
+            self.logger.info(f"✅ 실거래 매수 기록 저장: {stock_code} {quantity}주 @{price:,.0f}")
+            return new_id
         except Exception as e:
             self.logger.error(f"실거래 매수 기록 저장 실패: {e}")
             return None
@@ -551,8 +493,13 @@ class DatabaseManager:
             if timestamp is None:
                 timestamp = now_kst()
 
-            conn = self._get_connection()
-            try:
+            profit_loss = 0.0
+            profit_rate = 0.0
+            fee_amount = 0.0
+            net_profit = 0.0
+            net_profit_rate = 0.0
+
+            with self._pool.connection(commit=True) as conn:
                 cur = conn.cursor()
 
                 buy_price = None
@@ -565,11 +512,6 @@ class DatabaseManager:
                     if row:
                         buy_price = float(row[0])
 
-                profit_loss = 0.0
-                profit_rate = 0.0
-                fee_amount = 0.0
-                net_profit = 0.0
-                net_profit_rate = 0.0
                 if buy_price and buy_price > 0:
                     buy_amount = buy_price * quantity
                     sell_amount = price * quantity
@@ -595,18 +537,12 @@ class DatabaseManager:
                     buy_record_id,
                     now_kst().strftime('%Y-%m-%d %H:%M:%S')
                 ))
-                conn.commit()
 
-                self.logger.info(
-                    f"✅ 실거래 매도 기록 저장: {stock_code} {quantity}주 @{price:,.0f} "
-                    f"손익 {profit_loss:+,.0f}원 ({profit_rate:+.2f}%) → 수수료 {fee_amount:,.0f}원 → 실손익 {net_profit:+,.0f}원 ({net_profit_rate:+.2f}%)"
-                )
-                return True
-            except Exception:
-                conn.rollback()
-                raise
-            finally:
-                self._put_connection(conn)
+            self.logger.info(
+                f"✅ 실거래 매도 기록 저장: {stock_code} {quantity}주 @{price:,.0f} "
+                f"손익 {profit_loss:+,.0f}원 ({profit_rate:+.2f}%) → 수수료 {fee_amount:,.0f}원 → 실손익 {net_profit:+,.0f}원 ({net_profit_rate:+.2f}%)"
+            )
+            return True
         except Exception as e:
             self.logger.error(f"실거래 매도 기록 저장 실패: {e}")
             return False
@@ -667,8 +603,7 @@ class DatabaseManager:
             if timestamp is None:
                 timestamp = now_kst()
 
-            conn = self._get_connection()
-            try:
+            with self._pool.connection(commit=True) as conn:
                 cur = conn.cursor()
                 cur.execute('''
                     INSERT INTO virtual_trading_records
@@ -679,16 +614,9 @@ class DatabaseManager:
                       timestamp.strftime('%Y-%m-%d %H:%M:%S'), strategy, reason,
                       now_kst().strftime('%Y-%m-%d %H:%M:%S')))
                 new_id = cur.fetchone()[0]
-                conn.commit()
 
-                self.logger.info(f"🔥 가상 매수 기록 저장: {stock_code}({stock_name}) {quantity}주 @{price:,.0f}원 - {strategy}")
-                return new_id
-
-            except Exception:
-                conn.rollback()
-                raise
-            finally:
-                self._put_connection(conn)
+            self.logger.info(f"🔥 가상 매수 기록 저장: {stock_code}({stock_name}) {quantity}주 @{price:,.0f}원 - {strategy}")
+            return new_id
 
         except Exception as e:
             self.logger.error(f"가상 매수 기록 저장 실패: {e}")
@@ -702,8 +630,7 @@ class DatabaseManager:
             if timestamp is None:
                 timestamp = now_kst()
 
-            conn = self._get_connection()
-            try:
+            with self._pool.connection(commit=True) as conn:
                 cur = conn.cursor()
 
                 cur.execute('''
@@ -729,18 +656,11 @@ class DatabaseManager:
                       timestamp.strftime('%Y-%m-%d %H:%M:%S'), strategy, reason,
                       profit_loss, profit_rate, buy_record_id,
                       now_kst().strftime('%Y-%m-%d %H:%M:%S')))
-                conn.commit()
 
-                profit_sign = "+" if profit_loss >= 0 else ""
-                self.logger.info(f"📉 가상 매도 기록 저장: {stock_code}({stock_name}) {quantity}주 @{price:,.0f}원 - "
-                               f"손익: {profit_sign}{profit_loss:,.0f}원 ({profit_rate:+.2f}%) - {strategy}")
-                return True
-
-            except Exception:
-                conn.rollback()
-                raise
-            finally:
-                self._put_connection(conn)
+            profit_sign = "+" if profit_loss >= 0 else ""
+            self.logger.info(f"📉 가상 매도 기록 저장: {stock_code}({stock_name}) {quantity}주 @{price:,.0f}원 - "
+                           f"손익: {profit_sign}{profit_loss:,.0f}원 ({profit_rate:+.2f}%) - {strategy}")
+            return True
 
         except Exception as e:
             self.logger.error(f"가상 매도 기록 저장 실패: {e}")
@@ -749,8 +669,7 @@ class DatabaseManager:
     def get_virtual_open_positions(self) -> pd.DataFrame:
         """미체결 가상 포지션 조회"""
         try:
-            conn = self._get_connection()
-            try:
+            with self._pool.connection() as conn:
                 df = pd.read_sql_query('''
                     SELECT
                         b.id, b.stock_code, b.stock_name, b.quantity,
@@ -766,12 +685,9 @@ class DatabaseManager:
                     ORDER BY b.timestamp DESC
                 ''', conn)
 
-                if not df.empty:
-                    df['buy_time'] = pd.to_datetime(df['buy_time'])
-
-                return df
-            finally:
-                self._put_connection(conn)
+            if not df.empty:
+                df['buy_time'] = pd.to_datetime(df['buy_time'])
+            return df
 
         except Exception as e:
             self.logger.error(f"미체결 포지션 조회 실패: {e}")
@@ -781,8 +697,7 @@ class DatabaseManager:
         """가상 매매 이력 조회"""
         try:
             start_date = now_kst() - timedelta(days=days)
-            conn = self._get_connection()
-            try:
+            with self._pool.connection() as conn:
                 if include_open:
                     df = pd.read_sql_query('''
                         SELECT
@@ -807,16 +722,13 @@ class DatabaseManager:
                         ORDER BY s.timestamp DESC
                     ''', conn, params=(start_date.strftime('%Y-%m-%d %H:%M:%S'),))
 
-                if not df.empty:
-                    if include_open:
-                        df['timestamp'] = pd.to_datetime(df['timestamp'])
-                    else:
-                        df['buy_time'] = pd.to_datetime(df['buy_time'])
-                        df['sell_time'] = pd.to_datetime(df['sell_time'])
-
-                return df
-            finally:
-                self._put_connection(conn)
+            if not df.empty:
+                if include_open:
+                    df['timestamp'] = pd.to_datetime(df['timestamp'])
+                else:
+                    df['buy_time'] = pd.to_datetime(df['buy_time'])
+                    df['sell_time'] = pd.to_datetime(df['sell_time'])
+            return df
 
         except Exception as e:
             self.logger.error(f"가상 매매 이력 조회 실패: {e}")
@@ -953,8 +865,7 @@ class DatabaseManager:
     def get_nxt_history(self, days: int = 30) -> 'pd.DataFrame':
         """NXT 스냅샷 이력 조회 (일별 마지막 스냅샷 = 리포트 요약)"""
         try:
-            conn = self._get_connection()
-            try:
+            with self._pool.connection() as conn:
                 df = pd.read_sql_query('''
                     SELECT n.*
                     FROM nxt_snapshots n
@@ -969,9 +880,7 @@ class DatabaseManager:
                 ''', conn, params=(
                     (now_kst() - timedelta(days=days)).strftime('%Y%m%d'),
                 ))
-                return df
-            finally:
-                self._put_connection(conn)
+            return df
         except Exception as e:
             self.logger.error(f"NXT 이력 조회 실패: {e}")
             return pd.DataFrame()
