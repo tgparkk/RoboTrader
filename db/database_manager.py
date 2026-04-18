@@ -181,148 +181,19 @@ class DatabaseManager:
             return 0
 
     def _create_tables(self):
-        """데이터베이스 테이블 생성"""
+        """데이터베이스 테이블 생성 (DDL은 db/schema.py에 정의)"""
+        from db import schema
         try:
             conn = self._get_connection()
             try:
-                cur = conn.cursor()
-
-                # 후보 종목 테이블
-                cur.execute('''
-                    CREATE TABLE IF NOT EXISTS candidate_stocks (
-                        id SERIAL PRIMARY KEY,
-                        stock_code VARCHAR NOT NULL,
-                        stock_name VARCHAR,
-                        selection_date TIMESTAMP NOT NULL,
-                        score DOUBLE PRECISION NOT NULL,
-                        reasons VARCHAR,
-                        status VARCHAR DEFAULT 'active',
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                ''')
-
-                # 종목 가격 데이터 테이블
-                cur.execute('''
-                    CREATE TABLE IF NOT EXISTS stock_prices (
-                        id SERIAL PRIMARY KEY,
-                        stock_code VARCHAR NOT NULL,
-                        date_time TIMESTAMP NOT NULL,
-                        open_price DOUBLE PRECISION,
-                        high_price DOUBLE PRECISION,
-                        low_price DOUBLE PRECISION,
-                        close_price DOUBLE PRECISION,
-                        volume BIGINT,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        UNIQUE(stock_code, date_time)
-                    )
-                ''')
-
-                # 가상 매매 기록 테이블
-                cur.execute('''
-                    CREATE TABLE IF NOT EXISTS virtual_trading_records (
-                        id SERIAL PRIMARY KEY,
-                        stock_code VARCHAR NOT NULL,
-                        stock_name VARCHAR,
-                        action VARCHAR NOT NULL,
-                        quantity INTEGER NOT NULL,
-                        price DOUBLE PRECISION NOT NULL,
-                        timestamp TIMESTAMP NOT NULL,
-                        strategy VARCHAR,
-                        reason VARCHAR,
-                        is_test BOOLEAN DEFAULT TRUE,
-                        profit_loss DOUBLE PRECISION DEFAULT 0,
-                        profit_rate DOUBLE PRECISION DEFAULT 0,
-                        buy_record_id INTEGER,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                ''')
-
-                # 실거래 매매 기록 테이블
-                cur.execute('''
-                    CREATE TABLE IF NOT EXISTS real_trading_records (
-                        id SERIAL PRIMARY KEY,
-                        stock_code VARCHAR NOT NULL,
-                        stock_name VARCHAR,
-                        action VARCHAR NOT NULL,
-                        quantity INTEGER NOT NULL,
-                        price DOUBLE PRECISION NOT NULL,
-                        timestamp TIMESTAMP NOT NULL,
-                        strategy VARCHAR,
-                        reason VARCHAR,
-                        profit_loss DOUBLE PRECISION DEFAULT 0,
-                        profit_rate DOUBLE PRECISION DEFAULT 0,
-                        fee_amount DOUBLE PRECISION DEFAULT 0,
-                        net_profit DOUBLE PRECISION DEFAULT 0,
-                        net_profit_rate DOUBLE PRECISION DEFAULT 0,
-                        buy_record_id INTEGER,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                ''')
-
-                # 매매 기록 테이블 (기존)
-                cur.execute('''
-                    CREATE TABLE IF NOT EXISTS trading_records (
-                        id SERIAL PRIMARY KEY,
-                        stock_code VARCHAR NOT NULL,
-                        action VARCHAR NOT NULL,
-                        quantity INTEGER NOT NULL,
-                        price DOUBLE PRECISION NOT NULL,
-                        timestamp TIMESTAMP NOT NULL,
-                        profit_loss DOUBLE PRECISION DEFAULT 0,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                ''')
-
-                # NXT 프리마켓 스냅샷 테이블
-                cur.execute('''
-                    CREATE TABLE IF NOT EXISTS nxt_snapshots (
-                        id SERIAL PRIMARY KEY,
-                        trade_date VARCHAR(8) NOT NULL,
-                        snapshot_time TIMESTAMP NOT NULL,
-                        snapshot_seq INTEGER NOT NULL,
-                        avg_change_pct DOUBLE PRECISION,
-                        up_count INTEGER,
-                        down_count INTEGER,
-                        unchanged_count INTEGER,
-                        total_volume BIGINT,
-                        sentiment_score DOUBLE PRECISION,
-                        market_sentiment VARCHAR(20),
-                        expected_gap_pct DOUBLE PRECISION,
-                        circuit_breaker BOOLEAN DEFAULT FALSE,
-                        circuit_breaker_reason VARCHAR,
-                        recommended_max_positions INTEGER,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        UNIQUE(trade_date, snapshot_seq)
-                    )
-                ''')
-
-                # 인덱스 생성
-                index_statements = [
-                    'CREATE INDEX IF NOT EXISTS idx_candidate_date ON candidate_stocks(selection_date)',
-                    'CREATE INDEX IF NOT EXISTS idx_candidate_code ON candidate_stocks(stock_code)',
-                    'CREATE INDEX IF NOT EXISTS idx_price_code_date ON stock_prices(stock_code, date_time)',
-                    'CREATE INDEX IF NOT EXISTS idx_trading_code_date ON trading_records(stock_code, timestamp)',
-                    'CREATE INDEX IF NOT EXISTS idx_virtual_trading_code_date ON virtual_trading_records(stock_code, timestamp)',
-                    'CREATE INDEX IF NOT EXISTS idx_virtual_trading_action ON virtual_trading_records(action)',
-                    'CREATE INDEX IF NOT EXISTS idx_real_trading_code_date ON real_trading_records(stock_code, timestamp)',
-                    'CREATE INDEX IF NOT EXISTS idx_real_trading_action ON real_trading_records(action)',
-                    'CREATE INDEX IF NOT EXISTS idx_nxt_snapshots_date ON nxt_snapshots(trade_date)',
-                ]
-                for stmt in index_statements:
-                    try:
-                        cur.execute(stmt)
-                    except Exception:
-                        pass
-
+                schema.init_schema(conn)
                 conn.commit()
                 self.logger.info("데이터베이스 테이블 생성 완료 (PostgreSQL)")
-
-            except Exception as e:
+            except Exception:
                 conn.rollback()
                 raise
             finally:
                 self._put_connection(conn)
-
         except Exception as e:
             self.logger.error(f"테이블 생성 실패: {e}")
             raise
