@@ -9,6 +9,9 @@ import pytz
 
 # 한국 공휴일 (YYYYMMDD 문자열 set). 매년 갱신 필요.
 # 2025~2027 범위 (오버나이트 전략 금요일 진입 → 월요일 청산 대비)
+# ⚠️ 2028-01-01 이후 is_trading_day()가 공휴일을 미감지하면 오버나이트 청산이
+#    평일로 오판될 수 있음. 매년 11~12월에 다음해 공휴일 추가 필수.
+#    검증: config/market_hours.py > is_trading_day()
 KOREAN_HOLIDAYS = {
     # 2025
     '20250101',  # 신정

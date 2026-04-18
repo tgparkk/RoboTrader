@@ -810,6 +810,35 @@ class DatabaseManager:
             self.logger.error(f"실거래 미매칭 매수 조회 실패: {e}")
             return None
 
+    def get_open_buy_timestamp(self, stock_code: str) -> Optional[datetime]:
+        """미매칭 BUY 레코드의 실제 매수 시각 조회 (emergency_sync 복원용).
+
+        봇 재시작 시 Position.entry_time을 복원 시각이 아닌 실제 매수 시각으로
+        세팅해 _overnight_exit_task의 '당일 진입 제외' 로직에 걸리지 않게 함.
+        """
+        try:
+            row = self._fetchone('''
+                SELECT b.timestamp
+                FROM real_trading_records b
+                WHERE b.stock_code = %s AND b.action = 'BUY'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM real_trading_records s
+                    WHERE s.buy_record_id = b.id AND s.action = 'SELL'
+                  )
+                ORDER BY b.timestamp DESC
+                LIMIT 1
+            ''', (stock_code,))
+            if not row or row[0] is None:
+                return None
+            ts = row[0]
+            # timestamptz → naive KST 정규화 (Position.entry_time 기본값과 일관성 확보)
+            if getattr(ts, 'tzinfo', None) is not None:
+                ts = ts.replace(tzinfo=None)
+            return ts
+        except Exception as e:
+            self.logger.error(f"미매칭 BUY timestamp 조회 실패 ({stock_code}): {e}")
+            return None
+
     def save_virtual_buy(self, stock_code: str, stock_name: str, price: float,
                         quantity: int, strategy: str, reason: str,
                         timestamp: datetime = None) -> Optional[int]:

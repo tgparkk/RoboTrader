@@ -107,6 +107,9 @@ class StrategySettings:
     # ========================================
     # 실시간 종목 스크리너 설정
     # ========================================
+    # ⚠️ closing_trade 전략은 프리로드 30종목(preload_previous_day_stocks)만 후보로 사용.
+    #    실시간 스크리너 SCAN_END(11:50)는 price_position 기준이며 closing_trade 진입창
+    #    (14:00~14:20) 전에 종료되지만, 이는 의도된 설계임. (2026-04-18 검증)
     class Screener:
         ENABLED = True                          # 스크리너 사용 여부
         SCAN_INTERVAL_SECONDS = 120             # 스캔 주기 (2분)

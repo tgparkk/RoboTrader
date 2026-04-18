@@ -1226,8 +1226,18 @@ class DayTradingBot:
                     )
 
                 if not targets:
-                    self.logger.info(f"🌙 오버나이트 청산: 보유 포지션 없음 (09:00)")
-                    self._overnight_exit_executed_date = trade_date
+                    # emergency_sync 복원 대기를 위해 데드라인 경과 시에만 executed_date 마킹.
+                    # (emergency_sync는 _trading_decision_task에서 09:00 이후 실행됨 —
+                    #  09:00:00에 메모리가 비어있어도 09:01경 복원되면 다음 루프에서 청산 가능)
+                    if hhmm > exit_deadline:
+                        self._overnight_exit_executed_date = trade_date
+                        self.logger.warning(
+                            f"🌙 09:00 포지션 없음 + 데드라인 {exit_deadline} 경과 → 오늘 스킵"
+                        )
+                    else:
+                        self.logger.info(
+                            f"🌙 오버나이트 청산: 보유 포지션 없음 ({hhmm}) — emergency_sync 대기, 재시도"
+                        )
                     await _asyncio.sleep(30)
                     continue
 
@@ -1801,8 +1811,17 @@ class DayTradingBot:
                             # 추가된 종목을 즉시 POSITIONED 상태로 설정
                             ts = self.trading_manager.get_trading_stock(code)
                             if ts:
+                                # 🌙 entry_time 복원: DB의 실제 매수 시각 사용 (오버나이트 청산 안전화)
+                                # — 락 밖에서 DB I/O 수행(락 블로킹 회피)
+                                db_entry_time = None
+                                try:
+                                    from db.database_manager import DatabaseManager as _DBM
+                                    db_entry_time = _DBM().get_open_buy_timestamp(code)
+                                except Exception as e:
+                                    self.logger.warning(f"⚠️ {code} DB timestamp 조회 예외: {e}")
+
                                 async with self.trading_manager._lock:
-                                    ts.set_position(quantity, avg_price)
+                                    ts.set_position(quantity, avg_price, entry_time=db_entry_time)
                                     ts.clear_current_order()
                                     ts.is_buying = False
                                     ts.order_processed = True
@@ -1824,6 +1843,19 @@ class DayTradingBot:
                                         f"미관리종목 복구: {quantity}주 @{avg_price:,.0f}원")
 
                                 self.logger.info(f"✅ {code} 미관리 종목 복구 완료")
+
+                                if db_entry_time is None:
+                                    self.logger.warning(
+                                        f"⚠️ {code} DB 미매칭 BUY 없음 → entry_time=now() 폴백 "
+                                        f"(오버나이트 청산 시 당일 진입으로 오판 가능, 수동 확인 필요)"
+                                    )
+                                    try:
+                                        await self.telegram.notify_error(
+                                            "EntryTimeRestore",
+                                            f"⚠️ {code} DB 미매칭 BUY 없음 — 수동 확인 필요"
+                                        )
+                                    except Exception:
+                                        pass
 
                                 # 매수 기록이 DB에 없으면 저장
                                 try:
@@ -1893,13 +1925,22 @@ class DayTradingBot:
                 target_price = buy_price * (1 + take_profit_ratio)
                 stop_loss = buy_price * (1 - stop_loss_ratio)
 
+                # 🌙 entry_time 복원: DB의 실제 매수 시각 사용 (오버나이트 청산 안전화)
+                # — 락 밖에서 DB I/O 수행(락 블로킹 회피)
+                db_entry_time = None
+                try:
+                    from db.database_manager import DatabaseManager as _DBM
+                    db_entry_time = _DBM().get_open_buy_timestamp(code)
+                except Exception as e:
+                    self.logger.warning(f"⚠️ {code} DB timestamp 조회 예외: {e}")
+
                 # 상태 변경 (락 획득하여 원자적 처리)
                 async with self.trading_manager._lock:
                     # TOCTOU 방지: 락 내부에서 상태 재확인 (SELL_CANDIDATE도 이미 추적 중이므로 건너뜀)
                     if ts.state in (StockState.BUY_PENDING, StockState.SELL_PENDING, StockState.POSITIONED, StockState.SELL_CANDIDATE, StockState.COMPLETED):
                         self.logger.debug(f"⏳ {code}: 복구 시점에 상태 변경됨 ({ts.state.value}) - 건너뜀")
                         continue
-                    ts.set_position(quantity, avg_price)
+                    ts.set_position(quantity, avg_price, entry_time=db_entry_time)
                     ts.clear_current_order()
                     ts.is_buying = False
                     ts.order_processed = True
@@ -1921,6 +1962,19 @@ class DayTradingBot:
 
                 self.logger.info(f"✅ {code} 복구완료: 매수 {buy_price:,.0f} → "
                                f"목표 {target_price:,.0f} / 손절 {stop_loss:,.0f}")
+
+                if db_entry_time is None:
+                    self.logger.warning(
+                        f"⚠️ {code} DB 미매칭 BUY 없음 → entry_time=now() 폴백 "
+                        f"(오버나이트 청산 시 당일 진입으로 오판 가능, 수동 확인 필요)"
+                    )
+                    try:
+                        await self.telegram.notify_error(
+                            "EntryTimeRestore",
+                            f"⚠️ {code} DB 미매칭 BUY 없음 — 수동 확인 필요"
+                        )
+                    except Exception:
+                        pass
 
                 # 매수 기록이 DB에 없으면 저장 (buy_pending→positioned 복구 시 누락 방지)
                 try:

@@ -202,12 +202,19 @@ class TradingStock:
         """현재 주문 클리어"""
         self.current_order_id = None
     
-    def set_position(self, quantity: int, avg_price: float):
-        """포지션 설정"""
+    def set_position(self, quantity: int, avg_price: float,
+                     entry_time: Optional[datetime] = None):
+        """포지션 설정
+
+        entry_time 미전달 시 `datetime.now()` 폴백(기존 동작).
+        emergency_sync로 잔고 복원 시에는 DB의 실제 매수 시각을 주입해
+        오버나이트 청산 로직이 '당일 진입'으로 오판하지 않게 함.
+        """
         self.position = Position(
             stock_code=self.stock_code,
             quantity=quantity,
-            avg_price=avg_price
+            avg_price=avg_price,
+            entry_time=entry_time if entry_time is not None else datetime.now()
         )
     
     def clear_position(self):
