@@ -4,6 +4,7 @@
 """
 import psycopg2
 import psycopg2.extras
+import psycopg2.pool
 import pandas as pd
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -47,6 +48,9 @@ class DatabaseManager:
     """
 
     _instance: Optional['DatabaseManager'] = None
+    # backward-compat 클래스 속성: 기존에 raw ThreadedConnectionPool을 참조하던
+    # 코드/리플렉션이 있을 수 있어 동일 의미로 유지 (ConnectionPool과 동기화).
+    _pool: Optional[psycopg2.pool.ThreadedConnectionPool] = None
 
     def __init__(self, db_path: str = None):
         self.logger = setup_logger(__name__)
@@ -62,38 +66,41 @@ class DatabaseManager:
         self.logger.info(f"데이터베이스 초기화 (PostgreSQL): {self._pg_host}:{self._pg_port}/{self._pg_database}")
 
         # Connection pool 초기화 (싱글톤)
-        self._pool = ConnectionPool.get_or_create(
+        self._pool_obj: ConnectionPool = ConnectionPool.get_or_create(
             self._pg_host, self._pg_port, self._pg_database, self._pg_user, self._pg_password
         )
+        # backward-compat: raw ThreadedConnectionPool을 클래스 속성에 동기화
+        type(self)._pool = self._pool_obj.raw_pool
 
         # 테이블 생성
         self._create_tables()
 
     def _init_pool(self):
         """Connection pool 재초기화 (backward-compat)."""
-        self._pool = ConnectionPool.get_or_create(
+        self._pool_obj = ConnectionPool.get_or_create(
             self._pg_host, self._pg_port, self._pg_database, self._pg_user, self._pg_password
         )
+        type(self)._pool = self._pool_obj.raw_pool
 
     def _get_connection(self):
         """Pool에서 연결 획득 (backward-compat)."""
-        return self._pool.getconn()
+        return self._pool_obj.getconn()
 
     def _put_connection(self, conn):
         """Pool에 연결 반환 (backward-compat)."""
-        self._pool.putconn(conn)
+        self._pool_obj.putconn(conn)
 
     def _execute(self, query: str, params: tuple = None):
         """쿼리 실행 헬퍼 — INSERT/UPDATE/DELETE용 (결과 반환 없음)"""
-        self._pool.execute(query, params)
+        self._pool_obj.execute(query, params)
 
     def _fetchone(self, query: str, params: tuple = None):
         """쿼리 실행 후 fetchone 결과 반환"""
-        return self._pool.fetchone(query, params)
+        return self._pool_obj.fetchone(query, params)
 
     def _fetchall(self, query: str, params: tuple = None):
         """쿼리 실행 후 fetchall 결과 반환"""
-        return self._pool.fetchall(query, params)
+        return self._pool_obj.fetchall(query, params)
 
     def _get_today_range_strings(self) -> tuple:
         """KST 기준 오늘의 시작과 내일 시작 시간 문자열(YYYY-MM-DD HH:MM:SS)을 반환."""
@@ -133,7 +140,7 @@ class DatabaseManager:
         """데이터베이스 테이블 생성 (DDL은 db/schema.py에 정의)"""
         from db import schema
         try:
-            with self._pool.connection(commit=True) as conn:
+            with self._pool_obj.connection(commit=True) as conn:
                 schema.init_schema(conn)
             self.logger.info("데이터베이스 테이블 생성 완료 (PostgreSQL)")
         except Exception as e:
@@ -153,7 +160,7 @@ class DatabaseManager:
             new_candidates = 0
             duplicate_candidates = 0
 
-            with self._pool.connection(commit=True) as conn:
+            with self._pool_obj.connection(commit=True) as conn:
                 cur = conn.cursor()
 
                 # 당일 이미 저장된 종목 조회
@@ -202,7 +209,7 @@ class DatabaseManager:
             if not price_data:
                 return True
 
-            with self._pool.connection(commit=True) as conn:
+            with self._pool_obj.connection(commit=True) as conn:
                 cur = conn.cursor()
                 for record in price_data:
                     cur.execute('''
@@ -239,7 +246,7 @@ class DatabaseManager:
             start_datetime = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 00:00:00"
             end_datetime = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 23:59:59"
 
-            with self._pool.connection(commit=True) as conn:
+            with self._pool_obj.connection(commit=True) as conn:
                 cur = conn.cursor()
                 cur.execute('''
                     DELETE FROM stock_prices
@@ -284,7 +291,7 @@ class DatabaseManager:
             start_datetime = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 00:00:00"
             end_datetime = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 23:59:59"
 
-            with self._pool.connection() as conn:
+            with self._pool_obj.connection() as conn:
                 df = pd.read_sql_query('''
                     SELECT date_time, open_price, high_price, low_price, close_price, volume
                     FROM stock_prices
@@ -337,7 +344,7 @@ class DatabaseManager:
         """후보 종목 선정 이력 조회"""
         try:
             start_date = now_kst() - timedelta(days=days)
-            with self._pool.connection() as conn:
+            with self._pool_obj.connection() as conn:
                 df = pd.read_sql_query('''
                     SELECT
                         stock_code, stock_name, selection_date, score, reasons, status
@@ -358,7 +365,7 @@ class DatabaseManager:
         """종목별 가격 이력 조회"""
         try:
             start_date = now_kst() - timedelta(days=days)
-            with self._pool.connection() as conn:
+            with self._pool_obj.connection() as conn:
                 df = pd.read_sql_query('''
                     SELECT date_time, open_price, high_price, low_price, close_price, volume
                     FROM stock_prices
@@ -378,7 +385,7 @@ class DatabaseManager:
         """후보 종목 성과 분석"""
         try:
             start_date = now_kst() - timedelta(days=days)
-            with self._pool.connection() as conn:
+            with self._pool_obj.connection() as conn:
                 df = pd.read_sql_query('''
                     SELECT
                         c.stock_code, c.stock_name, c.selection_date, c.score,
@@ -405,7 +412,7 @@ class DatabaseManager:
         """일별 후보 종목 선정 수"""
         try:
             start_date = now_kst() - timedelta(days=days)
-            with self._pool.connection() as conn:
+            with self._pool_obj.connection() as conn:
                 df = pd.read_sql_query('''
                     SELECT
                         CAST(selection_date AS DATE) as date,
@@ -465,7 +472,7 @@ class DatabaseManager:
         try:
             if timestamp is None:
                 timestamp = now_kst()
-            with self._pool.connection(commit=True) as conn:
+            with self._pool_obj.connection(commit=True) as conn:
                 cur = conn.cursor()
                 cur.execute('''
                     INSERT INTO real_trading_records
@@ -499,7 +506,7 @@ class DatabaseManager:
             net_profit = 0.0
             net_profit_rate = 0.0
 
-            with self._pool.connection(commit=True) as conn:
+            with self._pool_obj.connection(commit=True) as conn:
                 cur = conn.cursor()
 
                 buy_price = None
@@ -603,7 +610,7 @@ class DatabaseManager:
             if timestamp is None:
                 timestamp = now_kst()
 
-            with self._pool.connection(commit=True) as conn:
+            with self._pool_obj.connection(commit=True) as conn:
                 cur = conn.cursor()
                 cur.execute('''
                     INSERT INTO virtual_trading_records
@@ -630,7 +637,7 @@ class DatabaseManager:
             if timestamp is None:
                 timestamp = now_kst()
 
-            with self._pool.connection(commit=True) as conn:
+            with self._pool_obj.connection(commit=True) as conn:
                 cur = conn.cursor()
 
                 cur.execute('''
@@ -669,7 +676,7 @@ class DatabaseManager:
     def get_virtual_open_positions(self) -> pd.DataFrame:
         """미체결 가상 포지션 조회"""
         try:
-            with self._pool.connection() as conn:
+            with self._pool_obj.connection() as conn:
                 df = pd.read_sql_query('''
                     SELECT
                         b.id, b.stock_code, b.stock_name, b.quantity,
@@ -697,7 +704,7 @@ class DatabaseManager:
         """가상 매매 이력 조회"""
         try:
             start_date = now_kst() - timedelta(days=days)
-            with self._pool.connection() as conn:
+            with self._pool_obj.connection() as conn:
                 if include_open:
                     df = pd.read_sql_query('''
                         SELECT
@@ -865,7 +872,7 @@ class DatabaseManager:
     def get_nxt_history(self, days: int = 30) -> 'pd.DataFrame':
         """NXT 스냅샷 이력 조회 (일별 마지막 스냅샷 = 리포트 요약)"""
         try:
-            with self._pool.connection() as conn:
+            with self._pool_obj.connection() as conn:
                 df = pd.read_sql_query('''
                     SELECT n.*
                     FROM nxt_snapshots n
@@ -889,3 +896,4 @@ class DatabaseManager:
     def close_connection(cls):
         """PostgreSQL connection pool 닫기"""
         ConnectionPool.close_singleton()
+        cls._pool = None
