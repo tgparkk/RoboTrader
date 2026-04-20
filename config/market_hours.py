@@ -277,6 +277,14 @@ class MarketHours:
             dt = tz.localize(dt)
 
         buy_cutoff_hour = hours.get('buy_cutoff_hour', 12)
+
+        # closing_trade 전략은 14:20~14:22 진입 창이라 기본 12시 컷오프에 차단됨.
+        # 진입 창 종료(14:22) 이후엔 재진입 없으니 15시까지 열어두고,
+        # 정확한 단발 평가는 _check_closing_trade_buy_signal에서 처리.
+        from config.strategy_settings import StrategySettings
+        if StrategySettings.ACTIVE_STRATEGY == 'closing_trade':
+            buy_cutoff_hour = max(buy_cutoff_hour, 15)
+
         return dt.hour >= buy_cutoff_hour
 
     @classmethod
