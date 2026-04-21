@@ -1,7 +1,8 @@
 """
 실시간 종목 스크리너 - HTS 조건검색 대체
 
-price_position 전략에 최적화된 코드 기반 스크리닝.
+코드 기반 스크리닝. 2026-04-21 weighted_score 전략 기준으로 전환되었으나
+기본 필터(거래량/가격/등락률)는 범용적으로 작동.
 3단계 파이프라인으로 거래량순위 API 기반 후보 발굴.
 
 Phase 1: get_volume_rank() 4회 호출 (KOSPI/KOSDAQ × 거래금액순/거래증가율) → ~80-100 후보
@@ -40,7 +41,7 @@ class StockScreener:
     실시간 종목 스크리너
 
     거래량순위 API 기반 3단계 파이프라인으로
-    price_position 전략에 적합한 후보 종목을 발굴합니다.
+    weighted_score 전략의 universe 후보 종목을 발굴합니다.
     """
 
     def __init__(self, config: dict = None):
@@ -471,87 +472,77 @@ class StockScreener:
         """
         전일 거래대금 상위 종목을 프리로드 (장 시작 전 호출)
 
-        시뮬레이션 분석 결과, 09:00 첫 분봉 진입이 가장 수익률 높음.
-        장 시작 전에 전일 상위 종목을 후보로 등록하여 09:00부터 매수 판단 가능.
+        2026-04-18 전환: robotrader_quant.daily_prices 테이블 기반
+          - 매일 15:35에 전체 2,485종목 일봉 자동 수집 (RoboTrader_quant)
+          - trading_value 이미 집계되어 저장 → 단순 ORDER BY
+          - 기존 minute_candles SUM 방식 대비: 300종목 한계 해제
 
         Args:
             top_n: 전일 거래대금 상위 N개 종목
-
         Returns:
             프리로드된 종목 리스트
         """
         import psycopg2
-        from config.settings import PG_HOST, PG_PORT, PG_DATABASE, PG_USER, PG_PASSWORD
+        from config.settings import (
+            PG_HOST, PG_PORT, PG_DATABASE_QUANT, PG_USER, PG_PASSWORD,
+        )
 
         try:
             conn = psycopg2.connect(
-                host=PG_HOST, port=PG_PORT, database=PG_DATABASE,
-                user=PG_USER, password=PG_PASSWORD
+                host=PG_HOST, port=PG_PORT, database=PG_DATABASE_QUANT,
+                user=PG_USER, password=PG_PASSWORD, connect_timeout=5,
             )
             cur = conn.cursor()
 
-            # 최근 거래일 조회
+            # 최근 거래일 (date 컬럼은 'YYYY-MM-DD' 형식)
             cur.execute('''
-                SELECT DISTINCT trade_date FROM minute_candles
-                ORDER BY trade_date DESC LIMIT 2
+                SELECT DISTINCT date FROM daily_prices
+                ORDER BY date DESC LIMIT 1
             ''')
-            dates = [row[0] for row in cur.fetchall()]
-            if not dates:
-                self.logger.warning("[프리로드] minute_candles에 데이터 없음")
+            row = cur.fetchone()
+            if not row:
+                self.logger.warning("[프리로드] daily_prices에 데이터 없음")
                 cur.close()
                 conn.close()
                 return []
+            prev_date_iso = row[0]  # 'YYYY-MM-DD'
 
-            prev_date = dates[0]  # 가장 최근 거래일
-
-            # 전일 거래대금 상위 종목 조회
             min_price = self.config.get('min_price', 5000)
             max_price = self.config.get('max_price', 500000)
 
             cur.execute('''
-                SELECT
-                    stock_code,
-                    MIN(CASE WHEN time >= '090000' AND time <= '090300' THEN open END) as day_open,
-                    SUM(amount) as daily_amount,
-                    MAX(close) as last_close
-                FROM minute_candles
-                WHERE trade_date = %s
-                GROUP BY stock_code
-                HAVING MIN(CASE WHEN time >= '090000' AND time <= '090300' THEN open END) IS NOT NULL
-                ORDER BY SUM(amount) DESC
+                SELECT stock_code, open, close, trading_value
+                FROM daily_prices
+                WHERE date = %s AND open IS NOT NULL AND close IS NOT NULL
+                ORDER BY trading_value DESC NULLS LAST
                 LIMIT %s
-            ''', [prev_date, top_n * 2])  # 필터링 여유분
+            ''', [prev_date_iso, top_n * 2])
 
             candidates = []
             for row in cur.fetchall():
-                stock_code, day_open, daily_amount, last_close = row
+                stock_code, day_open, last_close, trading_value = row
 
-                # 우선주 제외
-                if stock_code[-1] == '5':
+                if stock_code[-1] == '5':          # 우선주 제외
                     continue
-
-                # 가격 필터
                 if not (min_price <= float(last_close or 0) <= max_price):
                     continue
-
-                # 이미 추가된 종목 스킵
                 if stock_code in self._added_stocks:
                     continue
 
+                tv = int(trading_value or 0)
                 candidates.append(ScreenedStock(
                     code=stock_code,
-                    name=f"PRE_{stock_code}",  # 실제 이름은 main.py에서 API 조회
+                    name=f"PRE_{stock_code}",
                     market='KOSPI',
                     current_price=int(last_close or 0),
                     change_rate=0.0,
                     open_price=int(day_open or 0),
                     pct_from_open=0.0,
                     volume=0,
-                    trading_amount=int(daily_amount or 0),
-                    score=float(daily_amount or 0) / 1_000_000_000,  # 거래대금(억) 기준
-                    reason=f"전일거래대금상위(거래대금:{int(daily_amount or 0) / 100_000_000:.0f}억)",
+                    trading_amount=tv,
+                    score=tv / 1_000_000_000,
+                    reason=f"전일거래대금상위(거래대금:{tv / 100_000_000:.0f}억)",
                 ))
-
                 if len(candidates) >= top_n:
                     break
 
@@ -559,12 +550,138 @@ class StockScreener:
             conn.close()
 
             self.logger.info(
-                f"[프리로드] 전일({prev_date}) 거래대금 상위 {len(candidates)}개 종목 선정"
+                f"[프리로드] 전일({prev_date_iso}) daily_prices 거래대금 상위 "
+                f"{len(candidates)}개 종목 선정"
             )
             return candidates
 
         except Exception as e:
             self.logger.error(f"[프리로드] 오류: {e}")
+            return []
+
+    def preload_weighted_score_universe(
+        self,
+        top_n: int = 300,
+        require_research_universe: bool = True,
+    ) -> List[ScreenedStock]:
+        """weighted_score 전략용 universe 공급 (2026-04-21).
+
+        전일 거래대금 상위 top_n 종목 ∩ 연구 universe(260일+ 풀커버 517종목).
+
+        Args:
+            top_n: 전일 거래대금 상위 N (기본 300)
+            require_research_universe: True 면 research universe snapshot 과 교집합
+
+        Returns:
+            ScreenedStock 리스트 (preload_previous_day_stocks 와 동일 구조)
+        """
+        # 연구 universe 로드 (교집합용)
+        research_codes: Optional[Set[str]] = None
+        if require_research_universe:
+            try:
+                import json
+                from pathlib import Path
+                snap_path = (
+                    Path(__file__).resolve().parents[1]
+                    / "analysis" / "research" / "weighted_score"
+                    / "universe_snapshot.json"
+                )
+                if snap_path.exists():
+                    data = json.loads(snap_path.read_text(encoding="utf-8"))
+                    research_codes = {e["stock_code"] for e in data.get("entries", [])}
+                    self.logger.info(
+                        f"[weighted_score.univ] research universe 로드: {len(research_codes)}종목"
+                    )
+                else:
+                    self.logger.warning(
+                        f"[weighted_score.univ] snapshot 없음 ({snap_path}), "
+                        "교집합 미적용 (top_n 그대로 반환)"
+                    )
+            except Exception as e:
+                self.logger.warning(f"[weighted_score.univ] research universe 로드 실패: {e}")
+
+        # 전일 거래대금 상위 후보 로드 (preload_previous_day_stocks 와 동일 쿼리,
+        # 상한 top_n × 2 로 확대해 교집합 손실 흡수)
+        import psycopg2
+        from config.settings import (
+            PG_HOST, PG_PORT, PG_DATABASE_QUANT, PG_USER, PG_PASSWORD,
+        )
+
+        try:
+            conn = psycopg2.connect(
+                host=PG_HOST, port=PG_PORT, database=PG_DATABASE_QUANT,
+                user=PG_USER, password=PG_PASSWORD, connect_timeout=5,
+            )
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT DISTINCT date FROM daily_prices ORDER BY date DESC LIMIT 1"
+            )
+            row = cur.fetchone()
+            if not row:
+                self.logger.warning("[weighted_score.univ] daily_prices 비어있음")
+                cur.close()
+                conn.close()
+                return []
+            prev_date_iso = row[0]
+
+            min_price = self.config.get('min_price', 5000)
+            max_price = self.config.get('max_price', 500000)
+
+            # 교집합 손실 흡수를 위해 3배수로 가져옴
+            fetch_limit = top_n * 3 if research_codes else top_n * 2
+            cur.execute(
+                '''SELECT stock_code, open, close, trading_value
+                   FROM daily_prices
+                   WHERE date = %s AND open IS NOT NULL AND close IS NOT NULL
+                   ORDER BY trading_value DESC NULLS LAST
+                   LIMIT %s''',
+                [prev_date_iso, fetch_limit],
+            )
+
+            candidates: List[ScreenedStock] = []
+            for row in cur.fetchall():
+                stock_code, day_open, last_close, trading_value = row
+                if stock_code[-1] == '5':  # 우선주 제외
+                    continue
+                if not (min_price <= float(last_close or 0) <= max_price):
+                    continue
+                if research_codes is not None and stock_code not in research_codes:
+                    continue
+                if stock_code in self._added_stocks:
+                    continue
+
+                tv = int(trading_value or 0)
+                candidates.append(ScreenedStock(
+                    code=stock_code,
+                    name=f"WS_{stock_code}",
+                    market='KOSPI',
+                    current_price=int(last_close or 0),
+                    change_rate=0.0,
+                    open_price=int(day_open or 0),
+                    pct_from_open=0.0,
+                    volume=0,
+                    trading_amount=tv,
+                    score=tv / 1_000_000_000,
+                    reason=(
+                        f"weighted_score universe "
+                        f"(전일거래대금 {tv / 100_000_000:.0f}억, "
+                        f"{'research교집합' if research_codes else 'top_n'})"
+                    ),
+                ))
+                if len(candidates) >= top_n:
+                    break
+
+            cur.close()
+            conn.close()
+
+            self.logger.info(
+                f"[weighted_score.univ] 전일({prev_date_iso}) 거래대금 상위 × "
+                f"research universe → {len(candidates)}종목 선정"
+            )
+            return candidates
+
+        except Exception as e:
+            self.logger.error(f"[weighted_score.univ] 오류: {e}")
             return []
 
     # ===== 유틸리티 메서드 =====

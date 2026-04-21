@@ -21,44 +21,45 @@
 
 ---
 
-## 현재 활성 전략: 가격 위치 기반 전략 (price_position)
+## ⚠️ 현재 상태 (2026-04-21): weighted_score 통합 중
 
-### 전략 설정 (config/strategy_settings.py)
 ```python
-ACTIVE_STRATEGY = 'price_position'
+# config/strategy_settings.py — weighted_score 운영 수치는 전부 이 클래스에서 관리
+ACTIVE_STRATEGY = 'weighted_score'              # 2026-04-21 전환
+WeightedScore.STOP_LOSS_PCT = -5.04             # 손절
+WeightedScore.TAKE_PROFIT_PCT = 7.07            # 익절
+WeightedScore.MAX_HOLDING_DAYS = 3              # 최대 보유 거래일 (research Trial #1600)
+WeightedScore.ALLOW_OVERNIGHT_HOLD = True       # EOD 15:00 선별 스킵 (days < max_hold 인 포지션만)
+WeightedScore.MAX_DAILY_POSITIONS = 9           # 동시 보유 (research Trial #1600 동일)
+WeightedScore.BUY_BUDGET_RATIO = 0.10           # 건당 = 총자본 × 10% (고정, 9종목 × 10% = 90%)
+WeightedScore.VIRTUAL_ONLY = True               # main.py 분기에서 가상매매로 라우팅 (실 주문 X)
 ```
 
-### 진입 조건
-| 항목 | 설정값 |
-|------|--------|
-| 시가 대비 | 1% ~ 3% 상승 |
-| 매수 진입 시간 | 9:00 ~ 12:00 (PricePosition.ENTRY_START/END_HOUR) |
-| 스크리너 스캔 시간 | 9:01 ~ 11:50 (Screener.SCAN_START/END) — 진입 창과 별도 |
-| 거래 요일 | 월~금 전체 |
-| 동시 보유 최대 | 7종목 (03-28 멀티버스: 7종목 +280% vs 5종목 +216%) |
-| 고급 필터 | 변동성 < 1.2%, 모멘텀 < +2.0%, 갭다운 > -2% |
+**설정 단일 관리 지점**: weighted_score 운영 수치는 모두 `StrategySettings.WeightedScore` 클래스에서
+관리. `trading_config.json` 의 `risk_management.stop_loss_ratio/take_profit_ratio` 와 `order_management.buy_budget_ratio` 는 weighted_score 시 **무시**됨. `trading_decision_engine.get_effective_stop_loss/take_profit` 과 `main.FundManager` 초기화가 WeightedScore 값을 우선 참조한다.
 
-### 청산 조건
-- **기본 손절**: -5.0% / **기본 익절**: +6.0%
-- **ATR 동적 TP/SL** (비활성, 04-01): 멀티버스 검증 결과 고정 SL5/TP6 대비 효과 미미
-  - 설정: `config/strategy_settings.py` > `PricePosition.ATR_DYNAMIC_TP_SL_ENABLED = False`
+- **실거래 파일**: `core/strategies/weighted_score_strategy.py`, `weighted_score_features.py`,
+  `weighted_score_daily_prep.py`, `weighted_score_params.json`
+- **통합 계획/진행 상태**: [analysis/research/weighted_score/INTEGRATION_PLAN.md](analysis/research/weighted_score/INTEGRATION_PLAN.md)
+- **자동 실행 차단**: `D:\GIT\run_all_robotraders.bat` 의 RoboTrader 라인 주석 처리됨
+- **핵심 파라미터**: Trial #1600 (test Calmar 162.75, return +74.2%, MDD 2.84%)
+- **Phase 5 연결 완료 (2026-04-21)**:
+  - `main._pre_market_task()` 내 `_prepare_weighted_score_for_today()` — universe 300 × research universe 교집합
+  - `stock_screener.preload_weighted_score_universe()` — 전일 거래대금 + research universe 교집합
+  - `main.py` 매수 경로에서 `VIRTUAL_ONLY=True` 시 `execute_virtual_buy` 라우팅
+  - `analyze_sell_decision` — weighted_score 시 max_holding_days 도달 체크 (busday_count)
+  - `_execute_end_of_day_liquidation` — overnight 허용 시 days_held < max_hold 포지션 선별 스킵
+  - 실 주문 열기: `VIRTUAL_ONLY = False` 한 줄 변경 (가상매매 1~2주 관찰 후)
+- **롤백**: `ACTIVE_STRATEGY = 'closing_trade'` 또는 `'pullback'` + .bat 라인 주석 해제
+  - price_position 전략은 2026-04-21 완전 삭제되어 롤백 옵션에서 제외됨
 
-### 종목 발굴: 프리로드 + 실시간 스크리너
-- **프리로드**: 전일 거래대금 상위 30개를 장 시작 전 사전 등록 → 09:00부터 매수 가능
-  - 09:00~09:15 골든타임 진입의 핵심 (승률 63%, +0.95%)
-  - 코드: `core/stock_screener.py` > `preload_previous_day_stocks()`
-- **실시간 스크리너**: 2분 주기 KOSPI+KOSDAQ 거래금액순 API 스캔
-  - 3단계 필터: 기본필터 → 정밀필터(시가대비, 갭) → 점수순 최대 5개 추가
-  - 설정: `config/strategy_settings.py` > `Screener` 클래스
-- **시뮬레이션에도 프리로드 반영** (04-01): `simulate_with_screener.py --preload-top 30`
+> 현재 `VIRTUAL_ONLY=True` 이므로 신호는 발생하되 `virtual_trading_records` 테이블에만 기록 — 실 계좌 주문 없음.
 
-### 관련 파일
-- `config/strategy_settings.py` - 전략/스크리너 설정
-- `core/strategies/price_position_strategy.py` - 전략 클래스
-- `core/stock_screener.py` - 실시간 종목 스크리너
-- `core/performance_gate.py` - 성과 기반 매수 게이트 (롤링승률 + 연속손실)
-- `core/expanded_minute_collector.py` - 분봉 확대 수집 (15:45 자동, 거래대금 상위 300종목, 04-12 추가)
-- `simulate_with_screener.py` - 스크리너 통합 시뮬레이션
+---
+
+## 폐기된 전략
+
+- **price_position** (2026-04-21 삭제): weighted_score 로 대체. `core/strategies/price_position_strategy.py` 파일과 `class PricePosition` 설정, `_check_price_position_buy_signal` 메서드, ATR 동적 TP/SL 관련 dead code 모두 제거.
 
 ---
 

@@ -128,8 +128,10 @@ class TradeExecutor:
                 strategy = "다중볼린저밴드"
             elif "눌림목캔들패턴" in buy_reason:
                 strategy = "눌림목캔들패턴"
-            elif "가격위치전략" in buy_reason:
-                strategy = "가격위치전략"
+            elif "score" in buy_reason.lower() or "weighted" in buy_reason.lower():
+                strategy = "weighted_score"
+            elif "종가매매" in buy_reason or "closing_trade" in buy_reason.lower():
+                strategy = "closing_trade"
             else:
                 strategy = "볼린저밴드+이등분선"
 

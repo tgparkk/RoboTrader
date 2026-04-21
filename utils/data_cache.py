@@ -502,17 +502,3 @@ def get_stock_atr(stock_code: str, trade_date: str = None, lookback_days: int = 
         pool.putconn(conn)
 
 
-def calc_atr_tp_sl(atr_pct: float) -> tuple:
-    """
-    ATR 기반 TP/SL(%) 계산.
-
-    Returns:
-        (tp_pct, sl_pct) 튜플. 예: (6.7, 4.9)
-    """
-    from config.strategy_settings import StrategySettings
-    PP = StrategySettings.PricePosition
-    tp = atr_pct * PP.ATR_TP_MULTIPLIER
-    sl = atr_pct * PP.ATR_SL_MULTIPLIER
-    tp = max(PP.ATR_TP_MIN, min(tp, PP.ATR_TP_MAX))
-    sl = max(PP.ATR_SL_MIN, min(sl, PP.ATR_SL_MAX))
-    return (round(tp, 2), round(sl, 2))

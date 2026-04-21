@@ -2,15 +2,18 @@
 전략 설정 파일
 
 사용 가능한 전략:
-1. 'pullback' - 기존 눌림목 캔들패턴 전략 (기본값)
-2. 'price_position' - 가격 위치 기반 전략
-3. 'closing_trade' - 종가매매(오버나이트) 전략 (신규, 시뮬 +53.7%/MDD3.56%)
+1. 'pullback' - 기존 눌림목 캔들패턴 전략 (롤백용)
+2. 'closing_trade' - 종가매매(오버나이트) 전략
+3. 'weighted_score' - 가중 점수 전략 (Trial #1600, test Calmar 162.75, 2026-04-21)
 
-종가매매 전략 (closing_trade):
-- 14:00~14:20 진입, 익일 09:00 시장가 청산
-- 신호: 전일 양봉 몸통 ≥ 1.0% + 당일 하락 -3% 이내 + 14:50 VWAP 상회
-- 장중 손절/익절 없음 (오버나이트 홀드)
-- EOD 15:00 청산 스킵 (main.py에서 분기)
+weighted_score 전략 (현 운영):
+- 23개 피처 가중합 > 임계치(-0.127) 시 진입
+- 분봉 단위 실시간 스코어링
+- 고정 SL -5.04%, TP +7.07%, max_hold 3일
+- 장중 청산 (closing_trade 와 달리 오버나이트 홀드 아님)
+- 파라미터: core/strategies/weighted_score_params.json
+
+**폐기됨 (2026-04-21)**: 'price_position' 전략은 weighted_score 로 대체되며 완전 삭제됨.
 """
 
 
@@ -20,51 +23,10 @@ class StrategySettings:
     # ========================================
     # 사용할 전략 선택
     # ========================================
-    # 'pullback'       : 기존 눌림목 캔들패턴 전략
-    # 'price_position' : 가격 위치 기반 전략 (폐기 예정, 롤백용 유지)
-    # 'closing_trade'  : 종가매매 오버나이트 전략 (현 운영)
-    ACTIVE_STRATEGY = 'closing_trade'  # <-- 여기서 전략 변경
-
-    # ========================================
-    # 가격 위치 기반 전략 설정 (price_position)
-    # ========================================
-    class PricePosition:
-        # 캔들 간격 (분)
-        CANDLE_INTERVAL = 1          # 1분봉 사용
-
-        # 진입 조건
-        MIN_PCT_FROM_OPEN = 1.0      # 시가 대비 최소 상승률 (%)
-        MAX_PCT_FROM_OPEN = 3.0      # 시가 대비 최대 상승률 (%) — 4.0→3.0 (시뮬 최적화)
-        ENTRY_START_HOUR = 9         # 진입 시작 시간 (9시)
-        ENTRY_END_HOUR = 12          # 진입 종료 시간 (12시)
-
-        # 허용 요일 (0=월, 1=화, 2=수, 3=목, 4=금)
-        ALLOWED_WEEKDAYS = [0, 1, 2, 3, 4]  # 월~금 전체 (시뮬 검증: 화/목 포함이 +44% 수익)
-
-        # 고급 진입 필터
-        MAX_PRE_VOLATILITY = 1.2     # 진입 전 10봉 변동성 상한 (%) — 0.8→1.2 (익절 특성 분석 최적화)
-        MAX_PRE20_MOMENTUM = 2.0     # 진입 전 20봉 모멘텀 상한 (%) — 1.5→2.0 (시뮬 최적화)
-        MIN_RISING_CANDLES = 3       # 직전 N봉 대비 상승 확인 (0이면 비활성)
-        MIN_VOLUME_RATIO = 0         # 신호 캔들 거래량 > 직전 5봉 평균 × 이 값 (0이면 비활성)
-                                         # 03-28 멀티버스: 5종목+vol1.2x는 최근1M 개선되나, 7종목에서는 역효과 (+15.6%→+7.6%)
-
-        # 손익 설정 (trading_config.json의 설정을 따름)
-        # stop_loss_ratio: 0.05 (-5.0%)
-        # take_profit_ratio: 0.06 (+6.0%)
-
-        # 거래 제한
-        ONE_TRADE_PER_STOCK_PER_DAY = True  # 하루에 종목당 1회만 거래
-        MAX_DAILY_POSITIONS = 7              # 최대 동시 보유 종목 수 (03-28 멀티버스: 7종목 +280% vs 5종목 +216%)
-
-        # === ATR 동적 TP/SL ===
-        ATR_DYNAMIC_TP_SL_ENABLED = False  # 멀티버스 검증: 고정 SL5/TP6 대비 효과 미미 (04-01)
-        ATR_LOOKBACK_DAYS = 20
-        ATR_TP_MULTIPLIER = 2.0
-        ATR_SL_MULTIPLIER = 1.0
-        ATR_TP_MIN = 2.0
-        ATR_TP_MAX = 10.0
-        ATR_SL_MIN = 2.0
-        ATR_SL_MAX = 6.0
+    # 'pullback'       : 눌림목 캔들패턴 전략 (롤백용)
+    # 'closing_trade'  : 종가매매 오버나이트 전략
+    # 'weighted_score' : 가중 점수 전략 (2026-04-21, 통합 작업 중)
+    ACTIVE_STRATEGY = 'weighted_score'  # <-- 여기서 전략 변경
 
     # ========================================
     # 종가매매 전략 설정 (closing_trade, 오버나이트 홀드)
@@ -74,35 +36,113 @@ class StrategySettings:
         종가매매(오버나이트) 전략 파라미터.
         멀티버스 시뮬 검증 (2025-04~2026-04, 보수화·자본제약):
           +53.7% / MDD 3.56% / 승률 60.6% / 404건 / gap_down_rate 4.93%
-        최근 1개월(2026-04) 실적: +6.56%
         """
-        # 캔들 간격 (분)
         CANDLE_INTERVAL = 1
 
-        # 진입 시간대 (HHMM int)
-        ENTRY_HHMM_START = 1400       # 14:00
-        ENTRY_HHMM_END = 1420         # 14:20 (이 시각 초과 시 미체결 자동 취소)
-        EVAL_BAR_HHMM = 1450          # 14:50 봉 기준으로 VWAP/본전 평가
+        # 진입 시간대 (HHMM int) — 시뮬 signal_prev_body_momentum 와 단발 평가 정합 (2026-04-18)
+        # START=1420: 14:00~14:19 매 분 평가 경로를 차단. 14:20:05 트리거 시점 단발 진입.
+        # END=1422: 14:20:05 놓칠 경우 14:21:05 에 14:20봉 close로 예비 진입 (시뮬 ≤1분 괴리)
+        ENTRY_HHMM_START = 1420
+        ENTRY_HHMM_END = 1422
 
         # 신호 조건 (prev_body_momentum)
         MIN_PREV_BODY_PCT = 1.0       # 전일 양봉 몸통 최소 (%)
         MAX_DAY_DECLINE_PCT = -3.0    # 당일 시가 대비 최저점 하한 (%)
-        REQUIRE_VWAP_ABOVE = True     # 14:50 종가 > 당일 VWAP 요구
+        REQUIRE_VWAP_ABOVE = True     # 현재 봉 close > 당일 누적 VWAP
+
+        # 후보 갭 필터 (시뮬 screen_for_day_strict 와 정합)
+        MIN_GAP_PCT = 0.5             # 시가/전일종가 갭 하한 (%)
+        MAX_GAP_PCT = 5.0             # 시가/전일종가 갭 상한 (%)
+        MAX_ABS_GAP_PCT = 3.0         # 절대값 상한 — 실질적으로 상방 3% 컷
+        MIN_GAP_DOWN_PCT = -2.0       # 갭다운 하한 (중복 의미이나 시뮬 구조 준수)
+
+        # 후보 풀 (시뮬 screen_for_day_strict 와 정합)
+        PRELOAD_TOP_N = 100           # 전일 거래대금 상위 N종목 (시뮬: 100)
+        PRELOAD_ONLY_CANDIDATES = True  # 프리로드 외(실시간 스크리너) 종목 진입 차단
 
         # 청산 설정
-        EXIT_HHMM = 900               # 익일 09:00 시장가 청산
-        EXIT_DEADLINE_HHMM = 905      # 09:05까지 체결 대기
-        GAP_SL_LIMIT_PCT = -5.0       # 익일 시가 -5% 이하 경고 (시장가 매도라 기록용)
+        # EXIT_HHMM=850: 08:50 주문 접수로 09:00 동시호가 단일가매매에 편입 → 시뮬 next_O[i_open] 정합
+        # (KIS API는 08:20부터 예약주문 수용)
+        EXIT_HHMM = 850
+        EXIT_DEADLINE_HHMM = 905      # 09:05까지 체결 확인
+        GAP_SL_LIMIT_PCT = -5.0       # 시장가 매도라 기록용 (실제 주문 영향 없음)
 
-        # 허용 요일 (0=월, 4=금). 금요일 매수 → 월요일 청산(2일 홀드)
+        ALLOWED_WEEKDAYS = [0, 1, 2, 3, 4]
+        MAX_DAILY_POSITIONS = 5
+
+        # Surge Avoidance 필터 (시뮬 filter_surge_avoidance, 2026-04-18 정합)
+        # best 파라미터 불명 — 안전 측면에서 활성화 (급등/VI 종목 배제)
+        SURGE_AVOIDANCE_ENABLED = True
+        SURGE_MAX_PREV_TO_LAST_PCT = 15.0    # 전일종가 대비 > 15% 배제
+        SURGE_MAX_INTRADAY_RANGE_PCT = 12.0  # (고-저)/저 > 12% 배제
+        SURGE_MAX_PCT_FROM_OPEN = 10.0       # 시가 대비 > 10% 배제
+
+        # 매수 주문 제어 (2026-04-18)
+        BUY_TIMEOUT_SECONDS = 60             # 지정가 미체결 타임아웃 (시뮬 단발 체결 가정 정합)
+        DISABLE_MARKET_ORDER_FALLBACK = True # 타임아웃 시 시장가 전환 금지 → 취소
+
+    # ========================================
+    # 가중 점수 전략 설정 (weighted_score) — **단일 관리 지점**
+    # ========================================
+    class WeightedScore:
+        """
+        가중 점수 전략 (Trial #1600, 2026-04-21 탐색).
+
+        백테스트 성과 (200종목 × 88일 test):
+            test Calmar 162.75, return +74.2%, MDD 2.84%, Sharpe 9.69,
+            win 62.2%, 394건
+
+        파라미터 소스:
+          - 이 파일: 운영 설정 (진입/청산 임계값, 동시보유, 자금관리, 가상매매 스위치)
+          - core/strategies/weighted_score_params.json: 피처 가중치·정규화 분포 (연구 추출)
+          - trading_config.json: **사용 안 함** (risk_management 값 무시됨)
+
+        연구 아카이브: analysis/research/weighted_score/
+        통합 계획: analysis/research/weighted_score/INTEGRATION_PLAN.md
+
+        **하나의 파일 정책 (2026-04-21)**: weighted_score 운영 관련 수치는 모두 이 클래스에
+        서 관리한다. trading_decision_engine 의 get_effective_*() 가 이 클래스 값을 우선
+        참조하도록 구현됨.
+        """
+        # ---- 캔들 / 진입 시간 ----
+        CANDLE_INTERVAL = 1
+        ENTRY_START_HOUR = 9
+        ENTRY_END_HOUR = 14               # 14 시 이후 진입 금지
+        WARMUP_MINUTES = 30               # 09:30 이후 진입 허용 (ret_30min 워밍업)
         ALLOWED_WEEKDAYS = [0, 1, 2, 3, 4]
 
-        # 포지션 제한
-        MAX_DAILY_POSITIONS = 5       # 동시 보유 5종목 (buy_ratio 0.18 = 90%/5)
+        # ---- 청산 임계값 (research Trial #1600) ----
+        STOP_LOSS_PCT = -5.04             # 손절 (%, 음수)
+        TAKE_PROFIT_PCT = 7.07            # 익절 (%, 양수)
 
-        # 서킷브레이커 상호작용
-        RESPECT_PREV_DAY_CIRCUIT = True    # 전일 -3% → 매수 중단 유지
-        CHECK_INTRADAY_INDEX_AT_ENTRY = True  # 14:00 직전 지수 -2% 이하면 매수 스킵
+        # ---- 홀딩 / 동시보유 ----
+        MAX_HOLDING_DAYS = 3              # 거래일 기준 최대 보유 (research 값)
+        MAX_DAILY_POSITIONS = 9           # 동시 보유 최대 (research Trial #1600 값, 2026-04-21 5 → 9)
+
+        # ---- 오버나이트 홀드 ----
+        # True : 3 거래일까지 보유 (연구 Calmar 162.75 재현 조건)
+        #        → EOD 15:00 에서 days_held < MAX_HOLDING_DAYS 포지션은 스킵
+        # False: EOD 15:00 강제 청산 (effective max_hold=1일, 보수적)
+        ALLOW_OVERNIGHT_HOLD = True
+
+        # ---- 자금 관리 ----
+        # 각 매수 = 계좌 총잔고 × BUY_BUDGET_RATIO (고정, compounding 아님)
+        # 연구 Trial #1600 재현: 9 × 10% = 90% 활용, 10% 현금 buffer
+        # (5종목 운영 시에는 0.19 가 적절: 5×19%=95%)
+        BUY_BUDGET_RATIO = 0.10           # 1/MAX_DAILY_POSITIONS ≈ 0.111 보다 살짝 보수적
+        BUY_COOLDOWN_MINUTES = 25         # 동일 종목 재매수 쿨다운
+
+        # ---- 거래 제한 ----
+        ONE_TRADE_PER_STOCK_PER_DAY = True
+
+        # ---- Universe 공급 ----
+        UNIVERSE_TOP_N = 300              # 전일 거래대금 상위 N
+        REQUIRE_RESEARCH_UNIVERSE = True  # research universe(517) 교집합만 사용
+
+        # ---- Phase 5 가상 매매 모드 ----
+        # True : main.py 분기에서 execute_virtual_buy 로 라우팅 (실 계좌 주문 X)
+        # False: execute_real_buy (실 계좌 주문)
+        VIRTUAL_ONLY = False  # 2026-04-21 실전 전환 (가상매매 단계 스킵)
 
     # ========================================
     # 실시간 종목 스크리너 설정
@@ -159,68 +199,79 @@ class StrategySettings:
         ANALYSIS_END_HOUR = 8
         ANALYSIS_END_MINUTE = 55
 
-        # 심리 판단 임계값 (-1.0 ~ +1.0)
-        BEARISH_THRESHOLD = -0.3                # 이 이하면 약세
-        VERY_BEARISH_THRESHOLD = -0.7           # 이 이하면 강약세 (3종목 축소, SL/TP 고정)
-        EXTREME_BEARISH_THRESHOLD = -0.9        # 이 이하면 극약세 (매수 중단)
-        BULLISH_THRESHOLD = 0.3                 # 이 이상이면 강세
+        # 심리 판단 임계값 — closing_trade 전략에서는 모든 약세 가드 비활성 (2026-04-18)
+        BEARISH_THRESHOLD = -99.0               # 사실상 트리거 불가
+        VERY_BEARISH_THRESHOLD = -99.0
+        EXTREME_BEARISH_THRESHOLD = -99.0
+        BULLISH_THRESHOLD = 99.0
 
-        # 약세장 포지션 축소 (SL/TP는 항상 5%/6% — 03-24 멀티버스: 축소는 모든 시나리오에서 역효과)
-        BEARISH_MAX_POSITIONS = 3               # 5 → 3
+        # 약세장 포지션 축소 — 비활성 (모두 FALLBACK과 동일)
+        BEARISH_MAX_POSITIONS = 5
+        VERY_BEARISH_MAX_POSITIONS = 5
+        EXTREME_BEARISH_MAX_POSITIONS = 5
 
-        # 강약세장 (sentiment -0.7~-0.9: 매수 허용, 포지션 축소)
-        VERY_BEARISH_MAX_POSITIONS = 3          # 포지션 축소
+        # 서킷브레이커 — 시뮬 track_b_closing_sim:155-158 과 정합 (원복, 2026-04-18)
+        # 시뮬 +53.7% 검증이 "전일 KOSPI/KOSDAQ -3% 이하인 날 건너뛰기"를 포함한 결과
+        CIRCUIT_BREAKER_PREV_DAY_PCT = -3.0
+        PREV_DAY_DECLINE_THRESHOLD = -99.0    # 로깅 전용 (실질 비활성)
+        CIRCUIT_BREAKER_PREV_DAY_PCT_WITH_GAP = -99.0  # NXT 연계 가드 비활성
+        CIRCUIT_BREAKER_NXT_GAP_PCT = -99.0
+        CIRCUIT_BREAKER_RELEASE_GAP_PCT = 99.0
 
-        # 극약세장 (sentiment <= -0.9: 매수 완전 중단)
-        EXTREME_BEARISH_MAX_POSITIONS = 0       # 매수 중단
+        # 장 시작 갭 / 갭업 / 장중 지수 / 동적 SL — 전부 비활성
+        MARKET_OPEN_GAP_CHECK_ENABLED = False
+        MARKET_OPEN_GAP_THRESHOLD_PCT = -99.0
+        MARKET_OPEN_GAP_CHECK_MINUTE = 1
 
-        # 서킷브레이커: 전일 지수 기반 매수 완전 중단
-        # 조건1: 전일 KOSPI 또는 KOSDAQ 등락률이 이 값 이하 → 매수 중단
-        CIRCUIT_BREAKER_PREV_DAY_PCT = -3.0     # 전일 -3% 이상 하락 (4년 시뮬: -3% 이하만 마이너스)
+        MARKET_OPEN_GAP_UP_FILTER_ENABLED = False
+        MARKET_OPEN_GAP_UP_THRESHOLD_PCT = 99.0
 
-        # 조건1b: 전일 -1% 이하 감지 (로깅 전용 — SL/TP는 항상 5%/6% 유지)
-        PREV_DAY_DECLINE_THRESHOLD = -1.0       # 전일 -1% 이하 시 로깅
-        # 조건2: 전일 -1% 이하 + 당일 NXT 갭 이 값 이하 → 매수 중단
-        CIRCUIT_BREAKER_PREV_DAY_PCT_WITH_GAP = -1.0  # 전일 -1% 하락
-        CIRCUIT_BREAKER_NXT_GAP_PCT = -0.5            # + NXT 갭 -0.5%
-        # 해제 조건: 서킷브레이커 발동 상태에서 NXT 갭이 이 값 이상이면 해제
-        CIRCUIT_BREAKER_RELEASE_GAP_PCT = 3.0         # NXT 갭 +3% 이상이면 강한 반등으로 해제
+        INTRADAY_INDEX_CHECK_ENABLED = False
+        INTRADAY_INDEX_CHECK_INTERVAL_MINUTES = 2
+        INTRADAY_INDEX_DROP_THRESHOLD_PCT = -99.0
+        INTRADAY_INDEX_RECOVERY_PCT = -99.0
 
-        # 장 시작 후 지수 갭 체크 (09:00~09:05 실제 KOSPI/KOSDAQ 시가 확인)
-        MARKET_OPEN_GAP_CHECK_ENABLED = True          # 장 시작 갭 체크 사용 여부
-        MARKET_OPEN_GAP_THRESHOLD_PCT = -1.5          # 지수 시가 갭 이 값 이하 → 매수 중단
-        MARKET_OPEN_GAP_CHECK_MINUTE = 1              # 장 시작 후 N분에 체크 (09:01)
-
-        # 장 시작 갭업 필터 (데드캣바운스 회피, 04-11 멀티버스 검증: 강건성 0.5~2.0% 전구간 유효)
-        MARKET_OPEN_GAP_UP_FILTER_ENABLED = True      # 갭업 필터 사용 여부
-        MARKET_OPEN_GAP_UP_THRESHOLD_PCT = 1.0        # KOSPI 시가갭 이 값 이상 → 매수 중단
-
-        # 장중 지수 모니터링 (09:30~ 장 마감까지 주기적 체크)
-        INTRADAY_INDEX_CHECK_ENABLED = True           # 장중 지수 체크 사용 여부
-        INTRADAY_INDEX_CHECK_INTERVAL_MINUTES = 2     # 체크 주기 (분) — 후행신호 지연 최소화 위해 10→2분
-        INTRADAY_INDEX_DROP_THRESHOLD_PCT = -2.0      # 전일 대비 이 값 이하 → 매수 중단
-        INTRADAY_INDEX_RECOVERY_PCT = -1.0            # 이 값 이상 회복 시 → 매수 재개
-
-        # 장중 동적 손절 (시뮬 검증: 시장-0.7%→SL3%가 두 기간 모두 1위)
-        INTRADAY_DYNAMIC_SL_ENABLED = True            # 장중 동적 SL 사용 여부
-        INTRADAY_SL_TIGHTEN_THRESHOLD_PCT = -0.7      # 지수 -0.7% 이하 → SL 축소
-        INTRADAY_TIGHTENED_STOP_LOSS_RATIO = 0.03     # 축소된 SL (3%)
-        INTRADAY_SL_RECOVERY_PCT = -0.3               # 지수 -0.3% 이상 회복 → SL 원복
+        INTRADAY_DYNAMIC_SL_ENABLED = False
+        INTRADAY_SL_TIGHTEN_THRESHOLD_PCT = -99.0
+        INTRADAY_TIGHTENED_STOP_LOSS_RATIO = 0.05
+        INTRADAY_SL_RECOVERY_PCT = -99.0
 
         # NXT 실패 시 기본값
         FALLBACK_SENTIMENT = 'neutral'
-        FALLBACK_MAX_POSITIONS = 7               # 정상=7종목 (5→7: 03-28 멀티버스 최적화)
+        FALLBACK_MAX_POSITIONS = 5               # closing_trade MAX_DAILY_POSITIONS 와 일치
 
     # ========================================
     # 성과 기반 매수 게이트 설정
     # ========================================
     class PerformanceGate:
-        """성과 기반 매수 게이트 설정"""
-        ENABLED = True
-        ROLLING_N = 20              # 롤링 윈도우 크기
-        ROLLING_THRESHOLD = 0.40    # 승률 임계값 (40%) — 멀티버스 검증: 오경보 20%→12%, 감지율 99.5%
-        CONSEC_LOSS_LIMIT = 3       # 당일 연속 손실 제한
-        HARD_CAP_DAYS = 10          # 연속 차단일 하드캡
+        """성과 기반 매수 게이트 — closing_trade 에서 비활성 (2026-04-18)"""
+        ENABLED = False
+        ROLLING_N = 20
+        ROLLING_THRESHOLD = 0.40
+        CONSEC_LOSS_LIMIT = 3
+        HARD_CAP_DAYS = 10
+
+    # ========================================
+    # closing_trade 시뮬 기준선 (daily_report.py 참조)
+    # ========================================
+    class SimBaseline:
+        """
+        closing_trade 시뮬 기준선 (월별 rolling walk-forward OOS 기반, 2026-04-18 갱신).
+        데이터: 2025-10 ~ 2026-04 월별 독립 시뮬, 운영 파라미터 고정
+                (analysis/results/walkforward_monthly.json)
+        범위: 월평균 +3.20% ± 2.90, 연율 환산 +45.93%
+              최악 월 gap_down_rate 43.48% (2026-03) 관측
+        """
+        UPDATED = '2026-04-18'
+        PERIOD = '2025-10~2026-04 (월별 OOS)'
+        NOTE = 'operational params, monthly rolling OOS'
+        WIN_RATE = 63.2              # 월평균 승률 (%)
+        AVG_PNL_PCT = 0.84           # 건당 평균 순수익률 (%) — OOS 2.5개월 기준
+        GAP_DOWN_RATE = 10.25        # 월평균 gap_down (pnl ≤ -3%) 비율 (%)
+        MONTHLY_STDEV_RETURN = 2.90  # 월 수익률 표준편차 (%)
+        ANNUAL_COMPOUND_EST = 45.93  # 월평균 복리 기반 연율 추정 (%)
+        WORST_MONTH_GDR = 43.48      # 최악 월 gap_down_rate 관측치 (%)
+        STRATEGY_START_DATE = '20260420'  # closing_trade 첫 매수 예정일 (월요일)
 
     # ========================================
     # 눌림목 캔들패턴 전략 설정 (pullback)
@@ -234,37 +285,40 @@ class StrategySettings:
 
 def get_candle_interval() -> int:
     """현재 활성 전략의 캔들 간격(분) 반환"""
-    if StrategySettings.ACTIVE_STRATEGY == 'price_position':
-        return StrategySettings.PricePosition.CANDLE_INTERVAL
     if StrategySettings.ACTIVE_STRATEGY == 'closing_trade':
         return StrategySettings.ClosingTrade.CANDLE_INTERVAL
+    if StrategySettings.ACTIVE_STRATEGY == 'weighted_score':
+        return StrategySettings.WeightedScore.CANDLE_INTERVAL
     return StrategySettings.Pullback.CANDLE_INTERVAL
 
 
 def is_overnight_strategy() -> bool:
-    """오버나이트 홀드 전략 여부 (EOD 청산 스킵 플래그)"""
+    """전체 EOD 청산 스킵 플래그.
+
+    closing_trade 는 익일 09:00 시장가 청산 로직을 별도 보유 → 전체 스킵.
+    weighted_score 는 포지션별 days_held 기반 선별적 스킵 (EOD 함수 내부 처리).
+    """
     return StrategySettings.ACTIVE_STRATEGY == 'closing_trade'
+
+
+def allow_weighted_score_overnight() -> bool:
+    """weighted_score 전략이 활성이면서 overnight 홀드 허용 여부."""
+    return (
+        StrategySettings.ACTIVE_STRATEGY == 'weighted_score'
+        and StrategySettings.WeightedScore.ALLOW_OVERNIGHT_HOLD
+    )
 
 
 # 설정 검증
 def validate_settings():
     """설정 유효성 검증"""
-    valid_strategies = ['pullback', 'price_position', 'closing_trade']
+    valid_strategies = ['pullback', 'closing_trade', 'weighted_score']
 
     if StrategySettings.ACTIVE_STRATEGY not in valid_strategies:
         raise ValueError(
             f"잘못된 전략: {StrategySettings.ACTIVE_STRATEGY}. "
             f"사용 가능: {valid_strategies}"
         )
-
-    if StrategySettings.ACTIVE_STRATEGY == 'price_position':
-        pp = StrategySettings.PricePosition
-        if pp.MIN_PCT_FROM_OPEN >= pp.MAX_PCT_FROM_OPEN:
-            raise ValueError("MIN_PCT_FROM_OPEN은 MAX_PCT_FROM_OPEN보다 작아야 합니다")
-        if pp.ENTRY_START_HOUR >= pp.ENTRY_END_HOUR:
-            raise ValueError("ENTRY_START_HOUR은 ENTRY_END_HOUR보다 작아야 합니다")
-        if not pp.ALLOWED_WEEKDAYS:
-            raise ValueError("ALLOWED_WEEKDAYS가 비어있습니다")
 
     if StrategySettings.ACTIVE_STRATEGY == 'closing_trade':
         ct = StrategySettings.ClosingTrade
@@ -274,6 +328,16 @@ def validate_settings():
             raise ValueError("MAX_DAILY_POSITIONS는 1 이상이어야 합니다")
         if not ct.ALLOWED_WEEKDAYS:
             raise ValueError("ALLOWED_WEEKDAYS가 비어있습니다")
+
+    if StrategySettings.ACTIVE_STRATEGY == 'weighted_score':
+        ws = StrategySettings.WeightedScore
+        if ws.ENTRY_START_HOUR >= ws.ENTRY_END_HOUR:
+            raise ValueError("ENTRY_START_HOUR은 ENTRY_END_HOUR보다 작아야 합니다")
+        if ws.MAX_DAILY_POSITIONS <= 0:
+            raise ValueError("MAX_DAILY_POSITIONS는 1 이상이어야 합니다")
+        if not ws.ALLOWED_WEEKDAYS:
+            raise ValueError("ALLOWED_WEEKDAYS가 비어있습니다")
+        # params.json 존재 여부는 trading_decision_engine 초기화 시 확인
 
     return True
 

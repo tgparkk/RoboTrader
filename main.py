@@ -75,9 +75,9 @@ class DayTradingBot:
         global _global_decision_engine
         _global_decision_engine = self.decision_engine
 
-        # 🔧 price_position 전략 일별 거래 기록 초기화 (버그 수정 2026-02-04)
+        # 🔧 일별 시가 캐시 초기화 (TradingDecisionEngine class-level cache)
         TradingDecisionEngine.reset_daily_trades()
-        self.logger.info("🔄 price_position 일별 거래 기록 초기화 완료")
+        self.logger.info("🔄 일별 시가 캐시 초기화 완료")
 
         # 🔧 emergency_sync 서킷 브레이커 (같은 종목 반복 복구 방지, 버그 수정 2026-02-24)
         self._sync_restore_count: dict = {}  # {stock_code: count}
@@ -91,9 +91,33 @@ class DayTradingBot:
         # 🆕 TradingStockManager에 decision_engine 연결 (쿨다운 설정용)
         self.trading_manager.set_decision_engine(self.decision_engine)
 
-        self.fund_manager = FundManager(
-            buy_budget_ratio=self.config.order_management.buy_budget_ratio
-        )  # 🆕 자금 관리자
+        # 🆕 자금 관리자 — 활성 전략에 따라 buy_budget_ratio 소스 결정
+        # weighted_score: WeightedScore.BUY_BUDGET_RATIO (단일 관리 지점)
+        # 그 외: trading_config.json 값
+        try:
+            from config.strategy_settings import StrategySettings as _SS_FM
+            if _SS_FM.ACTIVE_STRATEGY == 'weighted_score':
+                _fm_ratio = _SS_FM.WeightedScore.BUY_BUDGET_RATIO
+            else:
+                _fm_ratio = self.config.order_management.buy_budget_ratio
+        except Exception:
+            _fm_ratio = self.config.order_management.buy_budget_ratio
+        self.fund_manager = FundManager(buy_budget_ratio=_fm_ratio)
+
+        # 🌙 closing_trade: 매수 지정가 타임아웃 단축 (시뮬 14:19 close 체결 정합)
+        # 미체결 시 시장가 전환 대신 취소 (order_manager._check_price_adjustment 는 이미 비활성)
+        try:
+            from config.strategy_settings import (
+                StrategySettings as _SS, is_overnight_strategy as _is_ovn,
+            )
+            if _is_ovn() and getattr(_SS.ClosingTrade, 'DISABLE_MARKET_ORDER_FALLBACK', False):
+                self.config.order_management.buy_timeout_seconds = _SS.ClosingTrade.BUY_TIMEOUT_SECONDS
+                self.logger.info(
+                    f"🌙 closing_trade 매수 타임아웃 override: "
+                    f"{self.config.order_management.buy_timeout_seconds}초 (시장가 전환 차단)"
+                )
+        except Exception as _ote:
+            self.logger.warning(f"⚠ 매수 타임아웃 override 실패: {_ote}")
         self.chart_generator = None  # 🆕 장 마감 후 차트 생성기 (지연 초기화)
         
         
@@ -491,10 +515,10 @@ class DayTradingBot:
             # 🆕 전략에 따라 1분봉 또는 3분봉 사용
             from config.strategy_settings import StrategySettings
 
-            if StrategySettings.ACTIVE_STRATEGY == 'price_position':
-                # price_position 전략: 1분봉 직접 사용 (더 정밀한 진입)
+            if StrategySettings.ACTIVE_STRATEGY in ('closing_trade', 'weighted_score'):
+                # 1분봉 직접 사용 — closing_trade는 시뮬 signal_prev_body_momentum 과
+                # 정합(14:19봉 close, VWAP 누적, day_low 누적이 모두 1분봉 단위).
                 analysis_data = combined_data
-                #self.logger.debug(f"📊 {stock_code} price_position 전략: 1분봉 {len(analysis_data)}개 사용")
             else:
                 # pullback 전략: 3분봉 변환 후 사용
                 from core.timeframe_converter import TimeFrameConverter
@@ -547,9 +571,13 @@ class DayTradingBot:
 
                 # 🆕 매수 전 자금 확인 (전달받은 available_funds 활용)
                 if available_funds is not None:
-                    # 전달받은 가용 자금 기준으로 종목당 최대 투자 금액 계산 (설정값 사용, 기본 20%)
+                    # 전달받은 가용 자금 기준으로 종목당 최대 투자 금액 계산
+                    # weighted_score: WeightedScore.BUY_BUDGET_RATIO / 그 외: trading_config.json
                     fund_status = self.fund_manager.get_status()
-                    buy_budget_ratio = self.config.order_management.buy_budget_ratio
+                    if StrategySettings.ACTIVE_STRATEGY == 'weighted_score':
+                        buy_budget_ratio = StrategySettings.WeightedScore.BUY_BUDGET_RATIO
+                    else:
+                        buy_budget_ratio = self.config.order_management.buy_budget_ratio
                     max_buy_amount = min(available_funds, fund_status['total_funds'] * buy_budget_ratio)
                 else:
                     # 기존 방식 (fallback)
@@ -577,39 +605,53 @@ class DayTradingBot:
                 if current_stock:
                     self.logger.debug(f"🔍 매수 전 상태 확인: {stock_code} 현재상태={current_stock.state.value}")
                 
-                # [리얼매매 코드 - 활성화]
+                # 전략별 실거래/가상매매 분기
+                # - weighted_score + VIRTUAL_ONLY=True  → 가상매매 (Phase 5 관찰)
+                # - 그 외 → 실거래
+                is_virtual = (
+                    StrategySettings.ACTIVE_STRATEGY == 'weighted_score'
+                    and StrategySettings.WeightedScore.VIRTUAL_ONLY
+                )
                 try:
                     # 전략에 따라 캔들 시점 정규화 (중복 신호 방지)
                     raw_candle_time = analysis_data['datetime'].iloc[-1]
-                    if StrategySettings.ACTIVE_STRATEGY == 'price_position':
+                    if StrategySettings.ACTIVE_STRATEGY in ('closing_trade', 'weighted_score'):
                         minute_normalized = raw_candle_time.minute  # 1분 단위
                     else:
                         minute_normalized = (raw_candle_time.minute // 3) * 3  # 3분 단위
                     current_candle_time = raw_candle_time.replace(minute=minute_normalized, second=0, microsecond=0)
 
-                    await self.decision_engine.execute_real_buy(
-                        trading_stock,
-                        buy_reason,
-                        buy_info['buy_price'],
-                        buy_info['quantity'],
-                        candle_time=current_candle_time
-                    )
-                    # 상태는 주문 처리 로직에서 자동으로 변경됨 (SELECTED -> BUY_PENDING -> POSITIONED)
-                    self.logger.info(f"🔥 실제 매수 주문 완료: {stock_code}({stock_name}) - {buy_reason}")
+                    if is_virtual:
+                        await self.decision_engine.execute_virtual_buy(
+                            trading_stock,
+                            analysis_data,
+                            buy_reason,
+                            buy_price=buy_info['buy_price'],
+                        )
+                        # 가상 체결 후 POSITIONED 로 상태 전이 (매도 판단 루프 포함)
+                        try:
+                            self.trading_manager._change_stock_state(
+                                stock_code, StockState.POSITIONED, "가상 매수 체결"
+                            )
+                        except Exception:
+                            pass
+                        self.logger.info(
+                            f"👻 가상 매수 완료: {stock_code}({stock_name}) - {buy_reason}"
+                        )
+                    else:
+                        await self.decision_engine.execute_real_buy(
+                            trading_stock,
+                            buy_reason,
+                            buy_info['buy_price'],
+                            buy_info['quantity'],
+                            candle_time=current_candle_time
+                        )
+                        # 상태는 주문 처리 로직에서 자동으로 변경됨 (SELECTED -> BUY_PENDING -> POSITIONED)
+                        self.logger.info(
+                            f"🔥 실제 매수 주문 완료: {stock_code}({stock_name}) - {buy_reason}"
+                        )
                 except Exception as e:
-                    self.logger.error(f"❌ 실제 매수 처리 오류: {e}")
-                    
-                # [가상매매 코드 - 주석처리]
-                # try:
-                #     await self.decision_engine.execute_virtual_buy(trading_stock, data_3min, buy_reason)
-                #     # 상태를 POSITIONED로 반영하여 이후 매도 판단 루프에 포함
-                #     try:
-                #         self.trading_manager._change_stock_state(stock_code, StockState.POSITIONED, "가상 매수 체결")
-                #     except Exception:
-                #         pass
-                #     self.logger.info(f"🔥 가상 매수 완료 처리: {stock_code}({stock_name}) - {buy_reason}")
-                # except Exception as e:
-                #     self.logger.error(f"❌ 가상 매수 처리 오류: {e}")
+                    self.logger.error(f"❌ 매수 처리 오류 (virtual={is_virtual}): {e}")
                     
             else:
                 #self.logger.debug(f"📊 {stock_code}({stock_name}) 매수 신호 없음")
@@ -782,6 +824,18 @@ class DayTradingBot:
                         except Exception as e:
                             self.logger.warning(f"⚠️ 전일 양봉 맵 로드 실패: {e}")
 
+                        # 🆕 weighted_score 전략 활성 시 universe 공급 + daily 피처 준비
+                        try:
+                            if (
+                                StrategySettings.ACTIVE_STRATEGY == 'weighted_score'
+                                and self.decision_engine.weighted_score_strategy
+                            ):
+                                await self._prepare_weighted_score_for_today(current_time)
+                        except Exception as e:
+                            self.logger.error(f"❌ [weighted_score] pre_market 준비 실패: {e}")
+                            import traceback
+                            self.logger.error(traceback.format_exc())
+
                         self.logger.info(
                             f"[프리마켓] 리포트 완료: "
                             f"심리={report.market_sentiment}({report.sentiment_score:+.2f}), "
@@ -826,6 +880,114 @@ class DayTradingBot:
             self.logger.error(f"[프리마켓] 태스크 오류: {e}")
             import traceback
             self.logger.error(traceback.format_exc())
+
+    async def _prepare_weighted_score_for_today(self, current_time):
+        """weighted_score 전략 pre_market 준비 (2026-04-21 Phase 5).
+
+        1) universe 선정 (stock_screener.preload_weighted_score_universe)
+        2) 후보 풀 등록 (trading_manager)
+        3) daily 피처 + past_volume 주입 (weighted_score_daily_prep.prepare_for_trade_date)
+        """
+        import psycopg2
+        from config.strategy_settings import StrategySettings
+        from config.settings import (
+            PG_HOST, PG_PORT, PG_DATABASE, PG_USER, PG_PASSWORD,
+        )
+        from core.strategies.weighted_score_daily_prep import prepare_for_trade_date
+
+        ws = StrategySettings.WeightedScore
+        trade_date = current_time.strftime('%Y%m%d')
+        loop = asyncio.get_event_loop()
+
+        # 1) universe 선정
+        candidates = await loop.run_in_executor(
+            None,
+            lambda: self.stock_screener.preload_weighted_score_universe(
+                top_n=ws.UNIVERSE_TOP_N,
+                require_research_universe=ws.REQUIRE_RESEARCH_UNIVERSE,
+            ),
+        )
+        if not candidates:
+            self.logger.warning("[weighted_score] universe 없음 → pre_market 준비 skip")
+            return
+
+        # 2) 후보 풀 등록
+        added = 0
+        candidates_to_save = []
+        for stock in candidates:
+            try:
+                success = await self.trading_manager.add_selected_stock(
+                    stock_code=stock.code,
+                    stock_name=stock.name,
+                    selection_reason=stock.reason,
+                    prev_close=stock.current_price,
+                )
+                if success:
+                    self.stock_screener.mark_stock_added(stock.code)
+                    added += 1
+                    candidates_to_save.append(
+                        CandidateStock(
+                            code=stock.code,
+                            name=stock.name,
+                            market=stock.market,
+                            score=stock.score,
+                            reason=stock.reason,
+                        )
+                    )
+            except Exception as e:
+                self.logger.debug(f"[weighted_score] 후보 등록 실패 {stock.code}: {e}")
+
+        if candidates_to_save:
+            try:
+                self.db_manager.save_candidate_stocks(candidates_to_save)
+            except Exception as e:
+                self.logger.warning(f"[weighted_score] DB 저장 오류: {e}")
+
+        # 3) daily 피처 + past_volume 주입
+        def _sync_prepare():
+            # 분봉 로더 (minute_candles 직접 쿼리)
+            def minute_loader(stock_code: str, date: str):
+                conn2 = psycopg2.connect(
+                    host=PG_HOST, port=PG_PORT, database=PG_DATABASE,
+                    user=PG_USER, password=PG_PASSWORD, connect_timeout=5,
+                )
+                try:
+                    import pandas as pd
+                    sql = (
+                        "SELECT idx, time, open, high, low, close, volume "
+                        "FROM minute_candles "
+                        "WHERE stock_code=%s AND trade_date=%s ORDER BY idx"
+                    )
+                    df = pd.read_sql_query(sql, conn2, params=(stock_code, date))
+                    return df if not df.empty else None
+                finally:
+                    conn2.close()
+
+            # 지수 일봉용 conn (prepare_for_trade_date 내부에서 재사용)
+            conn_idx = psycopg2.connect(
+                host=PG_HOST, port=PG_PORT, database=PG_DATABASE,
+                user=PG_USER, password=PG_PASSWORD, connect_timeout=10,
+            )
+            try:
+                stock_codes = [s.code for s in candidates]
+                return prepare_for_trade_date(
+                    strategy=self.decision_engine.weighted_score_strategy,
+                    stock_codes=stock_codes,
+                    target_date=trade_date,
+                    minute_loader=minute_loader,
+                    pg_conn=conn_idx,
+                    logger=self.logger,
+                )
+            finally:
+                conn_idx.close()
+
+        summary = await loop.run_in_executor(None, _sync_prepare)
+        self.logger.info(
+            f"🎯 [weighted_score] pre_market 준비 완료: "
+            f"universe={len(candidates)} added={added} "
+            f"loaded={summary['loaded']}/{summary['n_requested']} "
+            f"elapsed={summary['elapsed_sec']:.1f}s"
+        )
 
     async def _send_morning_briefing(self, report):
         """프리마켓 모닝 브리핑 텔레그램 발송"""
@@ -1078,13 +1240,18 @@ class DayTradingBot:
     async def _execute_end_of_day_liquidation(self):
         """장마감 시간 모든 보유 종목 시장가 일괄매도 (동적 시간 적용)
 
-        🆕 오버나이트 전략(closing_trade) 활성 시 스킵.
-           익일 09:00 _overnight_exit_task가 청산을 담당.
+        🆕 오버나이트 처리 분기:
+          - closing_trade: 전체 스킵 (익일 09:00 _overnight_exit_task 담당)
+          - weighted_score + ALLOW_OVERNIGHT_HOLD=True: days_held < MAX_HOLDING_DAYS 인 포지션만 스킵
+          - 그 외: 전체 시장가 청산
         """
         try:
-            # 오버나이트 홀드 스킵 분기
+            from config.strategy_settings import (
+                is_overnight_strategy, allow_weighted_score_overnight, StrategySettings
+            )
+
+            # closing_trade: 전체 EOD 스킵
             try:
-                from config.strategy_settings import is_overnight_strategy
                 if is_overnight_strategy():
                     self.logger.info("🌙 오버나이트 홀드 모드 (closing_trade) → EOD 청산 스킵")
                     return
@@ -1103,8 +1270,37 @@ class DayTradingBot:
             sell_candidate_stocks = self.trading_manager.get_stocks_by_state(StockState.SELL_CANDIDATE)
             all_liquidation_targets = positioned_stocks + sell_candidate_stocks
 
+            # weighted_score: days_held < MAX_HOLDING_DAYS 인 포지션은 스킵 (overnight 홀드)
+            if allow_weighted_score_overnight() and all_liquidation_targets:
+                try:
+                    import numpy as np
+                    max_days = StrategySettings.WeightedScore.MAX_HOLDING_DAYS
+                    today = current_time.date()
+                    held_over: list = []
+                    to_close: list = []
+                    for ts in all_liquidation_targets:
+                        buy_time = getattr(ts, 'buy_time', None)
+                        if buy_time is None:
+                            # entry_time 없으면 보수적으로 청산
+                            to_close.append(ts)
+                            continue
+                        days_held = int(np.busday_count(buy_time.date(), today))
+                        if days_held < max_days:
+                            held_over.append((ts, days_held))
+                        else:
+                            to_close.append(ts)
+                    if held_over:
+                        self.logger.info(
+                            f"🌙 weighted_score overnight 보유: {len(held_over)}종목 "
+                            f"(days < {max_days}): "
+                            + ", ".join(f"{ts.stock_code}={d}/{max_days}" for ts, d in held_over[:10])
+                        )
+                    all_liquidation_targets = to_close
+                except Exception as e:
+                    self.logger.warning(f"⚠️ weighted_score overnight 필터 실패: {e} — 전체 청산")
+
             if not all_liquidation_targets:
-                self.logger.info(f"📦 {eod_hour}:{eod_minute:02d} 시장가 매도: 보유 포지션 없음")
+                self.logger.info(f"📦 {eod_hour}:{eod_minute:02d} 시장가 매도: 청산 대상 포지션 없음")
                 return
 
             self.logger.info(f"🚨 {eod_hour}:{eod_minute:02d} 시장가 일괄매도 시작: {len(all_liquidation_targets)}종목 (POSITIONED={len(positioned_stocks)}, SELL_CANDIDATE={len(sell_candidate_stocks)})")
@@ -1540,19 +1736,6 @@ class DayTradingBot:
                         f"[스크리너] 후보 종목 DB 저장 오류: {db_err}"
                     )
 
-                # 📊 ATR용 일봉 사전 수집 (스크리너 발견 종목)
-                from config.strategy_settings import StrategySettings as _SS
-                if _SS.PricePosition.ATR_DYNAMIC_TP_SL_ENABLED:
-                    try:
-                        from utils.atr_utils import collect_daily_candles_for_atr
-                        new_codes = [c.code for c in candidates_to_save]
-                        loop = asyncio.get_event_loop()
-                        await loop.run_in_executor(
-                            None, collect_daily_candles_for_atr, new_codes, self.api_manager
-                        )
-                    except Exception as dc_err:
-                        self.logger.warning(f"[스크리너] ATR 일봉 수집 오류: {dc_err}")
-
         except Exception as e:
             self.logger.error(f"[스크리너] 스크리닝 오류: {e}")
             await self.telegram.notify_error("Stock Screener", e)
@@ -1569,9 +1752,56 @@ class DayTradingBot:
 
             self.logger.info("[프리로드] 전일 상위 종목 프리로드 시작")
 
+            # 🆕 E: _added_stocks 일일 리셋 (시뮬 screen_for_day_strict 과 정합 —
+            # 매일 독립 pool. 전일 스크리너가 추가한 종목이 당일 프리로드에서 스킵되는 버그 방지)
+            self.stock_screener.reset_daily_state()
+            self.logger.info("[프리로드] _added_stocks 일일 리셋 완료")
+
+            # 🆕 F: 전일 분봉 종목 수 체크 + 부족하면 백필 (ExpandedMinuteCollector 15:45 스킵 대비)
+            try:
+                from datetime import timedelta
+                import psycopg2
+                from config.settings import PG_HOST, PG_PORT, PG_DATABASE, PG_USER, PG_PASSWORD
+                _ct = now_kst()
+                _prev = _ct - timedelta(days=1)
+                while _prev.weekday() >= 5:
+                    _prev -= timedelta(days=1)
+                _prev_date = _prev.strftime('%Y%m%d')
+                with psycopg2.connect(host=PG_HOST, port=PG_PORT, database=PG_DATABASE,
+                                      user=PG_USER, password=PG_PASSWORD, connect_timeout=5) as _c:
+                    with _c.cursor() as _cur:
+                        _cur.execute(
+                            "SELECT COUNT(DISTINCT stock_code) FROM minute_candles WHERE trade_date=%s",
+                            [_prev_date],
+                        )
+                        _cnt = int(_cur.fetchone()[0] or 0)
+                if _cnt < 200:
+                    self.logger.warning(
+                        f"⚠ 전일({_prev_date}) 분봉 종목 수 {_cnt}개 < 200 → 백필 트리거"
+                    )
+                    from core.expanded_minute_collector import ExpandedMinuteCollector
+                    _collector = ExpandedMinuteCollector(logger=self.logger)
+                    await _collector.run_async(target_date=_prev_date, top_n=300)
+                    self.logger.info(f"📦 전일({_prev_date}) 분봉 백필 완료")
+                else:
+                    self.logger.info(f"✓ 전일({_prev_date}) 분봉 종목 수 {_cnt}개 확인")
+            except Exception as _be:
+                self.logger.warning(f"⚠ 전일 분봉 백필 체크 실패: {_be}")
+
+            # 활성 전략 따라 top_n 결정 (closing_trade 시 시뮬 정합 top100)
+            try:
+                from config.strategy_settings import StrategySettings, is_overnight_strategy
+                preload_top_n = (
+                    StrategySettings.ClosingTrade.PRELOAD_TOP_N
+                    if is_overnight_strategy()
+                    else 30
+                )
+            except Exception:
+                preload_top_n = 30
+
             loop = asyncio.get_event_loop()
             preloaded = await loop.run_in_executor(
-                None, self.stock_screener.preload_previous_day_stocks
+                None, self.stock_screener.preload_previous_day_stocks, preload_top_n
             )
 
             if not preloaded:
@@ -1616,19 +1846,6 @@ class DayTradingBot:
                     self.logger.error(f"[프리로드] DB 저장 오류: {db_err}")
 
             self.logger.info(f"[프리로드] {added_count}개 종목 거래 풀 추가 완료")
-
-            # 📊 ATR용 일봉 데이터 사전 수집 (프리로드 종목)
-            from config.strategy_settings import StrategySettings as _SS
-            if _SS.PricePosition.ATR_DYNAMIC_TP_SL_ENABLED and preloaded:
-                try:
-                    from utils.atr_utils import collect_daily_candles_for_atr
-                    preload_codes = [s.code for s in preloaded if s.code]
-                    loop = asyncio.get_event_loop()
-                    await loop.run_in_executor(
-                        None, collect_daily_candles_for_atr, preload_codes, self.api_manager
-                    )
-                except Exception as dc_err:
-                    self.logger.warning(f"[프리로드] ATR 일봉 수집 오류: {dc_err}")
 
         except Exception as e:
             self.logger.error(f"[프리로드] 오류: {e}")
@@ -1678,18 +1895,6 @@ class DayTradingBot:
             should_stop_buy = MarketHours.should_stop_buying('KRX', current_time)
 
             if not should_stop_buy:
-                # 요일 체크: 비허용 요일이면 매수 판단 전체 건너뜀 (노이즈 감소)
-                from config.strategy_settings import StrategySettings
-                if StrategySettings.ACTIVE_STRATEGY == 'price_position':
-                    weekday = current_time.weekday()
-                    if weekday not in StrategySettings.PricePosition.ALLOWED_WEEKDAYS:
-                        weekday_names = ['월', '화', '수', '목', '금', '토', '일']
-                        if not hasattr(self, '_weekday_skip_logged'):
-                            self._weekday_skip_logged = False
-                        if not self._weekday_skip_logged:
-                            self.logger.info(f"📅 {weekday_names[weekday]}요일 - 매수 판단 건너뜀 (허용: 월/수/금)")
-                            self._weekday_skip_logged = True
-                        return
 
                 # 가용 자금 계산
                 loop = asyncio.get_event_loop()
@@ -1825,20 +2030,6 @@ class DayTradingBot:
                                     ts.clear_current_order()
                                     ts.is_buying = False
                                     ts.order_processed = True
-                                    # 📊 ATR 동적 TP/SL 복구
-                                    from config.strategy_settings import StrategySettings as _SS
-                                    if _SS.PricePosition.ATR_DYNAMIC_TP_SL_ENABLED:
-                                        try:
-                                            from utils.data_cache import get_stock_atr, calc_atr_tp_sl
-                                            _atr = get_stock_atr(code, lookback_days=_SS.PricePosition.ATR_LOOKBACK_DAYS)
-                                            if _atr:
-                                                _tp, _sl = calc_atr_tp_sl(_atr)
-                                                ts.atr_pct = _atr
-                                                ts.atr_take_profit_pct = _tp
-                                                ts.atr_stop_loss_pct = _sl
-                                        except Exception:
-                                            pass
-
                                     self.trading_manager._change_stock_state(code, StockState.POSITIONED,
                                         f"미관리종목 복구: {quantity}주 @{avg_price:,.0f}원")
 
@@ -1944,19 +2135,6 @@ class DayTradingBot:
                     ts.clear_current_order()
                     ts.is_buying = False
                     ts.order_processed = True
-                    # 📊 ATR 동적 TP/SL 복구
-                    from config.strategy_settings import StrategySettings as _SS
-                    if _SS.PricePosition.ATR_DYNAMIC_TP_SL_ENABLED:
-                        try:
-                            from utils.data_cache import get_stock_atr, calc_atr_tp_sl
-                            _atr = get_stock_atr(code, lookback_days=_SS.PricePosition.ATR_LOOKBACK_DAYS)
-                            if _atr:
-                                _tp, _sl = calc_atr_tp_sl(_atr)
-                                ts.atr_pct = _atr
-                                ts.atr_take_profit_pct = _tp
-                                ts.atr_stop_loss_pct = _sl
-                        except Exception:
-                            pass
                     self.trading_manager._change_stock_state(code, StockState.POSITIONED,
                         f"잔고복구: {quantity}주 @{buy_price:,.0f}원, 목표: +{take_profit_ratio*100:.1f}%/-{stop_loss_ratio*100:.1f}%")
 

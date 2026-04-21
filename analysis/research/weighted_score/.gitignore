@@ -1,0 +1,8 @@
+# 연구 아티팩트 — git 추적 제외 (용량 大)
+artifacts/
+universe_snapshot.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo

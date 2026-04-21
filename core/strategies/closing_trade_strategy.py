@@ -18,7 +18,7 @@
   - 장중에는 절대 매도 신호 생성 X (오버나이트 홀드)
   - 익일 09:00 시장가 매도 (main.py에서 별도 트리거)
 
-PricePositionStrategy와 동일 인터페이스 유지.
+trading_decision_engine 전략 공통 인터페이스 유지.
 """
 
 from __future__ import annotations
@@ -42,15 +42,22 @@ class ClosingTradeStrategy:
         return {
             'entry_hhmm_start': ct.ENTRY_HHMM_START,
             'entry_hhmm_end': ct.ENTRY_HHMM_END,
-            'eval_bar_hhmm': ct.EVAL_BAR_HHMM,
             'min_prev_body_pct': ct.MIN_PREV_BODY_PCT,
             'max_day_decline_pct': ct.MAX_DAY_DECLINE_PCT,
             'require_vwap_above': ct.REQUIRE_VWAP_ABOVE,
+            'min_gap_pct': ct.MIN_GAP_PCT,
+            'max_gap_pct': ct.MAX_GAP_PCT,
+            'max_abs_gap_pct': ct.MAX_ABS_GAP_PCT,
+            'min_gap_down_pct': ct.MIN_GAP_DOWN_PCT,
             'exit_hhmm': ct.EXIT_HHMM,
             'exit_deadline_hhmm': ct.EXIT_DEADLINE_HHMM,
             'gap_sl_limit_pct': ct.GAP_SL_LIMIT_PCT,
             'allowed_weekdays': list(ct.ALLOWED_WEEKDAYS),
             'max_daily_positions': ct.MAX_DAILY_POSITIONS,
+            'surge_avoidance_enabled': ct.SURGE_AVOIDANCE_ENABLED,
+            'surge_max_prev_to_last_pct': ct.SURGE_MAX_PREV_TO_LAST_PCT,
+            'surge_max_intraday_range_pct': ct.SURGE_MAX_INTRADAY_RANGE_PCT,
+            'surge_max_pct_from_open': ct.SURGE_MAX_PCT_FROM_OPEN,
         }
 
     def __init__(self, config: Optional[Dict[str, Any]] = None, logger=None):
@@ -60,9 +67,9 @@ class ClosingTradeStrategy:
         self.logger = logger
         self.daily_trades: Dict[str, set] = {}
 
-        # 전일 양봉 몸통 맵 (pre_market_analyzer가 채움)
-        # { stock_code: prev_body_pct }
+        # 전일 양봉 몸통/종가 맵 (pre_market_analyzer가 채움)
         self.prev_body_map: Dict[str, float] = {}
+        self.prev_close_map: Dict[str, float] = {}
 
     def _log(self, message: str, level: str = 'info'):
         if self.logger:
@@ -88,64 +95,72 @@ class ClosingTradeStrategy:
     def load_prev_body_map_from_db(self, prev_date: str,
                                    stock_codes: Optional[list] = None) -> int:
         """
-        전일 양봉 몸통 맵을 DB(minute_candles)에서 직접 로드.
-        봇 시작 시 또는 매수 판단 직전에 호출.
+        전일 양봉 몸통 맵을 robotrader_quant.daily_prices 에서 직접 로드.
+        2026-04-18 전환: minute_candles SUM → daily_prices (전체 2,485종목, 2023-06~)
 
         Args:
-            prev_date: 전일 거래일 YYYYMMDD
-            stock_codes: 대상 종목 리스트 (None이면 전체)
+            prev_date: 전일 거래일 YYYYMMDD (내부에서 YYYY-MM-DD 로 변환)
+            stock_codes: 대상 종목 리스트 (None 이면 전체)
         Returns:
             로드된 종목 수
         """
         import psycopg2
         try:
-            from config.settings import PG_HOST, PG_PORT, PG_DATABASE, PG_USER, PG_PASSWORD
+            from config.settings import (
+                PG_HOST, PG_PORT, PG_DATABASE_QUANT, PG_USER, PG_PASSWORD,
+            )
         except Exception as e:
             if self.logger:
                 self.logger.warning(f"[종가매매] DB 설정 로드 실패: {e}")
             return 0
 
+        # YYYYMMDD → YYYY-MM-DD
+        if prev_date and len(prev_date) == 8 and '-' not in prev_date:
+            prev_date_iso = f"{prev_date[:4]}-{prev_date[4:6]}-{prev_date[6:8]}"
+        else:
+            prev_date_iso = prev_date
+
         try:
-            conn = psycopg2.connect(host=PG_HOST, port=PG_PORT, database=PG_DATABASE,
+            conn = psycopg2.connect(host=PG_HOST, port=PG_PORT, database=PG_DATABASE_QUANT,
                                     user=PG_USER, password=PG_PASSWORD,
                                     connect_timeout=10)
             cur = conn.cursor()
             if stock_codes:
                 placeholders = ','.join(['%s'] * len(stock_codes))
                 sql = f'''
-                    SELECT stock_code,
-                           MIN(CASE WHEN time >= '090000' AND time <= '090300' THEN open END) AS d_open,
-                           (ARRAY_AGG(close ORDER BY idx DESC))[1] AS d_close
-                    FROM minute_candles
-                    WHERE trade_date = %s AND stock_code IN ({placeholders})
-                    GROUP BY stock_code
+                    SELECT stock_code, open, close
+                    FROM daily_prices
+                    WHERE date = %s AND stock_code IN ({placeholders})
                 '''
-                cur.execute(sql, [prev_date, *stock_codes])
+                cur.execute(sql, [prev_date_iso, *stock_codes])
             else:
                 cur.execute('''
-                    SELECT stock_code,
-                           MIN(CASE WHEN time >= '090000' AND time <= '090300' THEN open END) AS d_open,
-                           (ARRAY_AGG(close ORDER BY idx DESC))[1] AS d_close
-                    FROM minute_candles
-                    WHERE trade_date = %s
-                    GROUP BY stock_code
-                    HAVING COUNT(*) >= 50
-                ''', [prev_date])
+                    SELECT stock_code, open, close
+                    FROM daily_prices
+                    WHERE date = %s
+                ''', [prev_date_iso])
             body_map = {}
+            close_map = {}
             for code, d_open, d_close in cur.fetchall():
                 if d_open and d_close and d_open > 0:
                     body = (float(d_close) / float(d_open) - 1) * 100
                     body_map[code] = body
+                    close_map[code] = float(d_close)
             cur.close()
             conn.close()
             self.update_prev_body_map(body_map)
+            self.prev_close_map = close_map
+            if self.logger:
+                self.logger.info(
+                    f"[종가매매] 전일 종가 맵 갱신: {len(close_map)}종목"
+                )
             return len(body_map)
         except Exception as e:
             if self.logger:
                 self.logger.error(f"[종가매매] 전일 양봉 몸통 로드 실패: {e}")
             return 0
 
-    # -------- 외부 인터페이스 (PricePositionStrategy 호환) --------
+    # -------- 외부 인터페이스 (trading_decision_engine 공통 시그니처) --------
 
     def check_entry_conditions(
         self,
@@ -189,6 +204,21 @@ class ClosingTradeStrategy:
         if prev_body < self.config['min_prev_body_pct']:
             return False, f"전일 몸통 {prev_body:+.2f}% < {self.config['min_prev_body_pct']}%"
 
+        # 시뮬 정합 갭 필터: 당일 시가/전일 종가 기준
+        prev_close = self.prev_close_map.get(stock_code, 0.0)
+        if prev_close and prev_close > 0:
+            gap = (day_open / prev_close - 1) * 100
+            if gap < self.config['min_gap_pct']:
+                return False, f"갭 {gap:+.2f}% < {self.config['min_gap_pct']}%"
+            if gap > self.config['max_gap_pct']:
+                return False, f"갭 {gap:+.2f}% > {self.config['max_gap_pct']}%"
+            if abs(gap) > self.config['max_abs_gap_pct']:
+                return False, f"|갭| {gap:+.2f}% > {self.config['max_abs_gap_pct']}%"
+            if gap < self.config['min_gap_down_pct']:
+                return False, f"갭다운 {gap:+.2f}% < {self.config['min_gap_down_pct']}%"
+        else:
+            return False, "전일 종가 데이터 없음"
+
         # 당일 중복 거래 확인
         if stock_code in self.daily_trades.get(trade_date, set()):
             return False, "당일 이미 거래"
@@ -198,7 +228,7 @@ class ClosingTradeStrategy:
             pct = (current_price / day_open - 1) * 100
             return False, f"시가 미복귀 {pct:+.2f}%"
 
-        return True, f"1차 통과 (전일 body {prev_body:+.2f}%)"
+        return True, f"1차 통과 (전일 body {prev_body:+.2f}%, 갭 {gap:+.2f}%)"
 
     def check_advanced_conditions(
         self,
@@ -240,6 +270,47 @@ class ClosingTradeStrategy:
                 return False, f"VWAP {vwap:.0f} 이하 (close {cur_close:.0f})"
 
         return True, "종가매매 신호 확정"
+
+    def check_surge_avoidance(
+        self,
+        df: pd.DataFrame,
+        candle_idx: int,
+        day_open: float,
+        prev_close: float,
+    ) -> Tuple[bool, str]:
+        """
+        급등/VI 종목 배제 (시뮬 filter_surge_avoidance 정합).
+        True=통과(진입 허용), False=배제.
+        """
+        if not self.config.get('surge_avoidance_enabled', True):
+            return True, "surge 필터 비활성"
+        if candle_idx < 0 or candle_idx >= len(df) or day_open <= 0:
+            return False, "data 부족"
+
+        last_close = float(df.iloc[candle_idx]['close'])
+
+        # 전일 종가 대비 급등
+        if prev_close and prev_close > 0:
+            chg_prev = (last_close / prev_close - 1) * 100
+            if chg_prev > self.config['surge_max_prev_to_last_pct']:
+                return False, f"전일대비 +{chg_prev:.2f}% > {self.config['surge_max_prev_to_last_pct']}%"
+
+        # 장중 range
+        sub = df.iloc[:candle_idx + 1]
+        day_high = float(sub['high'].max())
+        low_pos = sub['low'][sub['low'] > 0]
+        day_low = float(low_pos.min()) if len(low_pos) > 0 else 0
+        if day_low > 0:
+            rng_pct = (day_high / day_low - 1) * 100
+            if rng_pct > self.config['surge_max_intraday_range_pct']:
+                return False, f"장중range {rng_pct:.2f}% > {self.config['surge_max_intraday_range_pct']}%"
+
+        # 시가 대비
+        pct_open = (last_close / day_open - 1) * 100
+        if pct_open > self.config['surge_max_pct_from_open']:
+            return False, f"시가대비 +{pct_open:.2f}% > {self.config['surge_max_pct_from_open']}%"
+
+        return True, "OK"
 
     def check_exit_conditions(
         self,

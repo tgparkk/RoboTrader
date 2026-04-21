@@ -1,6 +1,4 @@
-"""
-전략 모듈
-"""
-from .price_position_strategy import PricePositionStrategy
+"""전략 모듈."""
+from .weighted_score_strategy import WeightedScoreStrategy
 
-__all__ = ['PricePositionStrategy']
+__all__ = ['WeightedScoreStrategy']

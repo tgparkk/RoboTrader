@@ -315,131 +315,21 @@ class PerformanceGate:
         """
         장 마감 후 가상 추적 결과 계산 → deque 갱신 + DB 저장
 
-        core/strategies/price_position_strategy.py의 simulate_trade() 활용.
-        결과는 virtual_trading_records 테이블에 strategy='gate_shadow'로 저장.
+        **폐기 (2026-04-21)**: price_position 전략 제거로 가상 추적 simulate_trade() 경로 삭제.
+        weighted_score 전략에서는 PerformanceGate.ENABLED=False 로 이 경로가 호출되지 않음.
+        향후 weighted_score 기반 가상 추적이 필요하면 WeightedScoreStrategy.check_exit_conditions
+        을 사용하도록 재작성 필요.
         """
         if not self._shadow_entries:
             self.logger.info("👻 가상 추적: 처리할 항목 없음")
             return
 
-        import psycopg2
-        import pandas as pd
-        from config.settings import PG_HOST, PG_PORT, PG_DATABASE, PG_USER, PG_PASSWORD
-        from core.strategies.price_position_strategy import PricePositionStrategy
-
-        total = len(self._shadow_entries)
-        processed = 0
-
-        conn = psycopg2.connect(
-            host=PG_HOST, port=PG_PORT, database=PG_DATABASE,
-            user=PG_USER, password=PG_PASSWORD
+        self.logger.warning(
+            "⚠️ process_shadow_entries() 는 폐기된 price_position 전략 의존 경로. "
+            f"대기 중인 shadow entries {len(self._shadow_entries)}건 스킵 후 비움."
         )
-        try:
-            while self._shadow_entries:
-                entry = self._shadow_entries[0]  # peek, pop은 처리 완료 후
-                try:
-                    # entry별 SL/TP로 strategy 생성 (약세장 손절축소 반영)
-                    shadow_config = {}
-                    if entry.get('stop_loss_pct') is not None:
-                        shadow_config['stop_loss_pct'] = entry['stop_loss_pct']
-                    if entry.get('take_profit_pct') is not None:
-                        shadow_config['take_profit_pct'] = entry['take_profit_pct']
-                    strategy = PricePositionStrategy(config=shadow_config if shadow_config else None)
-
-                    df = entry.get('candle_df')
-
-                    # candle_df가 없으면 DB에서 조회
-                    if df is None:
-                        cur = conn.cursor()
-                        cur.execute(
-                            'SELECT idx,date,time,close,open,high,low,volume,amount '
-                            'FROM minute_candles WHERE stock_code=%s AND trade_date=%s ORDER BY idx',
-                            [entry['stock_code'], entry['trade_date']]
-                        )
-                        rows = cur.fetchall()
-                        cur.close()
-                        if len(rows) < 50:
-                            self.logger.warning(
-                                f"⚠️ 가상 추적 스킵 ({entry['stock_code']}): "
-                                f"분봉 데이터 부족 ({len(rows)}행 < 50)"
-                            )
-                            self._shadow_entries.pop(0)
-                            self._save_state()
-                            continue
-                        df = pd.DataFrame(rows, columns=[
-                            'idx', 'date', 'time', 'close', 'open', 'high', 'low', 'volume', 'amount'
-                        ])
-
-                    result = strategy.simulate_trade(df, entry['entry_idx'])
-                    if result:
-                        is_win = result['result'] == 'WIN'
-                        is_overflow = entry.get('is_overflow', False)
-
-                        # overflow가 아닌 건만 승률 deque에 반영
-                        if not is_overflow:
-                            self.recent_results.append(1 if is_win else 0)
-
-                        processed += 1
-                        pnl = result['pnl']
-                        overflow_tag = " [초과-관찰용]" if is_overflow else ""
-                        self.logger.debug(
-                            f"👻 가상 추적{overflow_tag}: {entry['stock_code']} → "
-                            f"{'WIN' if is_win else 'LOSS'} ({pnl:+.2f}%)"
-                        )
-
-                        # DB에 결과 저장 (strategy='gate_shadow'로 기존 가상매매와 구분)
-                        pnl = float(pnl)  # np.float64 → float (psycopg2 호환)
-                        reason_str = f"{'WIN' if is_win else 'LOSS'} {pnl:+.2f}%"
-                        actual_entry = float(result.get('entry_price', entry['entry_price']))
-                        exit_price = float(actual_entry * (1 + pnl / 100))
-                        ts = now_kst().strftime('%Y-%m-%d %H:%M:%S')
-                        cur = conn.cursor()
-                        cur.execute(
-                            '''INSERT INTO virtual_trading_records
-                               (stock_code, stock_name, action, quantity, price,
-                                timestamp, strategy, reason, profit_rate, profit_loss,
-                                is_overflow)
-                               VALUES (%s, %s, 'SELL', 0, %s, %s, 'gate_shadow', %s, %s, 0, %s)''',
-                            (
-                                entry['stock_code'],
-                                entry.get('stock_name', ''),
-                                exit_price,
-                                ts,
-                                reason_str,
-                                pnl,
-                                is_overflow,
-                            )
-                        )
-                        cur.close()
-                        conn.commit()  # entry별 즉시 커밋
-
-                    # 성공이든 결과 없음이든 처리 완료 → 제거 후 상태 저장
-                    self._shadow_entries.pop(0)
-                    self._save_state()
-
-                except Exception as e:
-                    self.logger.warning(f"⚠️ 가상 추적 실패 ({entry['stock_code']}): {e}")
-                    try:
-                        conn.rollback()  # 트랜잭션 중지 상태 리셋 (이후 쿼리 정상 실행 보장)
-                    except Exception:
-                        pass
-                    self._shadow_entries.pop(0)  # 실패 시에도 제거 (무한 재시도 방지)
-                    self._save_state()
-
-        finally:
-            conn.close()
-
-        wr = self.get_rolling_winrate()
-        if processed > 0:
-            self.logger.info(
-                f"👻 가상 추적 완료: {processed}/{total}건 처리 → "
-                f"롤링 승률 {wr:.0f}%"
-            )
-        else:
-            self.logger.info(
-                f"👻 가상 추적: {total}건 시도했으나 처리된 항목 없음 → "
-                f"롤링 승률 {wr:.0f}%"
-            )
+        self._shadow_entries.clear()
+        self._save_state()
 
     def _reset_to_neutral(self):
         """deque를 중립 상태(50%)로 리셋"""
