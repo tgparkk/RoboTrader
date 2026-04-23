@@ -61,6 +61,16 @@ class DayTradingBot:
         self.order_manager = OrderManager(self.config, self.api_manager, self.telegram)
         self.candidate_selector = CandidateSelector(self.config, self.api_manager)
         self.intraday_manager = IntradayStockManager(self.api_manager)  # 🆕 장중 종목 관리자
+        # 🆕 weighted_score 활성 시 intraday_manager cap을 universe 크기로 확장 (기본 80 → 300)
+        try:
+            from config.strategy_settings import StrategySettings as _SS_IM
+            if _SS_IM.ACTIVE_STRATEGY == 'weighted_score':
+                self.intraday_manager.max_stocks = max(
+                    self.intraday_manager.max_stocks,
+                    _SS_IM.WeightedScore.UNIVERSE_TOP_N,
+                )
+        except Exception:
+            pass
         self.trading_manager = TradingStockManager(
             self.intraday_manager, self.data_collector, self.order_manager, self.telegram
         )  # 🆕 거래 상태 통합 관리자
@@ -81,6 +91,11 @@ class DayTradingBot:
 
         # 🔧 emergency_sync 서킷 브레이커 (같은 종목 반복 복구 방지, 버그 수정 2026-02-24)
         self._sync_restore_count: dict = {}  # {stock_code: count}
+
+        # 🆕 weighted_score prep 2단계 상태 (2026-04-23 NaN 피처 버그 수정)
+        # 08:55 universe 등록 → 09:02 당일 분봉 메모리 쌓인 후 daily 피처 계산
+        self._weighted_score_universe_codes: list = []
+        self._weighted_score_features_prepped_date = None
 
         # 실시간 종목 스크리너
         self.stock_screener = StockScreener(config=self._build_screener_config())
@@ -760,6 +775,29 @@ class DayTradingBot:
                     report_generated_today = None
                     market_open_gap_checked_today = None
 
+                # 🆕 weighted_score daily 피처 prep (09:02+, 당일 1회)
+                # - 08:55 universe 등록 → 09:00 개장 → 09:02 시점엔 각 종목 09:00 분봉이
+                #   intraday_manager 메모리에 쌓여 있음 → 당일 시가(gap_pct) 확정 가능
+                # - NXT 프리마켓 시간(08:00-09:00) 필터 이전에 체크해야 09:02 이후에도 실행됨
+                if (
+                    StrategySettings.ACTIVE_STRATEGY == 'weighted_score'
+                    and self.decision_engine.weighted_score_strategy
+                    and report_generated_today == today
+                    and self._weighted_score_features_prepped_date != today
+                    and current_time.hour == 9
+                    and current_time.minute >= 2
+                ):
+                    self._weighted_score_features_prepped_date = today  # race 방지 (실행 전 마킹)
+                    try:
+                        await self._prepare_weighted_score_features(current_time)
+                    except Exception as e:
+                        self._weighted_score_features_prepped_date = None  # 실패 시 재시도 허용
+                        self.logger.error(
+                            f"❌ [weighted_score] daily 피처 prep 실패: {e}"
+                        )
+                        import traceback
+                        self.logger.error(traceback.format_exc())
+
                 # NXT 프리마켓 시간만 활성 (08:00-09:00 평일)
                 if not MarketHours.is_nxt_pre_market_time(current_time):
                     await asyncio.sleep(30)
@@ -824,15 +862,16 @@ class DayTradingBot:
                         except Exception as e:
                             self.logger.warning(f"⚠️ 전일 양봉 맵 로드 실패: {e}")
 
-                        # 🆕 weighted_score 전략 활성 시 universe 공급 + daily 피처 준비
+                        # 🆕 weighted_score 전략 활성 시 universe 공급 (Step 1+2)
+                        # daily 피처 prep (Step 3) 은 09:02 당일 시가 확정 후 별도 트리거
                         try:
                             if (
                                 StrategySettings.ACTIVE_STRATEGY == 'weighted_score'
                                 and self.decision_engine.weighted_score_strategy
                             ):
-                                await self._prepare_weighted_score_for_today(current_time)
+                                await self._prepare_weighted_score_universe(current_time)
                         except Exception as e:
-                            self.logger.error(f"❌ [weighted_score] pre_market 준비 실패: {e}")
+                            self.logger.error(f"❌ [weighted_score] universe 준비 실패: {e}")
                             import traceback
                             self.logger.error(traceback.format_exc())
 
@@ -881,22 +920,20 @@ class DayTradingBot:
             import traceback
             self.logger.error(traceback.format_exc())
 
-    async def _prepare_weighted_score_for_today(self, current_time):
-        """weighted_score 전략 pre_market 준비 (2026-04-21 Phase 5).
+    async def _prepare_weighted_score_universe(self, current_time):
+        """weighted_score Step 1+2: universe 선정 + 후보 등록 (08:55).
 
-        1) universe 선정 (stock_screener.preload_weighted_score_universe)
-        2) 후보 풀 등록 (trading_manager)
-        3) daily 피처 + past_volume 주입 (weighted_score_daily_prep.prepare_for_trade_date)
+        - `stock_screener.preload_weighted_score_universe` 로 300종목 선정
+        - `trading_manager.add_selected_stock` 로 intraday_manager 에 등록
+          → 09:00 개장 시 선정 종목들의 realtime_data 수집 시작
+        - 선정된 universe 코드는 `self._weighted_score_universe_codes` 에 저장되어
+          09:02 Step 3 (daily 피처 prep) 에서 재사용됨.
+
+        분리 이유: daily 피처는 당일 시가(gap_pct)가 필요하므로 09:00 이후에 계산.
         """
-        import psycopg2
         from config.strategy_settings import StrategySettings
-        from config.settings import (
-            PG_HOST, PG_PORT, PG_DATABASE, PG_USER, PG_PASSWORD,
-        )
-        from core.strategies.weighted_score_daily_prep import prepare_for_trade_date
 
         ws = StrategySettings.WeightedScore
-        trade_date = current_time.strftime('%Y%m%d')
         loop = asyncio.get_event_loop()
 
         # 1) universe 선정
@@ -909,6 +946,7 @@ class DayTradingBot:
         )
         if not candidates:
             self.logger.warning("[weighted_score] universe 없음 → pre_market 준비 skip")
+            self._weighted_score_universe_codes = []
             return
 
         # 2) 후보 풀 등록
@@ -943,48 +981,130 @@ class DayTradingBot:
             except Exception as e:
                 self.logger.warning(f"[weighted_score] DB 저장 오류: {e}")
 
-        # 3) daily 피처 + past_volume 주입
-        def _sync_prepare():
-            # 분봉 로더 (minute_candles 직접 쿼리)
-            def minute_loader(stock_code: str, date: str):
-                conn2 = psycopg2.connect(
-                    host=PG_HOST, port=PG_PORT, database=PG_DATABASE,
-                    user=PG_USER, password=PG_PASSWORD, connect_timeout=5,
-                )
-                try:
-                    import pandas as pd
-                    sql = (
-                        "SELECT idx, time, open, high, low, close, volume "
-                        "FROM minute_candles "
-                        "WHERE stock_code=%s AND trade_date=%s ORDER BY idx"
-                    )
-                    df = pd.read_sql_query(sql, conn2, params=(stock_code, date))
-                    return df if not df.empty else None
-                finally:
-                    conn2.close()
+        # universe 코드 저장 (Step 3 에서 재사용)
+        self._weighted_score_universe_codes = [s.code for s in candidates]
 
-            # 지수 일봉용 conn (prepare_for_trade_date 내부에서 재사용)
-            conn_idx = psycopg2.connect(
+        self.logger.info(
+            f"🎯 [weighted_score] universe 준비 완료: "
+            f"universe={len(candidates)} added={added} "
+            f"(daily 피처 prep 은 09:02 개장 후 실행 예정)"
+        )
+
+    async def _prepare_weighted_score_features(self, current_time):
+        """weighted_score Step 3: daily 피처 + past_volume 주입 (09:02).
+
+        - 장 개시 후 첫 분봉(09:00~09:00:59) 완성 시점 이후 실행
+        - `minute_loader` 는 당일 날짜에 대해 `intraday_manager` 메모리에서 조회
+          → research 시뮬과 동치 (당일 open 확정 후 `gap_pct` 정상 계산)
+        - 과거 날짜는 기존대로 `minute_candles` DB 조회
+        """
+        import psycopg2
+        import pandas as pd
+        from config.settings import (
+            PG_HOST, PG_PORT, PG_DATABASE, PG_USER, PG_PASSWORD,
+        )
+        from core.strategies.weighted_score_daily_prep import prepare_for_trade_date
+
+        stock_codes = list(self._weighted_score_universe_codes or [])
+        if not stock_codes:
+            self.logger.warning("[weighted_score] universe 비어있음 → 피처 prep skip")
+            return
+
+        trade_date = current_time.strftime('%Y%m%d')
+        loop = asyncio.get_event_loop()
+
+        def _sync_prepare():
+            # 🆕 단일 커넥션 재사용 + 종목별 45일 일괄 쿼리 캐시로 prep 가속
+            # (기존: 종목 × 45 = 13,500 회 connect → 70분 → 단일 connect + 300 쿼리로 단축)
+            conn_shared = psycopg2.connect(
                 host=PG_HOST, port=PG_PORT, database=PG_DATABASE,
                 user=PG_USER, password=PG_PASSWORD, connect_timeout=10,
             )
+
+            # 종목별 과거 분봉 캐시 (date → DataFrame). 첫 호출 시 일괄 로드.
+            past_cache: dict[str, dict[str, pd.DataFrame]] = {}
+
+            def _load_past_all_dates(stock_code: str):
+                """해당 종목의 과거 모든 거래일 분봉을 한 번에 로드해 dict 캐시."""
+                if stock_code in past_cache:
+                    return past_cache[stock_code]
+                sql = (
+                    "SELECT trade_date, idx, time, open, high, low, close, volume "
+                    "FROM minute_candles "
+                    "WHERE stock_code=%s AND trade_date < %s "
+                    "ORDER BY trade_date, idx"
+                )
+                try:
+                    df = pd.read_sql_query(
+                        sql, conn_shared, params=(stock_code, trade_date)
+                    )
+                except Exception as e:
+                    self.logger.debug(
+                        f"[weighted_score.prep] past load {stock_code}: {e}"
+                    )
+                    past_cache[stock_code] = {}
+                    return past_cache[stock_code]
+                by_date: dict[str, pd.DataFrame] = {}
+                if not df.empty:
+                    for d, g in df.groupby("trade_date"):
+                        by_date[str(d)] = g.drop(columns=["trade_date"]).reset_index(
+                            drop=True
+                        )
+                past_cache[stock_code] = by_date
+                return by_date
+
+            # 분봉 로더: 당일은 intraday_manager 메모리, 과거는 캐시(=일괄 쿼리 결과)
+            def minute_loader(stock_code: str, date: str):
+                # 당일: in-memory 우선 (auto-collect 우회)
+                if date == trade_date:
+                    try:
+                        sd = self.intraday_manager.selected_stocks.get(stock_code)
+                        if sd is None:
+                            return None
+                        parts = []
+                        if sd.historical_data is not None and not sd.historical_data.empty:
+                            parts.append(sd.historical_data)
+                        if sd.realtime_data is not None and not sd.realtime_data.empty:
+                            parts.append(sd.realtime_data)
+                        if not parts:
+                            return None
+                        df = (
+                            pd.concat(parts, ignore_index=True)
+                            if len(parts) > 1
+                            else parts[0].copy()
+                        )
+                        required = {"open", "high", "low", "close", "volume"}
+                        if not required.issubset(df.columns):
+                            return None
+                        if "idx" not in df.columns:
+                            df = df.assign(idx=range(len(df)))
+                        return df
+                    except Exception as e:
+                        self.logger.debug(
+                            f"[weighted_score.prep] in-memory loader {stock_code}: {e}"
+                        )
+                        return None
+
+                # 과거: 캐시된 일괄 쿼리 결과에서 lookup
+                by_date = _load_past_all_dates(stock_code)
+                df = by_date.get(date)
+                return df if df is not None and not df.empty else None
+
             try:
-                stock_codes = [s.code for s in candidates]
                 return prepare_for_trade_date(
                     strategy=self.decision_engine.weighted_score_strategy,
                     stock_codes=stock_codes,
                     target_date=trade_date,
                     minute_loader=minute_loader,
-                    pg_conn=conn_idx,
+                    pg_conn=conn_shared,
                     logger=self.logger,
                 )
             finally:
-                conn_idx.close()
+                conn_shared.close()
 
         summary = await loop.run_in_executor(None, _sync_prepare)
         self.logger.info(
-            f"🎯 [weighted_score] pre_market 준비 완료: "
-            f"universe={len(candidates)} added={added} "
+            f"🎯 [weighted_score] daily 피처 prep 완료: "
             f"loaded={summary['loaded']}/{summary['n_requested']} "
             f"elapsed={summary['elapsed_sec']:.1f}s"
         )

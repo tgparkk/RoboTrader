@@ -21,19 +21,23 @@
 
 ---
 
-## ⚠️ 현재 상태 (2026-04-21): weighted_score 통합 중
+## ⚠️ 현재 상태 (2026-04-23): weighted_score 실거래 운영 중 (Trial 837, look-ahead 제거)
 
 ```python
 # config/strategy_settings.py — weighted_score 운영 수치는 전부 이 클래스에서 관리
 ACTIVE_STRATEGY = 'weighted_score'              # 2026-04-21 전환
-WeightedScore.STOP_LOSS_PCT = -5.04             # 손절
-WeightedScore.TAKE_PROFIT_PCT = 7.07            # 익절
-WeightedScore.MAX_HOLDING_DAYS = 3              # 최대 보유 거래일 (research Trial #1600)
+WeightedScore.STOP_LOSS_PCT = -3.84             # 손절 (Trial 837)
+WeightedScore.TAKE_PROFIT_PCT = 8.02            # 익절 (Trial 837)
+WeightedScore.MAX_HOLDING_DAYS = 5              # 최대 보유 거래일 (Trial 837)
 WeightedScore.ALLOW_OVERNIGHT_HOLD = True       # EOD 15:00 선별 스킵 (days < max_hold 인 포지션만)
-WeightedScore.MAX_DAILY_POSITIONS = 9           # 동시 보유 (research Trial #1600 동일)
-WeightedScore.BUY_BUDGET_RATIO = 0.10           # 건당 = 총자본 × 10% (고정, 9종목 × 10% = 90%)
-WeightedScore.VIRTUAL_ONLY = True               # main.py 분기에서 가상매매로 라우팅 (실 주문 X)
+WeightedScore.MAX_DAILY_POSITIONS = 3           # 동시 보유 (Trial 837, 기존 9 → 3 축소)
+WeightedScore.BUY_BUDGET_RATIO = 0.30           # 건당 = 총자본 × 30% (고정, 3종목 × 30% = 90%)
+WeightedScore.VIRTUAL_ONLY = False              # 실 계좌 주문 모드
 ```
+
+### Trial 837 test 성과 (88일, look-ahead 제거)
+- Calmar 25.10, Return +9.60% (연환산 ~+40%), MDD 2.40%, Sharpe 4.10, Win% 55.7%, Overfit ratio 0.62
+- 기존 Trial #1600 (Calmar 162.75) 은 `volume_volatility.py` 의 `atr_pct_14d`, `obv_slope_5d` 에 shift(1) 누락으로 인한 look-ahead bias 포함 — 2026-04-23 수정 후 재학습으로 Trial 837 선정.
 
 **설정 단일 관리 지점**: weighted_score 운영 수치는 모두 `StrategySettings.WeightedScore` 클래스에서
 관리. `trading_config.json` 의 `risk_management.stop_loss_ratio/take_profit_ratio` 와 `order_management.buy_budget_ratio` 는 weighted_score 시 **무시**됨. `trading_decision_engine.get_effective_stop_loss/take_profit` 과 `main.FundManager` 초기화가 WeightedScore 값을 우선 참조한다.
@@ -49,11 +53,22 @@ WeightedScore.VIRTUAL_ONLY = True               # main.py 분기에서 가상매
   - `main.py` 매수 경로에서 `VIRTUAL_ONLY=True` 시 `execute_virtual_buy` 라우팅
   - `analyze_sell_decision` — weighted_score 시 max_holding_days 도달 체크 (busday_count)
   - `_execute_end_of_day_liquidation` — overnight 허용 시 days_held < max_hold 포지션 선별 스킵
-  - 실 주문 열기: `VIRTUAL_ONLY = False` 한 줄 변경 (가상매매 1~2주 관찰 후)
+  - 실 주문 열림 완료 (2026-04-23): `VIRTUAL_ONLY = False`
 - **롤백**: `ACTIVE_STRATEGY = 'closing_trade'` 또는 `'pullback'` + .bat 라인 주석 해제
   - price_position 전략은 2026-04-21 완전 삭제되어 롤백 옵션에서 제외됨
+  - 실매매 → 가상매매 회귀: `WeightedScore.VIRTUAL_ONLY = True`
 
-> 현재 `VIRTUAL_ONLY=True` 이므로 신호는 발생하되 `virtual_trading_records` 테이블에만 기록 — 실 계좌 주문 없음.
+> 현재 `VIRTUAL_ONLY=False` — 신호 발생 시 KIS 실 계좌 주문 발주. 가상매매 복귀 시 `True` 로 변경.
+
+### 2026-04-23 실매매 전환 + NaN 피처 버그 수정
+- **증상**: 실매매 첫날 매수 0건. 모든 종목 `score NaN (NaN 피처: atr_pct_14d, obv_slope_5d, rsi_14...)`
+- **원인**: pre_market prep(08:55)이 `minute_candles` DB만 조회 → 당일(20260423) 로우 없음 → `compute_daily_raw` 의 `mask = d["trade_date"]==target_trade_date` 가 전부 False → 모든 피처 초기값 NaN 반환.
+- **수정**:
+  - `_prepare_weighted_score_for_today` 를 `_prepare_weighted_score_universe`(08:55, universe 등록) + `_prepare_weighted_score_features`(09:02, daily 피처 prep) 로 2단계 분리.
+  - 09:02 피처 prep 의 `minute_loader` 는 당일 날짜에 대해 `intraday_manager.selected_stocks[code].realtime_data` + `historical_data` 를 메모리 직접 조회.
+  - `compute_daily_raw` 에 당일 row 부재 시 NaN placeholder 삽입 defense 추가 (shift(1) 기반 11개 피처 정상 계산).
+  - `intraday_manager.max_stocks` 를 weighted_score 모드에서 `UNIVERSE_TOP_N(300)` 으로 확장 (기존 80 cap 제거).
+  - prep 성능: 단일 DB 커넥션 재사용 + 종목별 과거 일괄 쿼리 → 13,500 connect → 300 쿼리.
 
 ---
 

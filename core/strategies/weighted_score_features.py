@@ -375,6 +375,29 @@ def compute_daily_raw(
     if len(d) < 5:
         return out
 
+    # 실거래에서 prep 시점에 당일 분봉이 아직 없을 수 있음 (09:00 개장 직후).
+    # shift(1) 기반 피처 11개는 어제까지 데이터로 계산 가능하므로, 당일 placeholder
+    # 행을 삽입해 `mask.any()` 로 lookup 이 동작하도록 한다. gap_pct 는 NaN 으로 남음.
+    if not (d["trade_date"] == target_trade_date).any():
+        d = pd.concat(
+            [
+                d,
+                pd.DataFrame(
+                    [
+                        {
+                            "trade_date": target_trade_date,
+                            "open": float("nan"),
+                            "high": float("nan"),
+                            "low": float("nan"),
+                            "close": float("nan"),
+                            "volume": float("nan"),
+                        }
+                    ]
+                ),
+            ],
+            ignore_index=True,
+        )
+
     # --- 기술지표 (ta lib, shift(1)) ---
     try:
         from ta.momentum import RSIIndicator, StochasticOscillator

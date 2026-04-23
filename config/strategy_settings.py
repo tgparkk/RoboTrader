@@ -111,25 +111,24 @@ class StrategySettings:
         WARMUP_MINUTES = 30               # 09:30 이후 진입 허용 (ret_30min 워밍업)
         ALLOWED_WEEKDAYS = [0, 1, 2, 3, 4]
 
-        # ---- 청산 임계값 (research Trial #1600) ----
-        STOP_LOSS_PCT = -5.04             # 손절 (%, 음수)
-        TAKE_PROFIT_PCT = 7.07            # 익절 (%, 양수)
+        # ---- 청산 임계값 (research Trial 837, 2026-04-23 look-ahead 제거 후) ----
+        STOP_LOSS_PCT = -3.84             # 손절 (%, 음수)
+        TAKE_PROFIT_PCT = 8.02            # 익절 (%, 양수)
 
         # ---- 홀딩 / 동시보유 ----
-        MAX_HOLDING_DAYS = 3              # 거래일 기준 최대 보유 (research 값)
-        MAX_DAILY_POSITIONS = 9           # 동시 보유 최대 (research Trial #1600 값, 2026-04-21 5 → 9)
+        MAX_HOLDING_DAYS = 5              # 거래일 기준 최대 보유 (Trial 837)
+        MAX_DAILY_POSITIONS = 3           # 동시 보유 최대 (Trial 837, 기존 9 → 3 축소)
 
         # ---- 오버나이트 홀드 ----
-        # True : 3 거래일까지 보유 (연구 Calmar 162.75 재현 조건)
+        # True : 5 거래일까지 보유 (Trial 837 test Calmar 25.10 재현 조건)
         #        → EOD 15:00 에서 days_held < MAX_HOLDING_DAYS 포지션은 스킵
         # False: EOD 15:00 강제 청산 (effective max_hold=1일, 보수적)
         ALLOW_OVERNIGHT_HOLD = True
 
         # ---- 자금 관리 ----
         # 각 매수 = 계좌 총잔고 × BUY_BUDGET_RATIO (고정, compounding 아님)
-        # 연구 Trial #1600 재현: 9 × 10% = 90% 활용, 10% 현금 buffer
-        # (5종목 운영 시에는 0.19 가 적절: 5×19%=95%)
-        BUY_BUDGET_RATIO = 0.10           # 1/MAX_DAILY_POSITIONS ≈ 0.111 보다 살짝 보수적
+        # Trial 837 운영: 3 × 30% = 90% 활용, 10% 현금 buffer
+        BUY_BUDGET_RATIO = 0.30           # 1/MAX_DAILY_POSITIONS ≈ 0.333 보다 살짝 보수적
         BUY_COOLDOWN_MINUTES = 25         # 동일 종목 재매수 쿨다운
 
         # ---- 거래 제한 ----

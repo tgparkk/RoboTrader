@@ -92,24 +92,28 @@ def compute_volume_volatility(
     past5_mean = grouped.transform(lambda s: s.shift(1).rolling(window=5, min_periods=3).mean())
     out["vol_ratio_5d"] = vol_series / past5_mean.replace(0, np.nan)
 
-    # --- 2) atr_pct_14d (daily ATR(14)/close * 100, broadcast) ---
+    # --- 2) atr_pct_14d (daily ATR(14)/close * 100, broadcast, shift(1)) ---
+    # 🔧 2026-04-23: shift(1) 추가 - 당일 마감 close 기반 값은 장중 look-ahead.
+    # 분봉 t 에 적용되는 atr_pct_14d 는 전일까지 데이터로 계산된 값이어야 함.
     daily = daily_bars.aggregate_minutes_to_daily(minute_df)
     daily["atr"] = _atr(daily, window=14)
     daily["atr_pct"] = (daily["atr"] / daily["close"].astype(float)) * 100.0
+    daily["atr_pct"] = daily["atr_pct"].shift(1)
     atr_map = dict(zip(daily["trade_date"], daily["atr_pct"]))
     out["atr_pct_14d"] = minute_df["trade_date"].map(atr_map)
 
     # --- 3) realized_vol_30min (rolling 30분 std of ret_1min, %) ---
     out["realized_vol_30min"] = ret_1min.rolling(window=30, min_periods=15).std()
 
-    # --- 4) obv_slope_5d (daily OBV 의 최근 5일 기울기, normalized) ---
+    # --- 4) obv_slope_5d (daily OBV 의 최근 5일 기울기, normalized, shift(1)) ---
+    # 🔧 2026-04-23: shift(1) 추가 - 당일 마감 OBV/거래량 기반 값은 장중 look-ahead.
     daily["obv"] = _obv(daily)
     # 정규화: 최근 N일 평균 (close*volume) 으로 나눔 — 기울기 단위 약분
     avg_dollar = (daily["close"].astype(float) * daily["volume"].astype(float)).rolling(
         window=20, min_periods=5
     ).mean()
     obv_slope_raw = _rolling_slope(daily["obv"], window=5)
-    daily["obv_slope_norm"] = obv_slope_raw / avg_dollar.replace(0, np.nan)
+    daily["obv_slope_norm"] = (obv_slope_raw / avg_dollar.replace(0, np.nan)).shift(1)
     slope_map = dict(zip(daily["trade_date"], daily["obv_slope_norm"]))
     out["obv_slope_5d"] = minute_df["trade_date"].map(slope_map)
 
