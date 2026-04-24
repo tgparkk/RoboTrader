@@ -28,7 +28,7 @@ class BuyAtBar5Sell3BarsLater(StrategyBase):
             return EntryOrder(stock_code=stock_code, priority=1, budget_ratio=0.5)
         return None
 
-    def exit_signal(self, position, features, bar_idx):
+    def exit_signal(self, position, features, bar_idx, current_price=None):
         if bar_idx - position.entry_bar_idx >= 3:
             return ExitOrder(stock_code=position.stock_code, reason="hold_limit")
         return None
@@ -120,7 +120,7 @@ def test_engine_no_trades_when_no_signals():
         def entry_signal(self, features, bar_idx, stock_code):
             return None
 
-        def exit_signal(self, position, features, bar_idx):
+        def exit_signal(self, position, features, bar_idx, current_price=None):
             return None
 
     stock_code = "TEST"

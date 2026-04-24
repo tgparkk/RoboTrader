@@ -61,7 +61,11 @@ class BacktestEngine:
                 features = features_by_code[code]
                 if t >= len(features):
                     continue
-                exit_order = self.strategy.exit_signal(pos, features, bar_idx=t)
+                df_min = self.minute_df_by_code[code]
+                current_price = float(df_min["close"].iloc[t]) if t < len(df_min) else None
+                exit_order = self.strategy.exit_signal(
+                    pos, features, bar_idx=t, current_price=current_price
+                )
                 if exit_order is None:
                     continue
                 fill_idx = ExecutionModel.next_fill_index(t)

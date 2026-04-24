@@ -66,7 +66,9 @@ class WeightedScoreBaseline(StrategyBase):
             return None
         return EntryOrder(stock_code=stock_code, priority=1, budget_ratio=0.30)
 
-    def exit_signal(self, position, features, bar_idx) -> Optional[ExitOrder]:
+    def exit_signal(
+        self, position, features, bar_idx, current_price: Optional[float] = None
+    ) -> Optional[ExitOrder]:
         held_bars = bar_idx - position.entry_bar_idx
         if held_bars <= 0:
             return None

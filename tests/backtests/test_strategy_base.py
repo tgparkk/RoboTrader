@@ -22,7 +22,7 @@ class DummyStrategy(StrategyBase):
             return EntryOrder(stock_code=stock_code, priority=1, budget_ratio=0.2)
         return None
 
-    def exit_signal(self, position, features, bar_idx):
+    def exit_signal(self, position, features, bar_idx, current_price=None):
         if bar_idx - position.entry_bar_idx >= 5:
             return ExitOrder(stock_code=position.stock_code, reason="hold_limit")
         return None

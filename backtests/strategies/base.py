@@ -47,6 +47,17 @@ class StrategyBase(ABC):
 
     @abstractmethod
     def exit_signal(
-        self, position: Position, features: pd.DataFrame, bar_idx: int
+        self,
+        position: Position,
+        features: pd.DataFrame,
+        bar_idx: int,
+        current_price: Optional[float] = None,
     ) -> Optional[ExitOrder]:
-        """보유 중인 position 에 대한 매도 신호. 없으면 None."""
+        """보유 중인 position 에 대한 매도 신호.
+
+        Args:
+            position: 보유 포지션.
+            features: 전략이 prepare_features 로 계산한 DF.
+            bar_idx: 현재 분봉 인덱스.
+            current_price: 현재 분봉 close (TP/SL 체크용). None 이면 훅 미사용 전략.
+        """
