@@ -40,3 +40,29 @@ PnL 계산 → metrics 반환까지 에러 없이 완주하는지 확인.
 3. **가변 bar-per-day**: 현 어댑터는 BARS_PER_TRADING_DAY=390 상수 가정. 실제
    데이터는 일별 bar 수 다름 → `trade_date` 기반 day counting 로 교체.
 4. **시장 데이터 갭 처리**: minute_candles 가 공백인 날짜에 대한 fallback.
+
+---
+
+## Phase 2B-1 ~ 2B-3 완료 (2026-04-25)
+
+### Phase 2B-1 — 브레이크아웃 (3개)
+- ORB (Opening Range Breakout)
+- 갭다운 역행 (Gap-Down Reversal)
+- 갭업 추격 (Gap-Up Continuation)
+
+### Phase 2B-2 — 평균회귀 (3개)
+- VWAP 반등
+- 볼린저 하단 반등
+- RSI 과매도 반등
+
+### Phase 2B-3 — 추세·거래량 (3개)
+- 거래량 급증 추격 (Volume Surge Chase)
+- 장중 눌림목 (20EMA Pullback)
+- 종가 드리프트 (Closing Drift, overnight hold=1)
+
+**전체 tests**: 138 passed + 2 skipped.
+
+### 남은 classic 전략 (Phase 2B-4, 2C 예정)
+- 상한가 따라잡기 (Phase 2B-4, 호가·유동성 제약 큼)
+- Overnight swing 5개 (Phase 2C):
+  - 종가매수→시가매도, 52주 신고가 돌파, 낙주 반등, 추세 follow-through, MACD 골든크로스
