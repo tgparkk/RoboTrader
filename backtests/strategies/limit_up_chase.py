@@ -7,6 +7,7 @@ from typing import Optional
 
 import pandas as pd
 
+from backtests.common.feature_cache import get_arrays
 from backtests.strategies.base import StrategyBase, EntryOrder, ExitOrder
 
 
@@ -89,24 +90,21 @@ class LimitUpChaseStrategy(StrategyBase):
     def entry_signal(
         self, features: pd.DataFrame, bar_idx: int, stock_code: str
     ) -> Optional[EntryOrder]:
-        if bar_idx >= len(features):
+        arr = get_arrays(features)
+        if bar_idx >= len(arr["close"]):
             return None
-        row = features.iloc[bar_idx]
-        if (
-            pd.isna(row["prev_close"])
-            or pd.isna(row["price_change_pct"])
-            or pd.isna(row["vol_ratio"])
-        ):
+        prev_close = arr["prev_close"][bar_idx]
+        price_change_pct = arr["price_change_pct"][bar_idx]
+        vol_ratio = arr["vol_ratio"][bar_idx]
+        if pd.isna(prev_close) or pd.isna(price_change_pct) or pd.isna(vol_ratio):
             return None
-        if row["bar_in_day"] > self.entry_window_end_bar:
+        if arr["bar_in_day"][bar_idx] > self.entry_window_end_bar:
             return None
-        # 전일대비 상승률 — 추격 임계 이상, 한도 근접 이하
-        if row["price_change_pct"] < self.chase_threshold_pct:
+        if price_change_pct < self.chase_threshold_pct:
             return None
-        if row["price_change_pct"] >= self.limit_proximity_pct:
+        if price_change_pct >= self.limit_proximity_pct:
             return None
-        # 거래량 급증
-        if row["vol_ratio"] < self.volume_mult:
+        if vol_ratio < self.volume_mult:
             return None
         return EntryOrder(
             stock_code=stock_code, priority=1, budget_ratio=self.budget_ratio

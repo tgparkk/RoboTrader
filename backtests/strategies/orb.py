@@ -3,6 +3,7 @@ from typing import Optional
 
 import pandas as pd
 
+from backtests.common.feature_cache import get_arrays
 from backtests.strategies.base import StrategyBase, EntryOrder, ExitOrder
 
 
@@ -66,21 +67,17 @@ class ORBStrategy(StrategyBase):
     def entry_signal(
         self, features: pd.DataFrame, bar_idx: int, stock_code: str
     ) -> Optional[EntryOrder]:
-        if bar_idx >= len(features):
+        arr = get_arrays(features)
+        if bar_idx >= len(arr["close"]):
             return None
-        row = features.iloc[bar_idx]
-
-        # OR 구간 이내면 진입 불가
-        if pd.isna(row["or_high"]):
+        or_high = arr["or_high"][bar_idx]
+        if pd.isna(or_high):
             return None
-        # 진입 윈도우 마감
-        if row["bar_in_day"] > self.entry_end_bar:
+        if arr["bar_in_day"][bar_idx] > self.entry_end_bar:
             return None
-        # Breakout 체크: close > OR high × (1 + buffer)
-        threshold = row["or_high"] * (1 + self.breakout_buffer_pct / 100.0)
-        if row["close"] <= threshold:
+        threshold = or_high * (1 + self.breakout_buffer_pct / 100.0)
+        if arr["close"][bar_idx] <= threshold:
             return None
-
         return EntryOrder(
             stock_code=stock_code, priority=1, budget_ratio=self.budget_ratio
         )

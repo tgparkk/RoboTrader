@@ -3,6 +3,7 @@ from typing import Optional
 
 import pandas as pd
 
+from backtests.common.feature_cache import get_arrays
 from backtests.common.trading_day import count_trading_days_between
 from backtests.strategies.base import StrategyBase, EntryOrder, ExitOrder
 
@@ -72,15 +73,17 @@ class MACDCrossStrategy(StrategyBase):
     def entry_signal(
         self, features: pd.DataFrame, bar_idx: int, stock_code: str
     ) -> Optional[EntryOrder]:
-        if bar_idx >= len(features):
+        arr = get_arrays(features)
+        if bar_idx >= len(arr["hhmm"]):
             return None
-        row = features.iloc[bar_idx]
-        if pd.isna(row["prev_hist"]) or pd.isna(row["prev_prev_hist"]):
+        prev_hist = arr["prev_hist"][bar_idx]
+        prev_prev_hist = arr["prev_prev_hist"][bar_idx]
+        if pd.isna(prev_hist) or pd.isna(prev_prev_hist):
             return None
-        if not (self.entry_hhmm_min <= row["hhmm"] <= self.entry_hhmm_max):
+        hhmm = arr["hhmm"][bar_idx]
+        if not (self.entry_hhmm_min <= hhmm <= self.entry_hhmm_max):
             return None
-        # 직전 세션 골든크로스: prev_prev_hist < 0 AND prev_hist >= 0
-        if not (row["prev_prev_hist"] < 0 and row["prev_hist"] >= 0):
+        if not (prev_prev_hist < 0 and prev_hist >= 0):
             return None
         return EntryOrder(
             stock_code=stock_code, priority=1, budget_ratio=self.budget_ratio

@@ -3,6 +3,7 @@ from typing import Optional
 
 import pandas as pd
 
+from backtests.common.feature_cache import get_arrays
 from backtests.strategies.base import StrategyBase, EntryOrder, ExitOrder
 
 
@@ -59,17 +60,19 @@ class BBLowerBounceStrategy(StrategyBase):
     def entry_signal(
         self, features: pd.DataFrame, bar_idx: int, stock_code: str
     ) -> Optional[EntryOrder]:
-        if bar_idx >= len(features):
+        arr = get_arrays(features)
+        if bar_idx >= len(arr["close"]):
             return None
-        row = features.iloc[bar_idx]
-        if pd.isna(row["prev_lower"]) or pd.isna(row["prev_close"]):
+        prev_lower = arr["prev_lower"][bar_idx]
+        prev_close = arr["prev_close"][bar_idx]
+        if pd.isna(prev_lower) or pd.isna(prev_close):
             return None
-        if row["bar_in_day"] > self.entry_window_end_bar:
+        if arr["bar_in_day"][bar_idx] > self.entry_window_end_bar:
             return None
-        # 현재 close 가 하단밴드 위로 복귀(반등) + 전봉 대비 상승
-        if row["close"] <= row["prev_lower"]:
+        close = arr["close"][bar_idx]
+        if close <= prev_lower:
             return None
-        if row["close"] <= row["prev_close"]:
+        if close <= prev_close:
             return None
         return EntryOrder(
             stock_code=stock_code, priority=1, budget_ratio=self.budget_ratio

@@ -4,6 +4,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+from backtests.common.feature_cache import get_arrays
 from backtests.strategies.base import StrategyBase, EntryOrder, ExitOrder
 
 
@@ -69,21 +70,21 @@ class RSIOversoldStrategy(StrategyBase):
     def entry_signal(
         self, features: pd.DataFrame, bar_idx: int, stock_code: str
     ) -> Optional[EntryOrder]:
-        if bar_idx >= len(features):
+        arr = get_arrays(features)
+        if bar_idx >= len(arr["close"]):
             return None
-        row = features.iloc[bar_idx]
-        if pd.isna(row["prev_rsi"]) or pd.isna(row["prev_prev_rsi"]) or pd.isna(row["prev_close"]):
+        prev_rsi = arr["prev_rsi"][bar_idx]
+        prev_prev_rsi = arr["prev_prev_rsi"][bar_idx]
+        prev_close = arr["prev_close"][bar_idx]
+        if pd.isna(prev_rsi) or pd.isna(prev_prev_rsi) or pd.isna(prev_close):
             return None
-        if row["bar_in_day"] > self.entry_window_end_bar:
+        if arr["bar_in_day"][bar_idx] > self.entry_window_end_bar:
             return None
-        # 전 또는 전전 bar 가 oversold 였어야 함
-        if row["prev_rsi"] >= self.oversold_threshold and row["prev_prev_rsi"] >= self.oversold_threshold:
+        if prev_rsi >= self.oversold_threshold and prev_prev_rsi >= self.oversold_threshold:
             return None
-        # RSI 반전 (상승 전환)
-        if row["prev_rsi"] <= row["prev_prev_rsi"]:
+        if prev_rsi <= prev_prev_rsi:
             return None
-        # 가격 반등 확인
-        if row["close"] <= row["prev_close"]:
+        if arr["close"][bar_idx] <= prev_close:
             return None
         return EntryOrder(
             stock_code=stock_code, priority=1, budget_ratio=self.budget_ratio

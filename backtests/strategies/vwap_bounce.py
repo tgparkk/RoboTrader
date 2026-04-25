@@ -3,6 +3,7 @@ from typing import Optional
 
 import pandas as pd
 
+from backtests.common.feature_cache import get_arrays
 from backtests.strategies.base import StrategyBase, EntryOrder, ExitOrder
 
 
@@ -58,18 +59,21 @@ class VWAPBounceStrategy(StrategyBase):
     def entry_signal(
         self, features: pd.DataFrame, bar_idx: int, stock_code: str
     ) -> Optional[EntryOrder]:
-        if bar_idx >= len(features):
+        arr = get_arrays(features)
+        if bar_idx >= len(arr["close"]):
             return None
-        row = features.iloc[bar_idx]
-        if pd.isna(row["deviation_pct"]) or pd.isna(row["prev_close"]):
+        deviation_pct = arr["deviation_pct"][bar_idx]
+        prev_close = arr["prev_close"][bar_idx]
+        if pd.isna(deviation_pct) or pd.isna(prev_close):
             return None
-        if row["bar_in_day"] < self.rebound_min_bars:
+        bar_in_day = arr["bar_in_day"][bar_idx]
+        if bar_in_day < self.rebound_min_bars:
             return None
-        if row["bar_in_day"] > self.entry_window_end_bar:
+        if bar_in_day > self.entry_window_end_bar:
             return None
-        if row["deviation_pct"] > self.vwap_deviation_pct:
+        if deviation_pct > self.vwap_deviation_pct:
             return None
-        if row["close"] <= row["prev_close"]:
+        if arr["close"][bar_idx] <= prev_close:
             return None
         return EntryOrder(
             stock_code=stock_code, priority=1, budget_ratio=self.budget_ratio

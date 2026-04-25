@@ -3,6 +3,7 @@ from typing import Optional
 
 import pandas as pd
 
+from backtests.common.feature_cache import get_arrays
 from backtests.common.trading_day import count_trading_days_between
 from backtests.strategies.base import StrategyBase, EntryOrder, ExitOrder
 
@@ -77,16 +78,19 @@ class PostDropReboundStrategy(StrategyBase):
     def entry_signal(
         self, features: pd.DataFrame, bar_idx: int, stock_code: str
     ) -> Optional[EntryOrder]:
-        if bar_idx >= len(features):
+        arr = get_arrays(features)
+        if bar_idx >= len(arr["hhmm"]):
             return None
-        row = features.iloc[bar_idx]
-        if pd.isna(row["prev_return_pct"]) or pd.isna(row["vol_ratio"]):
+        prev_return_pct = arr["prev_return_pct"][bar_idx]
+        vol_ratio = arr["vol_ratio"][bar_idx]
+        if pd.isna(prev_return_pct) or pd.isna(vol_ratio):
             return None
-        if not (self.entry_hhmm_min <= row["hhmm"] <= self.entry_hhmm_max):
+        hhmm = arr["hhmm"][bar_idx]
+        if not (self.entry_hhmm_min <= hhmm <= self.entry_hhmm_max):
             return None
-        if row["prev_return_pct"] > self.max_prev_return_pct:
+        if prev_return_pct > self.max_prev_return_pct:
             return None
-        if row["vol_ratio"] < self.vol_mult:
+        if vol_ratio < self.vol_mult:
             return None
         return EntryOrder(
             stock_code=stock_code, priority=1, budget_ratio=self.budget_ratio

@@ -3,6 +3,7 @@ from typing import Optional
 
 import pandas as pd
 
+from backtests.common.feature_cache import get_arrays
 from backtests.strategies.base import StrategyBase, EntryOrder, ExitOrder
 
 
@@ -76,27 +77,28 @@ class IntradayPullbackStrategy(StrategyBase):
     def entry_signal(
         self, features: pd.DataFrame, bar_idx: int, stock_code: str
     ) -> Optional[EntryOrder]:
-        if bar_idx >= len(features):
+        arr = get_arrays(features)
+        if bar_idx >= len(arr["close"]):
             return None
-        row = features.iloc[bar_idx]
+        prev_ema = arr["prev_ema"][bar_idx]
+        recent_high = arr["recent_high"][bar_idx]
+        recent_low = arr["recent_low"][bar_idx]
+        prev_close = arr["prev_close"][bar_idx]
         if (
-            pd.isna(row["prev_ema"])
-            or pd.isna(row["recent_high"])
-            or pd.isna(row["recent_low"])
-            or pd.isna(row["prev_close"])
+            pd.isna(prev_ema)
+            or pd.isna(recent_high)
+            or pd.isna(recent_low)
+            or pd.isna(prev_close)
         ):
             return None
-        if row["bar_in_day"] > self.entry_window_end_bar:
+        if arr["bar_in_day"][bar_idx] > self.entry_window_end_bar:
             return None
-        # 추세 조건: 직전 K bars 의 최고가가 EMA 위 (uptrend 였음)
-        if row["recent_high"] <= row["prev_ema"]:
+        if recent_high <= prev_ema:
             return None
-        # 눌림 조건: 직전 K bars 의 최저가가 EMA 근접 (proximity_pct 이내 또는 그 아래)
-        proximity_threshold = row["prev_ema"] * (1.0 + self.proximity_pct / 100.0)
-        if row["recent_low"] > proximity_threshold:
+        proximity_threshold = prev_ema * (1.0 + self.proximity_pct / 100.0)
+        if recent_low > proximity_threshold:
             return None
-        # 반등 confirmation
-        if row["close"] <= row["prev_close"]:
+        if arr["close"][bar_idx] <= prev_close:
             return None
         return EntryOrder(
             stock_code=stock_code, priority=1, budget_ratio=self.budget_ratio

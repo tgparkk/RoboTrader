@@ -9,6 +9,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+from backtests.common.feature_cache import get_arrays
 from backtests.common.trading_day import count_trading_days_between
 from backtests.strategies.base import StrategyBase, EntryOrder, ExitOrder
 
@@ -95,25 +96,25 @@ class ClosingDriftStrategy(StrategyBase):
     def entry_signal(
         self, features: pd.DataFrame, bar_idx: int, stock_code: str
     ) -> Optional[EntryOrder]:
-        if bar_idx >= len(features):
+        arr = get_arrays(features)
+        if bar_idx >= len(arr["close"]):
             return None
-        row = features.iloc[bar_idx]
-        if pd.isna(row["prev_body_pct"]) or pd.isna(row["day_open"]):
+        prev_body_pct = arr["prev_body_pct"][bar_idx]
+        day_open = arr["day_open"][bar_idx]
+        if pd.isna(prev_body_pct) or pd.isna(day_open):
             return None
-        # 시간 윈도우
-        if row["hhmm"] < self.entry_hhmm_start or row["hhmm"] >= self.entry_hhmm_end:
+        hhmm = arr["hhmm"][bar_idx]
+        if hhmm < self.entry_hhmm_start or hhmm >= self.entry_hhmm_end:
             return None
-        # 전일 양봉 몸통
-        if row["prev_body_pct"] < self.min_prev_body_pct:
+        if prev_body_pct < self.min_prev_body_pct:
             return None
-        # 당일 최저점 제한
-        if row["day_low_pct"] < self.max_day_decline_pct:
+        if arr["day_low_pct"][bar_idx] < self.max_day_decline_pct:
             return None
-        # close > day_open (본전 이상)
-        if row["close"] <= row["day_open"]:
+        close = arr["close"][bar_idx]
+        if close <= day_open:
             return None
-        # close > VWAP
-        if pd.isna(row["vwap"]) or row["close"] <= row["vwap"]:
+        vwap = arr["vwap"][bar_idx]
+        if pd.isna(vwap) or close <= vwap:
             return None
         return EntryOrder(
             stock_code=stock_code, priority=1, budget_ratio=self.budget_ratio

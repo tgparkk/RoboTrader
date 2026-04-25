@@ -3,6 +3,7 @@ from typing import Optional
 
 import pandas as pd
 
+from backtests.common.feature_cache import get_arrays
 from backtests.strategies.base import StrategyBase, EntryOrder, ExitOrder
 
 
@@ -86,17 +87,17 @@ class GapDownReversalStrategy(StrategyBase):
     def entry_signal(
         self, features: pd.DataFrame, bar_idx: int, stock_code: str
     ) -> Optional[EntryOrder]:
-        if bar_idx >= len(features):
+        arr = get_arrays(features)
+        if bar_idx >= len(arr["close"]):
             return None
-        row = features.iloc[bar_idx]
-
-        if row["bar_in_day"] > self.entry_window_end_bar:
+        if arr["bar_in_day"][bar_idx] > self.entry_window_end_bar:
             return None
-        if pd.isna(row["gap_pct"]) or row["gap_pct"] > self.gap_threshold_pct:
+        gap_pct = arr["gap_pct"][bar_idx]
+        if pd.isna(gap_pct) or gap_pct > self.gap_threshold_pct:
             return None
-        if pd.isna(row["rebound_pct"]) or row["rebound_pct"] < self.reversal_threshold_pct:
+        rebound_pct = arr["rebound_pct"][bar_idx]
+        if pd.isna(rebound_pct) or rebound_pct < self.reversal_threshold_pct:
             return None
-
         return EntryOrder(
             stock_code=stock_code, priority=1, budget_ratio=self.budget_ratio
         )

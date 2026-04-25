@@ -3,6 +3,7 @@ from typing import Optional
 
 import pandas as pd
 
+from backtests.common.feature_cache import get_arrays
 from backtests.strategies.base import StrategyBase, EntryOrder, ExitOrder
 
 
@@ -66,18 +67,21 @@ class VolumeSurgeStrategy(StrategyBase):
     def entry_signal(
         self, features: pd.DataFrame, bar_idx: int, stock_code: str
     ) -> Optional[EntryOrder]:
-        if bar_idx >= len(features):
+        arr = get_arrays(features)
+        if bar_idx >= len(arr["close"]):
             return None
-        row = features.iloc[bar_idx]
-        if pd.isna(row["vol_ratio"]) or pd.isna(row["prev_close"]):
+        vol_ratio = arr["vol_ratio"][bar_idx]
+        prev_close = arr["prev_close"][bar_idx]
+        if pd.isna(vol_ratio) or pd.isna(prev_close):
             return None
-        if row["bar_in_day"] < self.entry_window_start_bar:
+        bar_in_day = arr["bar_in_day"][bar_idx]
+        if bar_in_day < self.entry_window_start_bar:
             return None
-        if row["bar_in_day"] > self.entry_window_end_bar:
+        if bar_in_day > self.entry_window_end_bar:
             return None
-        if row["vol_ratio"] < self.volume_mult:
+        if vol_ratio < self.volume_mult:
             return None
-        if row["close"] <= row["prev_close"]:
+        if arr["close"][bar_idx] <= prev_close:
             return None
         return EntryOrder(
             stock_code=stock_code, priority=1, budget_ratio=self.budget_ratio
