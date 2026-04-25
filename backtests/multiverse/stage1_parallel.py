@@ -1,15 +1,22 @@
 """Stage 1 멀티프로세싱 래퍼 — N workers × trial 분산.
 
 Pattern:
-  - Initializer 가 minute/daily 데이터를 worker process global 로 로드 (1회)
+  - 메인 프로세스가 데이터 → 임시 pickle 파일로 dump
+  - Worker initializer 가 pickle 파일에서 load (Windows pipe 한계 우회)
   - 각 task = (strategy_class, params, trial_id) — 가벼운 인자
   - ProcessPoolExecutor.map 으로 분산
 
-Windows 호환: initializer 함수 + 작업 함수가 모두 모듈 top-level 에 정의 (picklable).
+Windows 호환: 큰 데이터를 initargs 로 전달하면 pipe 한계 (수십 MB) 초과 시
+"pickle data was truncated" 또는 "OSError: Invalid argument" 발생. 디스크
+경유로 우회.
 """
+import os
+import pickle
 import random
+import tempfile
 import time
 from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Type
 
 import pandas as pd
@@ -29,16 +36,29 @@ _WORKER_FOLD: Optional[Fold] = None
 _WORKER_INITIAL_CAPITAL: float = 100_000_000
 
 
-def _worker_init(
+def _worker_init_inproc(
     minute_by_code: Dict[str, pd.DataFrame],
     daily_by_code: Dict[str, pd.DataFrame],
     fold: Fold,
     initial_capital: float,
 ) -> None:
-    """ProcessPoolExecutor initializer — 데이터를 worker global 에 캐시."""
+    """In-process (sequential / 작은 데이터) initializer — 직접 메모리 전달."""
     global _WORKER_MINUTE, _WORKER_DAILY, _WORKER_FOLD, _WORKER_INITIAL_CAPITAL
     _WORKER_MINUTE = minute_by_code
     _WORKER_DAILY = daily_by_code
+    _WORKER_FOLD = fold
+    _WORKER_INITIAL_CAPITAL = initial_capital
+
+
+def _worker_init_from_pickle(
+    pickle_path: str, fold: Fold, initial_capital: float,
+) -> None:
+    """Worker initializer — pickle 파일에서 데이터 로드 (Windows pipe 우회)."""
+    global _WORKER_MINUTE, _WORKER_DAILY, _WORKER_FOLD, _WORKER_INITIAL_CAPITAL
+    with open(pickle_path, "rb") as f:
+        data = pickle.load(f)
+    _WORKER_MINUTE = data["minute"]
+    _WORKER_DAILY = data["daily"]
     _WORKER_FOLD = fold
     _WORKER_INITIAL_CAPITAL = initial_capital
 
@@ -102,8 +122,8 @@ def run_stage1_parallel(
     ]
 
     if n_workers <= 1:
-        # Sequential fallback
-        _worker_init(minute_by_code, daily_by_code, fold, initial_capital)
+        # Sequential fallback — 메모리 직접
+        _worker_init_inproc(minute_by_code, daily_by_code, fold, initial_capital)
         results: List[TrialResult] = []
         t0 = time.perf_counter()
         for i, task in enumerate(tasks):
@@ -113,17 +133,37 @@ def run_stage1_parallel(
                 print(f"  [{strategy_class.name}] {i+1}/{n_trials} trials ({el:.0f}s)")
         return results
 
-    # Parallel
-    results = []
-    t0 = time.perf_counter()
-    with ProcessPoolExecutor(
-        max_workers=n_workers,
-        initializer=_worker_init,
-        initargs=(minute_by_code, daily_by_code, fold, initial_capital),
-    ) as ex:
-        for i, r in enumerate(ex.map(_worker_run, tasks, chunksize=1)):
-            results.append(r)
-            if (i + 1) % progress_every == 0:
-                el = time.perf_counter() - t0
-                print(f"  [{strategy_class.name}] {i+1}/{n_trials} trials ({el:.0f}s)")
-    return results
+    # Parallel — 디스크 pickle 경유 (Windows pipe 한계 우회)
+    pickle_path = _dump_data_pickle(minute_by_code, daily_by_code)
+    try:
+        results: List[TrialResult] = []
+        t0 = time.perf_counter()
+        with ProcessPoolExecutor(
+            max_workers=n_workers,
+            initializer=_worker_init_from_pickle,
+            initargs=(pickle_path, fold, initial_capital),
+        ) as ex:
+            for i, r in enumerate(ex.map(_worker_run, tasks, chunksize=1)):
+                results.append(r)
+                if (i + 1) % progress_every == 0:
+                    el = time.perf_counter() - t0
+                    print(f"  [{strategy_class.name}] {i+1}/{n_trials} trials ({el:.0f}s)")
+        return results
+    finally:
+        try:
+            os.remove(pickle_path)
+        except OSError:
+            pass
+
+
+def _dump_data_pickle(
+    minute_by_code: Dict[str, pd.DataFrame],
+    daily_by_code: Dict[str, pd.DataFrame],
+) -> str:
+    """데이터를 임시 pickle 파일로 dump. 경로 반환."""
+    fd, path = tempfile.mkstemp(suffix=".pkl", prefix="stage1_data_")
+    os.close(fd)
+    with open(path, "wb") as f:
+        pickle.dump({"minute": minute_by_code, "daily": daily_by_code}, f,
+                    protocol=pickle.HIGHEST_PROTOCOL)
+    return path
