@@ -66,3 +66,15 @@ PnL 계산 → metrics 반환까지 에러 없이 완주하는지 확인.
 - 상한가 따라잡기 (Phase 2B-4, 호가·유동성 제약 큼)
 - Overnight swing 5개 (Phase 2C):
   - 종가매수→시가매도, 52주 신고가 돌파, 낙주 반등, 추세 follow-through, MACD 골든크로스
+
+---
+
+## Phase 2B-4 완료 (2026-04-25)
+
+- [x] 상한가 따라잡기 (Limit-Up Chase)
+
+전체 tests: 146 passed + 2 skipped.
+
+**Classic intraday 10개 완성**: ORB / 갭다운역행 / 갭업추격 / VWAP반등 / BB하단 / RSI과매도 / 거래량급증 / 장중눌림목 / 종가드리프트 / 상한가추격.
+
+**다음 (Phase 2C)**: Overnight swing 5개 (close_to_open, breakout_52w, post_drop_rebound, trend_followthrough, macd_cross).
