@@ -1,0 +1,13 @@
+{
+  "fold_train_start": "20260101",
+  "fold_test_end": "20260331",
+  "n_stocks": 5,
+  "min_days_present": 29,
+  "universe": [
+    "005930",
+    "000660",
+    "005380",
+    "034020",
+    "042700"
+  ]
+}
