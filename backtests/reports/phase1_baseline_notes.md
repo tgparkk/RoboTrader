@@ -78,3 +78,22 @@ PnL 계산 → metrics 반환까지 에러 없이 완주하는지 확인.
 **Classic intraday 10개 완성**: ORB / 갭다운역행 / 갭업추격 / VWAP반등 / BB하단 / RSI과매도 / 거래량급증 / 장중눌림목 / 종가드리프트 / 상한가추격.
 
 **다음 (Phase 2C)**: Overnight swing 5개 (close_to_open, breakout_52w, post_drop_rebound, trend_followthrough, macd_cross).
+
+---
+
+## Phase 2C 완료 (2026-04-25)
+
+- [x] close_to_open (강한 종가 매수, 익일 시가 매도)
+- [x] breakout_52w (52주 신고가 돌파)
+- [x] post_drop_rebound (낙주 반등)
+- [x] trend_followthrough (5일 고점 follow-through)
+- [x] macd_cross (MACD 골든크로스)
+
+**전체 tests**: 177 passed + 2 skipped.
+
+**Classic 카탈로그 16/16 완성** (15 신규 + 1 baseline weighted_score):
+- Classic Intraday 10: ORB / 갭다운역행 / 갭업추격 / VWAP반등 / BB하단 / RSI과매도 / 거래량급증 / 장중눌림목 / 종가드리프트 / 상한가추격
+- Classic Overnight 5: close_to_open / breakout_52w / post_drop_rebound / trend_followthrough / macd_cross
+- Baseline 1: weighted_score_full (Trial 837)
+
+**다음**: Phase 3 (Stage 1 coarse, 200 trials × 전략당) 또는 엔진 속도 최적화.
