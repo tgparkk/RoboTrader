@@ -68,13 +68,21 @@ def test_evaluate_gates_fail_calmar():
 
 def test_evaluate_gates_fail_mdd():
     train = {"calmar": 5.0, "mdd": -0.10, "total_trades": 50, "win_rate": 0.45}
-    # mdd 20% > 15%
+    # mdd 20% > 15% — 5/5 gates required (강화: 2026-04-25), 한 게이트라도 실패면 미통과
     test = {"calmar": 4.0, "mdd": -0.20, "total_trades": 40, "win_rate": 0.45}
     out = evaluate_gates(train, test, test_period_days=42)
     assert out["gates"]["mdd"] is False
-    # 4 게이트 통과 (3+ ok) 이지만 calmar floor 통과해도 mdd 실패는 별개로 카운트만 영향
-    # 4/5 gates ≥ 3 + calmar OK → pass
-    assert out["pass_stage1"] is True
+    # 4/5 gates pass — 강화 후엔 5/5 mandatory 라 미통과
+    assert out["pass_stage1"] is False
+
+
+def test_evaluate_gates_fail_low_trades():
+    """outlier 검증: trades=3 trial 은 통과 못함 (기존 3-of-5 룰에서는 통과했었음)."""
+    train = {"calmar": 5.0, "mdd": -0.001, "total_trades": 50, "win_rate": 1.0}
+    test = {"calmar": 1000.0, "mdd": -0.001, "total_trades": 3, "win_rate": 1.0}
+    out = evaluate_gates(train, test, test_period_days=42)
+    assert out["gates"]["trades"] is False
+    assert out["pass_stage1"] is False
 
 
 def test_summarize_trials_empty():

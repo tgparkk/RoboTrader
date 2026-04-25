@@ -117,7 +117,10 @@ def evaluate_gates(
     }
     n_pass = sum(gates.values())
     gate_calmar_ok = math.isfinite(test_calmar) and test_calmar >= STAGE1_CALMAR_FLOOR
-    pass_stage1 = (n_pass >= 3) and gate_calmar_ok
+    # 강화 (2026-04-25): 5 게이트 모두 통과 + Calmar floor.
+    # 기존 "3 of 5" 는 trades=2~3 outlier 가 통과하는 문제 발생 (post_drop_rebound,
+    # limit_up_chase 의 inflated Calmar). 모든 게이트 mandatory 로 변경.
+    pass_stage1 = (n_pass == 5) and gate_calmar_ok
 
     return {
         "overfit_ratio": overfit_ratio,
