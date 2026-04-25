@@ -1,9 +1,9 @@
-"""Stage 2 Optuna 멀티프로세싱 — sqlite 기반 공유 study + N workers.
+"""Stage 2 Optuna 멀티프로세싱 — PostgreSQL 기반 공유 study + N workers.
 
 Pattern:
-  - 메인: 공유 sqlite study 생성 + 데이터를 임시 pickle 로 dump
-  - 각 worker: pickle 에서 데이터 로드 + sqlite study 에 join + study.optimize(local_n_trials)
-  - SQLite 가 concurrent trial 추가 처리 (WAL 모드)
+  - 메인: PostgreSQL `robotrader_optuna` DB 에 공유 study 생성 + 데이터 임시 pickle dump
+  - 각 worker: pickle 에서 데이터 로드 + PG study 에 join + study.optimize(local_n_trials)
+  - PostgreSQL 이 concurrent trial 추가/조회 처리 (트랜잭션)
   - 시계열 순서 / look-ahead 무관: 각 worker 의 백테스트는 자기 trial 안에서 시간 순서대로 진행
 
 TPE 의 sequential learning 효율은 약간 둔화 (동시 실행 trial 들은 같은 prior 사용)
@@ -27,6 +27,7 @@ from backtests.multiverse.stage2_fine import (
 )
 from backtests.multiverse.universe import select_top_universe
 from backtests.strategies.base import StrategyBase
+from config.settings import optuna_pg_url
 
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -76,7 +77,7 @@ def run_stage2_parallel(
     storage_dir: Path = Path("backtests/reports/stage2"),
     progress_every: int = 50,
 ):
-    """전략 1개에 대해 N workers 가 sqlite study 공유로 Optuna TPE 분산 실행."""
+    """전략 1개에 대해 N workers 가 PostgreSQL study 공유로 Optuna TPE 분산 실행."""
     storage_dir.mkdir(parents=True, exist_ok=True)
     name = strategy_class.name
 
@@ -104,7 +105,7 @@ def run_stage2_parallel(
         pickle.dump({"minute": minute_by_code, "daily": daily_by_code}, f,
                     protocol=pickle.HIGHEST_PROTOCOL)
 
-    storage_url = f"sqlite:///{storage_dir}/{name}.db"
+    storage_url = optuna_pg_url()
     study_name = f"stage2_{name}"
 
     try:

@@ -78,3 +78,17 @@ PG_PORT = 5433
 PG_DATABASE = 'robotrader'
 PG_USER = 'postgres'
 PG_PASSWORD = ''
+
+# RoboTrader_quant DB (전체 종목 일봉: daily_prices 테이블, 매일 15:35 수집)
+PG_DATABASE_QUANT = 'robotrader_quant'
+
+# Optuna study DB (Stage 2 백테스트 hyperparameter 탐색 결과)
+PG_DATABASE_OPTUNA = 'robotrader_optuna'
+
+
+def optuna_pg_url() -> str:
+    """Optuna RDBStorage 용 PostgreSQL URL."""
+    return (
+        f"postgresql+psycopg2://{PG_USER}:{PG_PASSWORD}@"
+        f"{PG_HOST}:{PG_PORT}/{PG_DATABASE_OPTUNA}"
+    )

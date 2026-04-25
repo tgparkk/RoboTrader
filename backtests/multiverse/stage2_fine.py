@@ -3,11 +3,11 @@
 각 trial:
   1. TPE sampler 가 param_space 에서 샘플
   2. 3 fold 각각 train + test 백테스트
-  3. 게이트 5/5 통과 여부 검사 (모든 fold 에서)
-  4. Objective = test Calmar 의 3-fold 평균 (단, 한 fold 라도 게이트 실패 시 -inf)
+  3. aggregate metrics 로 게이트 평가 (5/5 + Calmar≥3 floor)
+  4. Objective = test Calmar 의 3-fold 평균
 
 결과:
-  - Optuna sqlite study: backtests/reports/stage2/<strategy>.db
+  - Optuna study: PostgreSQL `robotrader_optuna` DB (study_name = stage2_<strategy>)
   - trials CSV: backtests/reports/stage2/<strategy>_trials.csv
   - best params JSON: backtests/reports/stage2/<strategy>_best.json
 """
@@ -29,6 +29,7 @@ from backtests.multiverse.stage1_coarse import (
     GATE_WIN_RATE_MIN, GATE_MONTHLY_TRADES_MIN, STAGE1_CALMAR_FLOOR,
 )
 from backtests.strategies.base import StrategyBase
+from config.settings import optuna_pg_url
 
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -289,7 +290,7 @@ def run_stage2_for_strategy(
             for c in universe
         }
 
-    storage = f"sqlite:///{storage_dir}/{name}.db"
+    storage = optuna_pg_url()
     study = optuna.create_study(
         direction="maximize",
         sampler=optuna.samplers.TPESampler(seed=seed),
