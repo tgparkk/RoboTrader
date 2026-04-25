@@ -108,8 +108,14 @@ def evaluate_gates(
     test_months = max(test_period_days / 21.0, 0.001)  # ~21 trading days/month
     monthly_trades = test_trades / test_months
 
+    # overfit gate: train_calmar 유효할 때만 평가. train 무효 (NaN/non-positive) 면 auto-pass
+    # (test 가 자체 Calmar floor 통과해야 해서 free pass 는 아님).
+    if math.isfinite(train_calmar) and train_calmar > 0:
+        g_overfit = math.isfinite(overfit_ratio) and overfit_ratio >= GATE_OVERFIT_MIN
+    else:
+        g_overfit = True
     gates = {
-        "overfit": math.isfinite(overfit_ratio) and overfit_ratio >= GATE_OVERFIT_MIN,
+        "overfit": g_overfit,
         "mdd": abs(test_metrics.get("mdd", 0)) <= GATE_MDD_MAX,
         "trades": test_trades >= GATE_TRADES_MIN,
         "win_rate": test_metrics.get("win_rate", 0) >= GATE_WIN_RATE_MIN,

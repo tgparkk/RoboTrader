@@ -48,3 +48,31 @@ SMOKE_FOLD = Fold(
     test_start="20260301",
     test_end="20260331",
 )
+
+
+# Stage 2 walk-forward 3폴드 (Spec § 3, 분봉 데이터 14개월 가용 기준 조정)
+# 분봉 시작 20250224 → Fold 1 train 시작 2025-03 부터 안전.
+STAGE2_FOLDS = [
+    Fold(
+        name="fold1",
+        train_start="20250301", train_end="20250831",
+        test_start="20250901", test_end="20251031",
+    ),
+    Fold(
+        name="fold2",
+        train_start="20250501", train_end="20251031",
+        test_start="20251101", test_end="20251231",
+    ),
+    Fold(
+        name="fold3",
+        train_start="20250701", train_end="20251231",
+        test_start="20260101", test_end="20260228",
+    ),
+]
+
+
+def stage2_data_range() -> tuple:
+    """모든 fold 를 커버하는 데이터 로드 범위 (minute / daily history)."""
+    starts = [f.train_start for f in STAGE2_FOLDS]
+    ends = [f.test_end for f in STAGE2_FOLDS]
+    return min(starts), max(ends)
