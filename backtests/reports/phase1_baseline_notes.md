@@ -96,4 +96,36 @@ PnL 계산 → metrics 반환까지 에러 없이 완주하는지 확인.
 - Classic Overnight 5: close_to_open / breakout_52w / post_drop_rebound / trend_followthrough / macd_cross
 - Baseline 1: weighted_score_full (Trial 837)
 
-**다음**: Phase 3 (Stage 1 coarse, 200 trials × 전략당) 또는 엔진 속도 최적화.
+**다음**: Phase 3 (Stage 1 coarse, 200 trials × 전략당).
+
+---
+
+## 엔진 속도 최적화 (2026-04-25)
+
+### 진단
+- 30 종목 × 22 일 (257K bars) 합성 데이터 벤치마크
+- cProfile: `features.iloc[bar_idx]` 가 main loop 의 60%+ (15.7s 중 9.7s)
+- 원인: pd.DataFrame `iloc[idx]` 는 새 Series 객체 생성 + Series indexing 누적 오버헤드
+
+### 적용
+- `backtests/common/feature_cache.py` 추가 — DataFrame → dict[col → np.ndarray] 캐시
+- 캐시 위치: `features.attrs["_feature_cache_arrays"]` (pandas 객체 lifetime 보장, GC id 재사용 회피)
+- 15 전략의 entry_signal 모두 변환: `arr = get_arrays(features); arr["col"][bar_idx]`
+
+### 결과 (30 종목 × 22 일 벤치마크)
+| 측정 | 변경 전 | 변경 후 | 속도 |
+|------|---------|---------|------|
+| 전체 합 (15 전략) | 72.0s | 20.6s | **3.5x** |
+| 전략당 평균 | 4.8s | 1.4s | 3.4x |
+| volume_surge | 6.23s | 1.12s | 5.6x |
+| limit_up_chase | 6.58s | 1.33s | 5.0x |
+| post_drop_rebound | 5.71s | 0.95s | 6.0x |
+| macd_cross | 6.52s | 1.38s | 4.7x |
+
+### Phase 3 추정 (200 trials × 15 strategies, 30종목 합성)
+- 변경 전: 4.0h
+- 변경 후: **1.1h** (sequential)
+- + multiprocessing 8-core 병렬화 시 ~10분
+
+### 회귀 검증
+- 177 passed + 2 skipped (변경 전 동일)
