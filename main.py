@@ -47,6 +47,7 @@ class DayTradingBot:
         self.is_running = False
         self.pid_file = Path("bot.pid")
         self._last_eod_liquidation_date = None  # 장마감 일괄청산 실행 일자
+        self._last_paper_morning_exit_date = None  # macd_cross paper morning exit 실행 일자 (Fix B)
         
         # 프로세스 중복 실행 방지
         self._check_duplicate_process()
@@ -381,6 +382,22 @@ class DayTradingBot:
                 
                 current_time = now_kst()
 
+                # 🆕 macd_cross paper morning exit (D2 09:01~05) — backtest exit_signal 동등
+                # Fix B: backtest 의 exit 은 D2 첫 분봉에서 fire 하므로 paper 도 09:01~05
+                # 에서 1회 트리거. EOD 블록의 동일 호출이 안전망 (중복 방지는 dup-sell guard).
+                try:
+                    from config.strategy_settings import StrategySettings as _SS_ME
+                    _hhmm = current_time.hour * 100 + current_time.minute
+                    if (
+                        _SS_ME.PAPER_STRATEGY == 'macd_cross'
+                        and 901 <= _hhmm <= 905
+                        and self._last_paper_morning_exit_date != current_time.date()
+                    ):
+                        await self._macd_cross_paper_exit_task()
+                        self._last_paper_morning_exit_date = current_time.date()
+                except Exception as e:
+                    self.logger.error(f"❌ macd_cross morning exit 트리거 실패: {e}")
+
                 # 🚨 장마감 시간 시장가 일괄매도 체크 (한 번만 실행) - 동적 시간 적용
                 if MarketHours.is_eod_liquidation_time('KRX', current_time):
                     today_date = current_time.date()
@@ -566,8 +583,13 @@ class DayTradingBot:
         - decision_engine.macd_cross_strategy 의 캐시된 universe 만 평가
         - 시그널 hit 시 db_manager.save_virtual_buy 직접 호출 (VTM 우회)
         - 라이브 weighted_score 흐름과 완전 분리 — trading_manager 상태 불변
+        - 백테스트 마찰 적용: 슬리피지 + 매수 수수료 + 거래량/가격제한 feasibility
+          (backtests/common/execution_model.py 와 동등)
         """
         from config.strategy_settings import StrategySettings
+        from backtests.common.execution_model import (
+            BUY_COMMISSION, SLIPPAGE_ONE_WAY, ExecutionModel,
+        )
 
         if (
             StrategySettings.PAPER_STRATEGY != 'macd_cross'
@@ -600,20 +622,47 @@ class DayTradingBot:
                 price_info = self.intraday_manager.get_cached_current_price(stock_code)
                 if not price_info:
                     continue
-                buy_price = float(price_info.get('current_price', 0))
-                if buy_price <= 0:
+                current_price = float(price_info.get('current_price', 0))
+                if current_price <= 0:
                     continue
+
+                # Fix C: 가격제한 (상한가 buffer) 체크
+                prev_close, prev_trading_value = strategy.get_daily_meta(stock_code)
+                if prev_close and not ExecutionModel.is_price_limit_safe(
+                    current_price, prev_close, side="buy"
+                ):
+                    self.logger.debug(
+                        f"[macd_cross] {stock_code} 상한가 buffer 위반 → skip"
+                    )
+                    continue
+
+                # Fix A: 매수 슬리피지 + 수수료 적용 (backtest 동등)
+                #   buy_eff = current_price * (1 + SLIPPAGE) * (1 + BUY_COMMISSION)
+                #   pnl = (sell_eff - buy_eff) * qty 가 backtest proceed-cost 와 일치
+                buy_fill = current_price * (1 + SLIPPAGE_ONE_WAY)
+                buy_price_effective = buy_fill * (1 + BUY_COMMISSION)
 
                 ts = self.trading_manager.get_trading_stock(stock_code)
                 stock_name = ts.stock_name if ts else f"MC_{stock_code}"
 
                 budget = cfg_mc.VIRTUAL_CAPITAL * cfg_mc.BUY_BUDGET_RATIO
-                quantity = max(1, int(budget / buy_price))
+                quantity = max(1, int(budget / buy_price_effective))
+
+                # Fix C: 거래량 feasibility (order ≤ 2% 일거래대금)
+                order_value = buy_price_effective * quantity
+                if prev_trading_value and not ExecutionModel.is_volume_feasible(
+                    order_value, prev_trading_value
+                ):
+                    self.logger.debug(
+                        f"[macd_cross] {stock_code} 거래량 한도 위반 "
+                        f"(주문 {order_value:,.0f} > {prev_trading_value*0.02:,.0f}) → skip"
+                    )
+                    continue
 
                 buy_record_id = self.db_manager.save_virtual_buy(
                     stock_code=stock_code,
                     stock_name=stock_name,
-                    price=buy_price,
+                    price=buy_price_effective,
                     quantity=quantity,
                     strategy='macd_cross',
                     reason=f"macd_cross_signal_hhmm{hhmm}",
@@ -621,7 +670,7 @@ class DayTradingBot:
                 if buy_record_id:
                     self.logger.info(
                         f"👻 [macd_cross] 가상 매수: {stock_code} {quantity}주 "
-                        f"@{buy_price:,.0f} (id={buy_record_id})"
+                        f"@{buy_price_effective:,.0f} (mid={current_price:,.0f}, id={buy_record_id})"
                     )
                 else:
                     self.logger.warning(
@@ -1355,7 +1404,7 @@ class DayTradingBot:
                 try:
                     cur = conn.cursor()
                     cur.execute(
-                        """SELECT TO_CHAR(date, 'YYYYMMDD') AS trade_date, close
+                        """SELECT TO_CHAR(date, 'YYYYMMDD') AS trade_date, close, trading_value
                            FROM daily_prices
                            WHERE stock_code = %s AND date < %s AND close IS NOT NULL
                            ORDER BY date DESC
@@ -1366,11 +1415,15 @@ class DayTradingBot:
                     cur.close()
                     if not rows:
                         continue
-                    df = pd.DataFrame(rows, columns=["trade_date", "close"])
+                    df = pd.DataFrame(rows, columns=["trade_date", "close", "trading_value"])
                     df["close"] = df["close"].astype(float)
+                    # 가장 최근 거래일 거래대금 (DESC 정렬이라 첫 행)
+                    prev_tv = float(rows[0][2]) if rows[0][2] is not None else 0.0
                     # 오름차순 정렬 (가장 오래된 거래일이 첫 행)
                     df = df.iloc[::-1].reset_index(drop=True)
-                    strategy.set_daily_history(code, df, today_yyyymmdd)
+                    strategy.set_daily_history(
+                        code, df, today_yyyymmdd, prev_trading_value=prev_tv
+                    )
                     cached += 1
                 except Exception as e:
                     self.logger.debug(f"[macd_cross] daily prep {code}: {e}")
@@ -1630,14 +1683,22 @@ class DayTradingBot:
             self.logger.error(f"❌ 장마감 일괄청산 오류: {e}")
     
     async def _macd_cross_paper_exit_task(self):
-        """macd_cross 가상 포지션 hold_days=2 만료 청산 (15:00 직후 1회).
+        """macd_cross 가상 포지션 hold_days=2 만료 청산.
 
-        EOD 직후에 호출. 매수일로부터 거래일 기준 2일 경과한 가상 포지션을
-        현재가로 가상 청산한다. SL/TP 없음 (G1: 백테스트 100% 재현).
+        Fix B (2026-04-26): 청산 시점을 D2 장 시작 직후 (~09:01~05) 로 이동 — backtest
+        의 exit_signal 이 D2 첫 분봉에서 fire 하는 것과 동등. EOD (15:00) 후에도
+        한 번 더 호출되어 morning 트리거 실패 대비 안전망. save_virtual_sell 의
+        dup-prevention (buy_record_id × action='SELL' 중복 차단) 으로 idempotent.
+
+        Fix A 적용: 백테스트 마찰 동등 — sell_eff = current * (1 - SLIPPAGE) * (1 - SELL_COMMISSION)
+        Fix C 적용: 하한가 buffer 위반 종목은 skip
         """
         try:
             from config.strategy_settings import StrategySettings
             from datetime import datetime
+            from backtests.common.execution_model import (
+                SELL_COMMISSION, SLIPPAGE_ONE_WAY, ExecutionModel,
+            )
 
             cfg = StrategySettings.MacdCross
             df = self.db_manager.get_virtual_open_positions()
@@ -1647,6 +1708,7 @@ class DayTradingBot:
             if df_mc.empty:
                 return
 
+            strategy = self.decision_engine.macd_cross_strategy
             today = now_kst().date()
             for _, row in df_mc.iterrows():
                 buy_time = row['buy_time']
@@ -1663,19 +1725,37 @@ class DayTradingBot:
                 buy_record_id = int(row['id'])
                 quantity = int(row['quantity'])
 
-                # 종가 가져오기 (intraday_manager 캐시)
+                # 현재가 (intraday_manager 캐시 — 09:01~05 morning 트리거 시점에 활성)
                 price_info = self.intraday_manager.get_cached_current_price(stock_code)
                 if not price_info:
                     self.logger.warning(f"[macd_cross.exit] {stock_code} 가격 없음 → skip")
                     continue
-                sell_price = float(price_info.get('current_price', 0))
-                if sell_price <= 0:
+                current_price = float(price_info.get('current_price', 0))
+                if current_price <= 0:
                     continue
+
+                # Fix C: 하한가 buffer 체크 (sell side)
+                prev_close, _ = (
+                    strategy.get_daily_meta(stock_code) if strategy is not None else (None, None)
+                )
+                if prev_close and not ExecutionModel.is_price_limit_safe(
+                    current_price, prev_close, side="sell"
+                ):
+                    self.logger.debug(
+                        f"[macd_cross.exit] {stock_code} 하한가 buffer 위반 → skip (다음 사이클 재시도)"
+                    )
+                    continue
+
+                # Fix A: 매도 슬리피지 + 수수료/세금 적용 (backtest 동등)
+                #   sell_eff = current * (1 - SLIPPAGE) * (1 - SELL_COMMISSION)
+                #   pnl = (sell_eff - buy_eff) * qty 가 backtest proceed-cost 와 일치
+                sell_fill = current_price * (1 - SLIPPAGE_ONE_WAY)
+                sell_price_effective = sell_fill * (1 - SELL_COMMISSION)
 
                 ok = self.db_manager.save_virtual_sell(
                     stock_code=stock_code,
                     stock_name=stock_name,
-                    price=sell_price,
+                    price=sell_price_effective,
                     quantity=quantity,
                     strategy='macd_cross',
                     reason=f"hold_limit_days={days_held}",
@@ -1684,7 +1764,7 @@ class DayTradingBot:
                 if ok:
                     self.logger.info(
                         f"👻 [macd_cross] 가상 청산: {stock_code} {quantity}주 "
-                        f"@{sell_price:,.0f} (hold {days_held}d)"
+                        f"@{sell_price_effective:,.0f} (mid={current_price:,.0f}, hold {days_held}d)"
                     )
                 else:
                     self.logger.warning(
