@@ -1,4 +1,8 @@
-"""macd_cross — Daily MACD 히스토그램 음→양 골든크로스, 2일 홀드."""
+"""macd_cross — Daily MACD 히스토그램 음→양 골든크로스, 2일 홀드.
+
+시그널 식은 core.strategies.macd_cross_signal 모듈에서 단일 정의.
+라이브와 1:1 동등 보장 (Spec §4.4).
+"""
 from typing import Optional
 
 import pandas as pd
@@ -6,6 +10,11 @@ import pandas as pd
 from backtests.common.feature_cache import get_arrays
 from backtests.common.trading_day import count_trading_days_between
 from backtests.strategies.base import StrategyBase, EntryOrder, ExitOrder
+from core.strategies.macd_cross_signal import (
+    compute_macd_histogram_series,
+    is_macd_golden_cross,
+    is_in_entry_window,
+)
 
 
 class MACDCrossStrategy(StrategyBase):
@@ -54,15 +63,13 @@ class MACDCrossStrategy(StrategyBase):
         return df[["prev_hist", "prev_prev_hist", "hhmm"]]
 
     def _build_macd_maps(self, df_daily: pd.DataFrame):
+        """공유 모듈 호출 + shift(1)/shift(2) 적용해 prev/prev_prev map 생성."""
         if df_daily is None or df_daily.empty:
             return {}, {}
         d = df_daily.sort_values("trade_date").copy()
-        close = d["close"].astype(float)
-        ema_fast = close.ewm(span=self.fast_period, adjust=False).mean()
-        ema_slow = close.ewm(span=self.slow_period, adjust=False).mean()
-        macd = ema_fast - ema_slow
-        signal = macd.ewm(span=self.signal_period, adjust=False).mean()
-        hist = macd - signal
+        hist = compute_macd_histogram_series(
+            d, fast=self.fast_period, slow=self.slow_period, signal=self.signal_period
+        )
         prev_hist = hist.shift(1)
         prev_prev_hist = hist.shift(2)
         return (
@@ -78,12 +85,10 @@ class MACDCrossStrategy(StrategyBase):
             return None
         prev_hist = arr["prev_hist"][bar_idx]
         prev_prev_hist = arr["prev_prev_hist"][bar_idx]
-        if pd.isna(prev_hist) or pd.isna(prev_prev_hist):
-            return None
         hhmm = arr["hhmm"][bar_idx]
-        if not (self.entry_hhmm_min <= hhmm <= self.entry_hhmm_max):
+        if not is_in_entry_window(hhmm, self.entry_hhmm_min, self.entry_hhmm_max):
             return None
-        if not (prev_prev_hist < 0 and prev_hist >= 0):
+        if not is_macd_golden_cross(prev_hist, prev_prev_hist):
             return None
         return EntryOrder(
             stock_code=stock_code, priority=1, budget_ratio=self.budget_ratio
