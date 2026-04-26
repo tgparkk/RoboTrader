@@ -386,6 +386,13 @@ class DayTradingBot:
                     today_date = current_time.date()
                     if self._last_eod_liquidation_date != today_date:
                         await self._execute_end_of_day_liquidation()
+                        # macd_cross paper 만료 청산 (EOD 직후 1회)
+                        try:
+                            from config.strategy_settings import StrategySettings
+                            if StrategySettings.PAPER_STRATEGY == 'macd_cross':
+                                await self._macd_cross_paper_exit_task()
+                        except Exception as e:
+                            self.logger.error(f"❌ macd_cross paper exit 트리거 실패: {e}")
                         self._last_eod_liquidation_date = today_date
 
                     # 청산 시간 이후에는 매매 판단 건너뛰고 모니터링만 계속
@@ -493,6 +500,17 @@ class DayTradingBot:
         except Exception as e:
             self.logger.debug(f"_count_open_paper_positions 실패: {e}")
             return 0
+
+    def _get_macd_cross_paper_open_codes(self) -> set:
+        """현재 미체결 macd_cross 가상 포지션의 종목 코드 집합 (EOD 격리용)."""
+        try:
+            df = self.db_manager.get_virtual_open_positions()
+            if df is None or df.empty:
+                return set()
+            return set(df.loc[df['strategy'] == 'macd_cross', 'stock_code'].tolist())
+        except Exception as e:
+            self.logger.debug(f"_get_macd_cross_paper_open_codes 실패: {e}")
+            return set()
 
     def _has_macd_cross_buy_today(self, stock_code: str) -> bool:
         """오늘 macd_cross 로 이미 진입했는지. DB 오류 시 보수적으로 True (차단)."""
@@ -1567,6 +1585,71 @@ class DayTradingBot:
         except Exception as e:
             self.logger.error(f"❌ 장마감 일괄청산 오류: {e}")
     
+    async def _macd_cross_paper_exit_task(self):
+        """macd_cross 가상 포지션 hold_days=2 만료 청산 (15:00 직후 1회).
+
+        EOD 직후에 호출. 매수일로부터 거래일 기준 2일 경과한 가상 포지션을
+        현재가로 가상 청산한다. SL/TP 없음 (G1: 백테스트 100% 재현).
+        """
+        try:
+            from config.strategy_settings import StrategySettings
+            from datetime import datetime
+            import numpy as np
+
+            cfg = StrategySettings.MacdCross
+            df = self.db_manager.get_virtual_open_positions()
+            if df is None or df.empty:
+                return
+            df_mc = df[df['strategy'] == 'macd_cross']
+            if df_mc.empty:
+                return
+
+            today = now_kst().date()
+            for _, row in df_mc.iterrows():
+                buy_time = row['buy_time']
+                if isinstance(buy_time, str):
+                    buy_dt = datetime.strptime(buy_time, "%Y-%m-%d %H:%M:%S")
+                else:
+                    buy_dt = buy_time
+                days_held = int(np.busday_count(buy_dt.date(), today))
+                if days_held < cfg.HOLD_DAYS:
+                    continue
+
+                stock_code = row['stock_code']
+                stock_name = row['stock_name']
+                buy_record_id = int(row['id'])
+                quantity = int(row['quantity'])
+
+                # 종가 가져오기 (intraday_manager 캐시)
+                price_info = self.intraday_manager.get_cached_current_price(stock_code)
+                if not price_info:
+                    self.logger.warning(f"[macd_cross.exit] {stock_code} 가격 없음 → skip")
+                    continue
+                sell_price = float(price_info.get('current_price', 0))
+                if sell_price <= 0:
+                    continue
+
+                ok = self.db_manager.save_virtual_sell(
+                    stock_code=stock_code,
+                    stock_name=stock_name,
+                    price=sell_price,
+                    quantity=quantity,
+                    strategy='macd_cross',
+                    reason=f"hold_limit_days={days_held}",
+                    buy_record_id=buy_record_id,
+                )
+                if ok:
+                    self.logger.info(
+                        f"👻 [macd_cross] 가상 청산: {stock_code} {quantity}주 "
+                        f"@{sell_price:,.0f} (hold {days_held}d)"
+                    )
+                else:
+                    self.logger.warning(
+                        f"⚠️ [macd_cross] 가상 청산 DB 저장 실패: {stock_code}"
+                    )
+        except Exception as e:
+            self.logger.error(f"❌ macd_cross paper exit 실패: {e}")
+
     async def _execute_end_of_day_liquidation(self):
         """장마감 시간 모든 보유 종목 시장가 일괄매도 (동적 시간 적용)
 
@@ -1628,6 +1711,32 @@ class DayTradingBot:
                     all_liquidation_targets = to_close
                 except Exception as e:
                     self.logger.warning(f"⚠️ weighted_score overnight 필터 실패: {e} — 전체 청산")
+
+            # 🆕 macd_cross 페이퍼 포지션은 EOD 강제청산에서 격리 (Spec §5)
+            # paper 가상 포지션은 hold_days=2 만료 시 별도 경로로 청산되며
+            # 라이브 EOD 흐름에 들어오지 않아야 한다. trading_manager 에 가상매매
+            # 포지션이 등록되지 않아 자연 격리되지만, 방어적으로 필터링.
+            try:
+                from config.strategy_settings import StrategySettings
+                if (
+                    StrategySettings.PAPER_STRATEGY == 'macd_cross'
+                    and all_liquidation_targets
+                ):
+                    paper_codes = self._get_macd_cross_paper_open_codes()
+                    if paper_codes:
+                        before = len(all_liquidation_targets)
+                        all_liquidation_targets = [
+                            ts for ts in all_liquidation_targets
+                            if ts.stock_code not in paper_codes
+                        ]
+                        excluded = before - len(all_liquidation_targets)
+                        if excluded > 0:
+                            self.logger.info(
+                                f"🌙 macd_cross paper 포지션 EOD 격리: {excluded}종목 "
+                                f"(hold_days=2 만료 전까지 유지)"
+                            )
+            except Exception as e:
+                self.logger.warning(f"⚠️ macd_cross EOD 격리 실패: {e} — 정상 청산 진행")
 
             if not all_liquidation_targets:
                 self.logger.info(f"📦 {eod_hour}:{eod_minute:02d} 시장가 매도: 청산 대상 포지션 없음")
