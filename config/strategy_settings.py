@@ -364,6 +364,13 @@ def validate_settings():
             f"사용 가능: {valid_strategies}"
         )
 
+    valid_paper_strategies = [None, 'macd_cross']
+    if StrategySettings.PAPER_STRATEGY not in valid_paper_strategies:
+        raise ValueError(
+            f"잘못된 페이퍼 전략: {StrategySettings.PAPER_STRATEGY}. "
+            f"사용 가능: {valid_paper_strategies}"
+        )
+
     if StrategySettings.ACTIVE_STRATEGY == 'closing_trade':
         ct = StrategySettings.ClosingTrade
         if ct.ENTRY_HHMM_START >= ct.ENTRY_HHMM_END:
