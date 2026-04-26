@@ -539,7 +539,17 @@ class DayTradingBot:
         """KRX 실거래일 기준 buy_date (exclusive) ~ today_date (inclusive) 영업일 수.
 
         backtests.common.trading_day.count_trading_days_between 와 동일 의미.
-        np.busday_count 대비 KRX 휴일 (Lunar New Year / Chuseok / Children's Day 등) 인식.
+
+        구현 노트 (2026-04-26 fix — off-by-one 제거):
+          daily_candles 는 EOD 후 post_market_data_saver 에서 갱신되므로
+          today (D2) row 가 09:01 시점에는 아직 없다. 단순히
+          `WHERE date <= today` 로 카운트하면 D2 09:01 morning trigger 에서
+          백테스트 대비 1일 적게 카운트되어 exit 1일 지연 (체계적 버그).
+
+          해결: 과거 거래일은 daily_candles (어제까지) 에서 count, 오늘 영업일
+          여부는 minute_candles (실시간 09:00 부터 갱신) 에 today row 존재
+          여부로 판정. 미래 데이터 미참조 — backtest 의 분봉 trade_date
+          nunique 와 의미 1:1 동등.
 
         Args:
             buy_date: 매수일 (date 객체).
@@ -548,14 +558,28 @@ class DayTradingBot:
             거래일 수 (int). DB 오류 시 보수적으로 0 (만료 안 함).
         """
         try:
+            from datetime import timedelta
             buy_str = buy_date.strftime('%Y%m%d')
+            yesterday_str = (today_date - timedelta(days=1)).strftime('%Y%m%d')
             today_str = today_date.strftime('%Y%m%d')
-            row = self.db_manager._fetchone(
+
+            # (a) 어제까지 EOD 마감된 과거 거래일 수
+            row_past = self.db_manager._fetchone(
                 """SELECT COUNT(DISTINCT stck_bsop_date) FROM daily_candles
                    WHERE stck_bsop_date > %s AND stck_bsop_date <= %s""",
-                (buy_str, today_str),
+                (buy_str, yesterday_str),
             )
-            return int(row[0]) if row else 0
+            past_count = int(row_past[0]) if row_past else 0
+
+            # (b) today 가 영업일이면 +1 — minute_candles 에 today row 가 있으면 영업일.
+            #     09:00 부터 분봉 수집되므로 휴일에는 row 가 없고 영업일에는 있음.
+            row_today = self.db_manager._fetchone(
+                "SELECT 1 FROM minute_candles WHERE trade_date = %s LIMIT 1",
+                (today_str,),
+            )
+            today_count = 1 if row_today else 0
+
+            return past_count + today_count
         except Exception as e:
             self.logger.warning(f"_count_krx_trading_days_between DB 오류 → 0 반환: {e}")
             return 0
@@ -645,8 +669,18 @@ class DayTradingBot:
                 ts = self.trading_manager.get_trading_stock(stock_code)
                 stock_name = ts.stock_name if ts else f"MC_{stock_code}"
 
+                # Budget cap (BUY_BUDGET_RATIO=0.20 hard ceiling 보장).
+                # 기존 max(1, ...) 는 buy_price 가 budget 보다 큰 고가주 (ETF·일부 종목)
+                # 에서 quantity=1 로 fix 되며 order_value 가 budget 초과 → KPI 의
+                # `return = pnl / VIRTUAL_CAPITAL` 계산 왜곡. int() floor 후 0 이면 skip.
                 budget = cfg_mc.VIRTUAL_CAPITAL * cfg_mc.BUY_BUDGET_RATIO
-                quantity = max(1, int(budget / buy_price_effective))
+                quantity = int(budget / buy_price_effective)
+                if quantity <= 0:
+                    self.logger.debug(
+                        f"[macd_cross] {stock_code} buy_price {buy_price_effective:,.0f} > "
+                        f"budget {budget:,.0f} → quantity 0 → skip"
+                    )
+                    continue
 
                 # Fix C: 거래량 feasibility (order ≤ 2% 일거래대금)
                 order_value = buy_price_effective * quantity
