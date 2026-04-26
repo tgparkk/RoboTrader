@@ -86,3 +86,30 @@ def test_safety_stop_consec_losses():
     k = MacdCrossKpi(virtual_capital=10_000_000)
     assert k.should_safety_stop({"return": -0.02, "max_consec_losses": 5}) is True
     assert k.should_safety_stop({"return": -0.02, "max_consec_losses": 4}) is False
+
+
+def test_all_losses_top1_share_is_zero():
+    """전 trade 음수 → win_rate 0, top1_share 0 (positives 비어있음)."""
+    k = MacdCrossKpi(virtual_capital=10_000_000)
+    m = k.compute(_trades([-100, -200, -50]))
+    assert m["win_rate"] == 0.0
+    assert m["top1_share"] == 0.0
+    assert m["max_consec_losses"] == 3
+
+
+def test_single_winning_trade():
+    """단일 양수 trade → top1_share = 1.0, max_consec_losses = 0."""
+    k = MacdCrossKpi(virtual_capital=10_000_000)
+    m = k.compute(_trades([100_000]))
+    assert m["trade_count"] == 1
+    assert m["top1_share"] == pytest.approx(1.0)
+    assert m["max_consec_losses"] == 0
+
+
+def test_top1_share_clamps_to_1_on_negative_net():
+    """net 음수 시 top1_share = 1.0 (fragility 보수 표시)."""
+    k = MacdCrossKpi(virtual_capital=10_000_000)
+    # +100 + (-300) = -200; positives.max()=100, but net negative → 1.0
+    m = k.compute(_trades([100, -300]))
+    assert m["return"] < 0
+    assert m["top1_share"] == 1.0

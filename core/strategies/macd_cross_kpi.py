@@ -69,11 +69,17 @@ class MacdCrossKpi:
         win_rate = float((pnl > 0).sum() / n)
 
         # top1 share: 최대 양수 trade 의 net 점유율
+        # net 이 음수/0 인 구간에서는 metric 의미가 없음 → 1.0 으로 보수적 표시
+        # (다른 게이트 [return≥0, calmar≥30] 가 이미 fail 하므로 영향 없음, 그러나 metric 가
+        #  양수/음수 혼란을 막아야 KPI 보고가 신뢰 가능).
         positives = pnl[pnl > 0]
-        if len(positives) > 0 and abs(net) > 1e-9:
-            top1_share = float(positives.max() / net)
-        else:
+        if len(positives) == 0:
             top1_share = 0.0
+        elif net <= 1e-9:
+            # 음수 net 또는 거의 0: 의미 없는 분모 → 1.0 (가장 의존적인 상태로 보수)
+            top1_share = 1.0
+        else:
+            top1_share = min(float(positives.max() / net), 1.0)
 
         # max consecutive losses
         max_streak = 0
