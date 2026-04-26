@@ -46,3 +46,40 @@ def test_check_entry_false_when_no_cross():
     s = MacdCrossStrategy()
     s._cache["005930"] = (-0.1, -0.3)  # 음→음
     assert s.check_entry("005930", hhmm=1430) is False
+
+
+def test_set_daily_history_caches_meta_for_feasibility():
+    """set_daily_history(prev_trading_value=...) 가 meta cache 도 채운다 (Fix C)."""
+    s = MacdCrossStrategy(fast=14, slow=34, signal=12)
+    closes = [10000 + i * 10 for i in range(60)]
+    s.set_daily_history(
+        "005930", _daily_df(closes), today_yyyymmdd="20250401",
+        prev_trading_value=1_500_000_000,
+    )
+    prev_close, prev_tv = s.get_daily_meta("005930")
+    assert prev_close == pytest.approx(closes[-1])  # 정렬 후 최신 close
+    assert prev_tv == pytest.approx(1_500_000_000)
+
+
+def test_get_daily_meta_returns_none_for_uncached():
+    s = MacdCrossStrategy()
+    assert s.get_daily_meta("999999") == (None, None)
+
+
+def test_set_daily_history_clears_meta_on_date_change():
+    """today_yyyymmdd 바뀌면 _meta 도 함께 초기화된다."""
+    s = MacdCrossStrategy(fast=14, slow=34, signal=12)
+    closes = [10000 + i * 10 for i in range(60)]
+    s.set_daily_history(
+        "005930", _daily_df(closes), today_yyyymmdd="20250401",
+        prev_trading_value=2_000_000_000,
+    )
+    assert s.get_daily_meta("005930") != (None, None)
+
+    # 다음날 다른 종목 prep — 005930 의 meta 도 사라져야 함
+    s.set_daily_history(
+        "000660", _daily_df(closes), today_yyyymmdd="20250402",
+        prev_trading_value=1_000_000_000,
+    )
+    assert s.get_daily_meta("005930") == (None, None)
+    assert s.get_daily_meta("000660") != (None, None)

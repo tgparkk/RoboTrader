@@ -40,19 +40,27 @@ class MacdCrossStrategy:
         self.logger = logger
         # {stock_code: (prev_hist, prev_prev_hist)} — 매일 pre_market 에서 갱신
         self._cache: Dict[str, Tuple[float, float]] = {}
+        # {stock_code: (prev_close, prev_trading_value)} — feasibility 체크용 (Fix C)
+        self._meta: Dict[str, Tuple[float, float]] = {}
         self._cache_date: Optional[str] = None
 
     def set_daily_history(
-        self, stock_code: str, df_daily: pd.DataFrame, today_yyyymmdd: str
+        self,
+        stock_code: str,
+        df_daily: pd.DataFrame,
+        today_yyyymmdd: str,
+        prev_trading_value: Optional[float] = None,
     ) -> None:
         """종목별 daily 시퀀스 주입 → MACD hist 계산 → prev/prev_prev 캐시.
 
         Args:
             df_daily: 오늘 이전 거래일까지의 일봉 (trade_date asc, close 컬럼).
             today_yyyymmdd: 진입 대상 거래일 (YYYYMMDD). 캐시 invalidation 키.
+            prev_trading_value: 전일 거래대금 (원). volume feasibility 체크용.
         """
         if self._cache_date != today_yyyymmdd:
             self._cache.clear()
+            self._meta.clear()
             self._cache_date = today_yyyymmdd
 
         if df_daily is None or df_daily.empty or len(df_daily) < self.slow + self.signal:
@@ -67,8 +75,21 @@ class MacdCrossStrategy:
         prev_prev_hist = float(hist.iloc[-2]) # 그 직전 거래일
         self._cache[stock_code] = (prev_hist, prev_prev_hist)
 
+        # 메타 캐시 (Fix C — feasibility check)
+        try:
+            d_sorted = df_daily.sort_values("trade_date")
+            prev_close = float(d_sorted["close"].iloc[-1])
+            tv = float(prev_trading_value) if prev_trading_value is not None else 0.0
+            self._meta[stock_code] = (prev_close, tv)
+        except Exception:
+            pass
+
     def get_cached_hist(self, stock_code: str) -> Tuple[Optional[float], Optional[float]]:
         return self._cache.get(stock_code, (None, None))
+
+    def get_daily_meta(self, stock_code: str) -> Tuple[Optional[float], Optional[float]]:
+        """(prev_close, prev_trading_value) 반환. feasibility check 용."""
+        return self._meta.get(stock_code, (None, None))
 
     def check_entry(self, stock_code: str, hhmm: int) -> bool:
         """진입 판정. 캐시된 hist + 시간대 + 골든크로스 충족 시 True."""
