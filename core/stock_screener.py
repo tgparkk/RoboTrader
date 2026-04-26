@@ -734,6 +734,11 @@ class StockScreener:
             cur.close()
             conn.close()
 
+            # 의도된 sibling 차이 (Spec §G1: 백테스트 100% 재현):
+            #   - sibling 의 `_added_stocks` 중복 가드 / 우선주 필터(`stock_code[-1]=='5'`)
+            #     는 backtest macd_cross universe 정의에 없으므로 적용 안 함.
+            #   - 가드 inherit 시 paper universe 가 weighted_score 가 등록한 stocks 만큼
+            #     축소되어 OOS 재현 검증 불가. 페이퍼는 독립 universe.
             for stock_code, open_p, close_p, trading_value in rows:
                 if not (min_price <= float(close_p or 0) <= max_price):
                     continue
