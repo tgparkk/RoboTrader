@@ -393,6 +393,12 @@ class DayTradingBot:
                                 await self._macd_cross_paper_exit_task()
                         except Exception as e:
                             self.logger.error(f"❌ macd_cross paper exit 트리거 실패: {e}")
+                        # macd_cross paper 일일 보고 + safety stop 체크 (Task 11)
+                        try:
+                            if StrategySettings.PAPER_STRATEGY == 'macd_cross':
+                                await self._macd_cross_paper_daily_report()
+                        except Exception as e:
+                            self.logger.error(f"❌ macd_cross 일일 보고 트리거 실패: {e}")
                         self._last_eod_liquidation_date = today_date
 
                     # 청산 시간 이후에는 매매 판단 건너뛰고 모니터링만 계속
@@ -1673,6 +1679,63 @@ class DayTradingBot:
                     )
         except Exception as e:
             self.logger.error(f"❌ macd_cross paper exit 실패: {e}")
+
+    async def _macd_cross_paper_daily_report(self):
+        """macd_cross 페이퍼 일일 KPI 집계 + 텔레그램 알림 + safety stop 체크.
+
+        EOD 직후 (paper exit 끝난 다음) 1회 호출. KPI 계산은 KPI 모듈
+        (core.strategies.macd_cross_kpi.MacdCrossKpi) 에 위임.
+        """
+        try:
+            from config.strategy_settings import StrategySettings
+            from core.strategies.macd_cross_kpi import MacdCrossKpi
+
+            cfg = StrategySettings.MacdCross
+            kpi = MacdCrossKpi(virtual_capital=cfg.VIRTUAL_CAPITAL)
+
+            loop = asyncio.get_running_loop()
+            df = await loop.run_in_executor(
+                None,
+                lambda: self.db_manager.get_virtual_paired_trades(strategy='macd_cross'),
+            )
+
+            metrics = kpi.compute(df) if df is not None else kpi.compute(pd.DataFrame())
+            gates = kpi.evaluate_gates(metrics)
+            safety = kpi.should_safety_stop(metrics)
+
+            target_trades = 30  # paper 종료 조건
+            progress_pct = (metrics['trade_count'] / target_trades * 100) if target_trades else 0
+
+            lines = [
+                "📊 macd_cross 페이퍼 일일 보고",
+                f"진행: {metrics['trade_count']} trades / {progress_pct:.0f}% (목표 {target_trades})",
+                f"return: {metrics['return']*100:+.2f}% | MDD: {metrics['mdd']*100:+.2f}% | win: {metrics['win_rate']*100:.1f}%",
+                f"Calmar: {metrics['calmar']:.1f} | top1: {metrics['top1_share']*100:.1f}% | streak: {metrics['max_consec_losses']}",
+                "—",
+                f"게이트: {sum(1 for g in gates['gates'].values() if g['pass'])}/6 통과",
+            ]
+            for k, g in gates["gates"].items():
+                mark = "✓" if g["pass"] else "✗"
+                # value 포맷: 비율은 %, 정수는 그대로
+                if k in ('return', 'mdd', 'win_rate', 'top1_share'):
+                    val_str = f"{g['value']*100:.2f}%"
+                elif k == 'calmar':
+                    val_str = f"{g['value']:.1f}"
+                else:
+                    val_str = str(g['value'])
+                lines.append(f"  {mark} {g['label']} → {val_str}")
+            if safety:
+                lines.append("⚠️ SAFETY STOP 충족 — paper 즉시 중단 권고. PAPER_STRATEGY=None 으로 설정.")
+
+            msg = "\n".join(lines)
+            if self.telegram is not None:
+                try:
+                    await self.telegram.notify_system_status(msg)
+                except Exception as e:
+                    self.logger.warning(f"[macd_cross.report] 텔레그램 전송 실패: {e}")
+            self.logger.info(msg)
+        except Exception as e:
+            self.logger.error(f"❌ macd_cross 일일 보고 실패: {e}")
 
     async def _execute_end_of_day_liquidation(self):
         """장마감 시간 모든 보유 종목 시장가 일괄매도 (동적 시간 적용)
