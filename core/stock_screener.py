@@ -684,6 +684,86 @@ class StockScreener:
             self.logger.error(f"[weighted_score.univ] 오류: {e}")
             return []
 
+    def preload_macd_cross_universe(self, top_n: int = 30) -> List[ScreenedStock]:
+        """macd_cross 페이퍼 universe 공급 (2026-04-26).
+
+        전일 거래대금 상위 top_n 종목 (백테스트 universe 정의와 동일).
+        weighted_score 의 research universe 교집합 적용 안 함 — 백테스트 정의 그대로.
+
+        Args:
+            top_n: 거래대금 상위 N (기본 30, Stage 2 universe)
+
+        Returns:
+            ScreenedStock 리스트.
+        """
+        import psycopg2
+        from config.settings import (
+            PG_HOST, PG_PORT, PG_DATABASE_QUANT, PG_USER, PG_PASSWORD,
+        )
+
+        candidates: List[ScreenedStock] = []
+        try:
+            conn = psycopg2.connect(
+                host=PG_HOST, port=PG_PORT, database=PG_DATABASE_QUANT,
+                user=PG_USER, password=PG_PASSWORD, connect_timeout=5,
+            )
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT DISTINCT date FROM daily_prices ORDER BY date DESC LIMIT 1"
+            )
+            row = cur.fetchone()
+            if not row:
+                self.logger.warning("[macd_cross.univ] daily_prices 비어있음")
+                cur.close()
+                conn.close()
+                return []
+            prev_date_iso = row[0]
+
+            min_price = self.config.get('min_price', 5000)
+            max_price = self.config.get('max_price', 500000)
+
+            cur.execute(
+                '''SELECT stock_code, open, close, trading_value
+                   FROM daily_prices
+                   WHERE date = %s AND open IS NOT NULL AND close IS NOT NULL
+                   ORDER BY trading_value DESC NULLS LAST
+                   LIMIT %s''',
+                [prev_date_iso, top_n * 2],
+            )
+            rows = cur.fetchall()
+            cur.close()
+            conn.close()
+
+            for stock_code, open_p, close_p, trading_value in rows:
+                if not (min_price <= float(close_p or 0) <= max_price):
+                    continue
+                tv = int(trading_value or 0)
+                candidates.append(ScreenedStock(
+                    code=stock_code,
+                    name=f"MC_{stock_code}",
+                    market='KOSPI',
+                    current_price=int(close_p or 0),
+                    change_rate=0.0,
+                    open_price=int(open_p or 0),
+                    pct_from_open=0.0,
+                    volume=0,
+                    trading_amount=tv,
+                    score=tv / 1_000_000_000,
+                    reason=f"macd_cross_universe (전일거래대금 {tv / 100_000_000:.0f}억)",
+                ))
+                if len(candidates) >= top_n:
+                    break
+
+            self.logger.info(
+                f"[macd_cross.univ] preload 완료: {len(candidates)}종목 "
+                f"(date={prev_date_iso}, top_n={top_n})"
+            )
+            return candidates
+
+        except Exception as e:
+            self.logger.error(f"[macd_cross.univ] preload 실패: {e}")
+            return []
+
     # ===== 유틸리티 메서드 =====
 
     def _extract_stock_code(self, stock: Dict) -> str:
