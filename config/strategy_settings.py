@@ -29,6 +29,51 @@ class StrategySettings:
     ACTIVE_STRATEGY = 'weighted_score'  # <-- 여기서 전략 변경
 
     # ========================================
+    # 페이퍼 전략 (실거래 primary 옆에서 가상매매로 동시 운영, 2026-04-26)
+    # ========================================
+    # None       : 페이퍼 비활성
+    # 'macd_cross': macd_cross 가상매매 (4주 또는 30건 paper 검증)
+    PAPER_STRATEGY = 'macd_cross'  # <-- None 으로 두면 페이퍼 OFF
+
+    # ========================================
+    # macd_cross 전략 설정 (페이퍼 단계, 2026-04-26)
+    # ========================================
+    class MacdCross:
+        """
+        macd_cross 페이퍼 트레이딩 파라미터.
+
+        Stage 2 best params (backtests/reports/stage2/macd_cross_best.json):
+          fast=14, slow=34, signal=12, entry_hhmm_min=1430
+        OOS 성과 (backtests/reports/stage2/oos_summary.csv):
+          Calmar 54.16, return +11.66%, MDD 1.99%, win 61.1%, 36 trades
+
+        설계서: docs/superpowers/specs/2026-04-26-macd-cross-live-integration-design.md
+        """
+        # ---- 시그널 (백테스트와 동일) ----
+        FAST_PERIOD = 14
+        SLOW_PERIOD = 34
+        SIGNAL_PERIOD = 12
+
+        # ---- 진입 시간대 (HHMM int) ----
+        ENTRY_HHMM_MIN = 1430
+        ENTRY_HHMM_MAX = 1500
+
+        # ---- 청산 ----
+        HOLD_DAYS = 2  # 거래일 기준. SL/TP 없음 (G1: 백테스트 100% 재현)
+
+        # ---- 페이퍼 자금 (F1) ----
+        VIRTUAL_CAPITAL = 10_000_000           # 가상 자본 1천만원
+        BUY_BUDGET_RATIO = 0.20                # 종목당 200만원
+        MAX_DAILY_POSITIONS = 5                # 동시 보유 최대
+
+        # ---- Universe ----
+        UNIVERSE_TOP_N = 30                    # 거래대금 상위 30 (백테스트 동일)
+
+        # ---- 운영 가드 (G1: 라이브 필터 미적용) ----
+        APPLY_LIVE_OVERLAY = False             # 승격 시 True 검토
+        ALLOWED_WEEKDAYS = [0, 1, 2, 3, 4]
+
+    # ========================================
     # 종가매매 전략 설정 (closing_trade, 오버나이트 홀드)
     # ========================================
     class ClosingTrade:
@@ -317,6 +362,13 @@ def validate_settings():
         raise ValueError(
             f"잘못된 전략: {StrategySettings.ACTIVE_STRATEGY}. "
             f"사용 가능: {valid_strategies}"
+        )
+
+    valid_paper_strategies = [None, 'macd_cross']
+    if StrategySettings.PAPER_STRATEGY not in valid_paper_strategies:
+        raise ValueError(
+            f"잘못된 페이퍼 전략: {StrategySettings.PAPER_STRATEGY}. "
+            f"사용 가능: {valid_paper_strategies}"
         )
 
     if StrategySettings.ACTIVE_STRATEGY == 'closing_trade':

@@ -386,6 +386,19 @@ class DayTradingBot:
                     today_date = current_time.date()
                     if self._last_eod_liquidation_date != today_date:
                         await self._execute_end_of_day_liquidation()
+                        # macd_cross paper 만료 청산 (EOD 직후 1회)
+                        try:
+                            from config.strategy_settings import StrategySettings
+                            if StrategySettings.PAPER_STRATEGY == 'macd_cross':
+                                await self._macd_cross_paper_exit_task()
+                        except Exception as e:
+                            self.logger.error(f"❌ macd_cross paper exit 트리거 실패: {e}")
+                        # macd_cross paper 일일 보고 + safety stop 체크 (Task 11)
+                        try:
+                            if StrategySettings.PAPER_STRATEGY == 'macd_cross':
+                                await self._macd_cross_paper_daily_report()
+                        except Exception as e:
+                            self.logger.error(f"❌ macd_cross 일일 보고 트리거 실패: {e}")
                         self._last_eod_liquidation_date = today_date
 
                     # 청산 시간 이후에는 매매 판단 건너뛰고 모니터링만 계속
@@ -483,6 +496,140 @@ class DayTradingBot:
         except Exception as e:
             self.logger.error(f"❌ 매매 판단 시스템 오류: {e}")
     
+    def _count_open_paper_positions(self, strategy: str) -> int:
+        """현재 미체결 paper 포지션 개수 (특정 strategy)."""
+        try:
+            df = self.db_manager.get_virtual_open_positions()
+            if df is None or df.empty:
+                return 0
+            return int((df['strategy'] == strategy).sum())
+        except Exception as e:
+            self.logger.debug(f"_count_open_paper_positions 실패: {e}")
+            return 0
+
+    def _get_macd_cross_paper_open_codes(self) -> set:
+        """현재 미체결 macd_cross 가상 포지션의 종목 코드 집합 (EOD 격리용)."""
+        try:
+            df = self.db_manager.get_virtual_open_positions()
+            if df is None or df.empty:
+                return set()
+            return set(df.loc[df['strategy'] == 'macd_cross', 'stock_code'].tolist())
+        except Exception as e:
+            self.logger.debug(f"_get_macd_cross_paper_open_codes 실패: {e}")
+            return set()
+
+    def _count_krx_trading_days_between(self, buy_date, today_date) -> int:
+        """KRX 실거래일 기준 buy_date (exclusive) ~ today_date (inclusive) 영업일 수.
+
+        backtests.common.trading_day.count_trading_days_between 와 동일 의미.
+        np.busday_count 대비 KRX 휴일 (Lunar New Year / Chuseok / Children's Day 등) 인식.
+
+        Args:
+            buy_date: 매수일 (date 객체).
+            today_date: 오늘 날짜 (date 객체).
+        Returns:
+            거래일 수 (int). DB 오류 시 보수적으로 0 (만료 안 함).
+        """
+        try:
+            buy_str = buy_date.strftime('%Y%m%d')
+            today_str = today_date.strftime('%Y%m%d')
+            row = self.db_manager._fetchone(
+                """SELECT COUNT(DISTINCT stck_bsop_date) FROM daily_candles
+                   WHERE stck_bsop_date > %s AND stck_bsop_date <= %s""",
+                (buy_str, today_str),
+            )
+            return int(row[0]) if row else 0
+        except Exception as e:
+            self.logger.warning(f"_count_krx_trading_days_between DB 오류 → 0 반환: {e}")
+            return 0
+
+    def _has_macd_cross_buy_today(self, stock_code: str) -> bool:
+        """오늘 macd_cross 로 이미 진입했는지. DB 오류 시 보수적으로 True (차단)."""
+        try:
+            today = now_kst().strftime('%Y-%m-%d')
+            row = self.db_manager._fetchone(
+                """SELECT COUNT(*) FROM virtual_trading_records
+                   WHERE stock_code=%s AND action='BUY'
+                     AND strategy='macd_cross'
+                     AND DATE(timestamp) = %s""",
+                (stock_code, today),
+            )
+            return (row[0] if row else 0) > 0
+        except Exception as e:
+            self.logger.warning(f"_has_macd_cross_buy_today DB 오류 → 보수적 차단: {e}")
+            return True
+
+    async def _evaluate_macd_cross_paper_window(self, current_time):
+        """macd_cross 페이퍼 진입 평가 (14:30~15:00, weighted_score 라이브와 격리).
+
+        - should_stop_buy 게이트 우회 (G1: 백테스트와 동일 진입창 보장)
+        - decision_engine.macd_cross_strategy 의 캐시된 universe 만 평가
+        - 시그널 hit 시 db_manager.save_virtual_buy 직접 호출 (VTM 우회)
+        - 라이브 weighted_score 흐름과 완전 분리 — trading_manager 상태 불변
+        """
+        from config.strategy_settings import StrategySettings
+
+        if (
+            StrategySettings.PAPER_STRATEGY != 'macd_cross'
+            or self.decision_engine.macd_cross_strategy is None
+        ):
+            return
+
+        cfg_mc = StrategySettings.MacdCross
+        hhmm = current_time.hour * 100 + current_time.minute
+        if not (cfg_mc.ENTRY_HHMM_MIN <= hhmm <= cfg_mc.ENTRY_HHMM_MAX):
+            return
+
+        strategy = self.decision_engine.macd_cross_strategy
+        universe_codes = list(strategy._cache.keys()) if hasattr(strategy, '_cache') else []
+        if not universe_codes:
+            return
+
+        if self._count_open_paper_positions('macd_cross') >= cfg_mc.MAX_DAILY_POSITIONS:
+            return
+
+        for stock_code in universe_codes:
+            try:
+                if not strategy.check_entry(stock_code, hhmm):
+                    continue
+                if self._has_macd_cross_buy_today(stock_code):
+                    continue
+                if self._count_open_paper_positions('macd_cross') >= cfg_mc.MAX_DAILY_POSITIONS:
+                    break
+
+                price_info = self.intraday_manager.get_cached_current_price(stock_code)
+                if not price_info:
+                    continue
+                buy_price = float(price_info.get('current_price', 0))
+                if buy_price <= 0:
+                    continue
+
+                ts = self.trading_manager.get_trading_stock(stock_code)
+                stock_name = ts.stock_name if ts else f"MC_{stock_code}"
+
+                budget = cfg_mc.VIRTUAL_CAPITAL * cfg_mc.BUY_BUDGET_RATIO
+                quantity = max(1, int(budget / buy_price))
+
+                buy_record_id = self.db_manager.save_virtual_buy(
+                    stock_code=stock_code,
+                    stock_name=stock_name,
+                    price=buy_price,
+                    quantity=quantity,
+                    strategy='macd_cross',
+                    reason=f"macd_cross_signal_hhmm{hhmm}",
+                )
+                if buy_record_id:
+                    self.logger.info(
+                        f"👻 [macd_cross] 가상 매수: {stock_code} {quantity}주 "
+                        f"@{buy_price:,.0f} (id={buy_record_id})"
+                    )
+                else:
+                    self.logger.warning(
+                        f"⚠️ [macd_cross] 가상 매수 실패: {stock_code} {quantity}주"
+                    )
+            except Exception as e:
+                self.logger.error(f"❌ [macd_cross] {stock_code} 평가 오류: {e}")
+
     async def _analyze_buy_decision(self, trading_stock, available_funds: float = None):
         """매수 판단 분석 (완성된 1분봉 기준)
 
@@ -875,6 +1022,16 @@ class DayTradingBot:
                             import traceback
                             self.logger.error(traceback.format_exc())
 
+                        # 🆕 macd_cross 페이퍼 universe 준비 (Task 6)
+                        try:
+                            if (
+                                StrategySettings.PAPER_STRATEGY == 'macd_cross'
+                                and self.decision_engine.macd_cross_strategy is not None
+                            ):
+                                await self._prepare_macd_cross_universe(current_time)
+                        except Exception as e:
+                            self.logger.error(f"❌ [macd_cross] universe 준비 실패: {e}")
+
                         self.logger.info(
                             f"[프리마켓] 리포트 완료: "
                             f"심리={report.market_sentiment}({report.sentiment_score:+.2f}), "
@@ -1108,6 +1265,121 @@ class DayTradingBot:
             f"loaded={summary['loaded']}/{summary['n_requested']} "
             f"elapsed={summary['elapsed_sec']:.1f}s"
         )
+
+    async def _prepare_macd_cross_universe(self, current_time):
+        """macd_cross 페이퍼 universe + daily history 주입 (08:55).
+
+        - stock_screener.preload_macd_cross_universe(top_n=30) 로 universe 선정
+        - trading_manager.add_selected_stock 으로 intraday_manager 등록
+        - 각 종목의 daily history 를 macd_cross_strategy 에 주입 → MACD hist 캐시
+        """
+        from config.strategy_settings import StrategySettings
+
+        cfg = StrategySettings.MacdCross
+        loop = asyncio.get_event_loop()
+
+        # 1. universe 선정
+        candidates = await loop.run_in_executor(
+            None,
+            lambda: self.stock_screener.preload_macd_cross_universe(top_n=cfg.UNIVERSE_TOP_N),
+        )
+        if not candidates:
+            self.logger.warning("[macd_cross] universe 없음 → prep skip")
+            return
+
+        # 2. trading_manager / intraday_manager 등록
+        registered = 0
+        for stock in candidates:
+            try:
+                success = await self.trading_manager.add_selected_stock(
+                    stock_code=stock.code,
+                    stock_name=stock.name,
+                    selection_reason=stock.reason,
+                    prev_close=stock.current_price,
+                )
+                if success:
+                    self.stock_screener.mark_stock_added(stock.code)
+                    registered += 1
+            except Exception as e:
+                self.logger.debug(f"[macd_cross] 등록 실패 {stock.code}: {e}")
+
+        # 3. daily history 주입 → MACD hist 캐시 (단일 connection 사용)
+        today_str = current_time.strftime("%Y%m%d")
+        strategy = self.decision_engine.macd_cross_strategy
+        if strategy is None:
+            self.logger.warning("[macd_cross] strategy 미초기화 → daily 주입 skip")
+            return
+
+        codes = [s.code for s in candidates]
+        cached_count = await loop.run_in_executor(
+            None, self._load_macd_cross_daily_batch, codes, today_str, strategy
+        )
+
+        self.logger.info(
+            f"🎯 [macd_cross] universe 준비 완료: 등록={registered}, "
+            f"daily 캐시={cached_count}/{len(candidates)}"
+        )
+
+    def _load_macd_cross_daily_batch(self, stock_codes, today_yyyymmdd: str, strategy) -> int:
+        """macd_cross 일괄 daily history 로드 + 캐시 주입 (option B: 단일 connection).
+
+        Args:
+            stock_codes: 종목 코드 리스트.
+            today_yyyymmdd: 오늘 (YYYYMMDD). daily_prices 조회 상한 기준.
+            strategy: MacdCrossStrategy 인스턴스.
+        Returns:
+            성공 캐시된 종목 수.
+        """
+        import psycopg2
+        import pandas as pd
+        from config.settings import (
+            PG_HOST, PG_PORT, PG_DATABASE_QUANT, PG_USER, PG_PASSWORD,
+        )
+
+        # MACD warmup: slow * 3 + signal = 34*3 + 12 = 114 영업일 → 150 fetch 로 여유 확보
+        lookback = 150
+        today_iso = f"{today_yyyymmdd[:4]}-{today_yyyymmdd[4:6]}-{today_yyyymmdd[6:]}"
+
+        try:
+            conn = psycopg2.connect(
+                host=PG_HOST, port=PG_PORT, database=PG_DATABASE_QUANT,
+                user=PG_USER, password=PG_PASSWORD, connect_timeout=5,
+            )
+        except Exception as e:
+            self.logger.error(f"[macd_cross] daily DB 연결 실패: {e}")
+            return 0
+
+        cached = 0
+        try:
+            for code in stock_codes:
+                try:
+                    cur = conn.cursor()
+                    cur.execute(
+                        """SELECT TO_CHAR(date, 'YYYYMMDD') AS trade_date, close
+                           FROM daily_prices
+                           WHERE stock_code = %s AND date < %s AND close IS NOT NULL
+                           ORDER BY date DESC
+                           LIMIT %s""",
+                        [code, today_iso, lookback],
+                    )
+                    rows = cur.fetchall()
+                    cur.close()
+                    if not rows:
+                        continue
+                    df = pd.DataFrame(rows, columns=["trade_date", "close"])
+                    df["close"] = df["close"].astype(float)
+                    # 오름차순 정렬 (가장 오래된 거래일이 첫 행)
+                    df = df.iloc[::-1].reset_index(drop=True)
+                    strategy.set_daily_history(code, df, today_yyyymmdd)
+                    cached += 1
+                except Exception as e:
+                    self.logger.debug(f"[macd_cross] daily prep {code}: {e}")
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return cached
 
     async def _send_morning_briefing(self, report):
         """프리마켓 모닝 브리핑 텔레그램 발송"""
@@ -1357,6 +1629,127 @@ class DayTradingBot:
         except Exception as e:
             self.logger.error(f"❌ 장마감 일괄청산 오류: {e}")
     
+    async def _macd_cross_paper_exit_task(self):
+        """macd_cross 가상 포지션 hold_days=2 만료 청산 (15:00 직후 1회).
+
+        EOD 직후에 호출. 매수일로부터 거래일 기준 2일 경과한 가상 포지션을
+        현재가로 가상 청산한다. SL/TP 없음 (G1: 백테스트 100% 재현).
+        """
+        try:
+            from config.strategy_settings import StrategySettings
+            from datetime import datetime
+
+            cfg = StrategySettings.MacdCross
+            df = self.db_manager.get_virtual_open_positions()
+            if df is None or df.empty:
+                return
+            df_mc = df[df['strategy'] == 'macd_cross']
+            if df_mc.empty:
+                return
+
+            today = now_kst().date()
+            for _, row in df_mc.iterrows():
+                buy_time = row['buy_time']
+                if isinstance(buy_time, str):
+                    buy_dt = datetime.strptime(buy_time, "%Y-%m-%d %H:%M:%S")
+                else:
+                    buy_dt = buy_time
+                days_held = self._count_krx_trading_days_between(buy_dt.date(), today)
+                if days_held < cfg.HOLD_DAYS:
+                    continue
+
+                stock_code = row['stock_code']
+                stock_name = row['stock_name']
+                buy_record_id = int(row['id'])
+                quantity = int(row['quantity'])
+
+                # 종가 가져오기 (intraday_manager 캐시)
+                price_info = self.intraday_manager.get_cached_current_price(stock_code)
+                if not price_info:
+                    self.logger.warning(f"[macd_cross.exit] {stock_code} 가격 없음 → skip")
+                    continue
+                sell_price = float(price_info.get('current_price', 0))
+                if sell_price <= 0:
+                    continue
+
+                ok = self.db_manager.save_virtual_sell(
+                    stock_code=stock_code,
+                    stock_name=stock_name,
+                    price=sell_price,
+                    quantity=quantity,
+                    strategy='macd_cross',
+                    reason=f"hold_limit_days={days_held}",
+                    buy_record_id=buy_record_id,
+                )
+                if ok:
+                    self.logger.info(
+                        f"👻 [macd_cross] 가상 청산: {stock_code} {quantity}주 "
+                        f"@{sell_price:,.0f} (hold {days_held}d)"
+                    )
+                else:
+                    self.logger.warning(
+                        f"⚠️ [macd_cross] 가상 청산 DB 저장 실패: {stock_code}"
+                    )
+        except Exception as e:
+            self.logger.error(f"❌ macd_cross paper exit 실패: {e}")
+
+    async def _macd_cross_paper_daily_report(self):
+        """macd_cross 페이퍼 일일 KPI 집계 + 텔레그램 알림 + safety stop 체크.
+
+        EOD 직후 (paper exit 끝난 다음) 1회 호출. KPI 계산은 KPI 모듈
+        (core.strategies.macd_cross_kpi.MacdCrossKpi) 에 위임.
+        """
+        try:
+            from config.strategy_settings import StrategySettings
+            from core.strategies.macd_cross_kpi import MacdCrossKpi
+
+            cfg = StrategySettings.MacdCross
+            kpi = MacdCrossKpi(virtual_capital=cfg.VIRTUAL_CAPITAL)
+
+            loop = asyncio.get_running_loop()
+            df = await loop.run_in_executor(
+                None,
+                lambda: self.db_manager.get_virtual_paired_trades(strategy='macd_cross'),
+            )
+
+            metrics = kpi.compute(df) if df is not None else kpi.compute(pd.DataFrame())
+            gates = kpi.evaluate_gates(metrics)
+            safety = kpi.should_safety_stop(metrics)
+
+            target_trades = 30  # paper 종료 조건
+            progress_pct = (metrics['trade_count'] / target_trades * 100) if target_trades else 0
+
+            lines = [
+                "📊 macd_cross 페이퍼 일일 보고",
+                f"진행: {metrics['trade_count']} trades / {progress_pct:.0f}% (목표 {target_trades})",
+                f"return: {metrics['return']*100:+.2f}% | MDD: {metrics['mdd']*100:+.2f}% | win: {metrics['win_rate']*100:.1f}%",
+                f"Calmar: {metrics['calmar']:.1f} | top1: {metrics['top1_share']*100:.1f}% | streak: {metrics['max_consec_losses']}",
+                "—",
+                f"게이트: {sum(1 for g in gates['gates'].values() if g['pass'])}/6 통과",
+            ]
+            for k, g in gates["gates"].items():
+                mark = "✓" if g["pass"] else "✗"
+                # value 포맷: 비율은 %, 정수는 그대로
+                if k in ('return', 'mdd', 'win_rate', 'top1_share'):
+                    val_str = f"{g['value']*100:.2f}%"
+                elif k == 'calmar':
+                    val_str = f"{g['value']:.1f}"
+                else:
+                    val_str = str(g['value'])
+                lines.append(f"  {mark} {g['label']} → {val_str}")
+            if safety:
+                lines.append("⚠️ SAFETY STOP 충족 — paper 즉시 중단 권고. PAPER_STRATEGY=None 으로 설정.")
+
+            msg = "\n".join(lines)
+            if self.telegram is not None:
+                try:
+                    await self.telegram.notify_system_status(msg)
+                except Exception as e:
+                    self.logger.warning(f"[macd_cross.report] 텔레그램 전송 실패: {e}")
+            self.logger.info(msg)
+        except Exception as e:
+            self.logger.error(f"❌ macd_cross 일일 보고 실패: {e}")
+
     async def _execute_end_of_day_liquidation(self):
         """장마감 시간 모든 보유 종목 시장가 일괄매도 (동적 시간 적용)
 
@@ -1418,6 +1811,32 @@ class DayTradingBot:
                     all_liquidation_targets = to_close
                 except Exception as e:
                     self.logger.warning(f"⚠️ weighted_score overnight 필터 실패: {e} — 전체 청산")
+
+            # 🆕 macd_cross 페이퍼 포지션은 EOD 강제청산에서 격리 (Spec §5)
+            # paper 가상 포지션은 hold_days=2 만료 시 별도 경로로 청산되며
+            # 라이브 EOD 흐름에 들어오지 않아야 한다. trading_manager 에 가상매매
+            # 포지션이 등록되지 않아 자연 격리되지만, 방어적으로 필터링.
+            try:
+                from config.strategy_settings import StrategySettings
+                if (
+                    StrategySettings.PAPER_STRATEGY == 'macd_cross'
+                    and all_liquidation_targets
+                ):
+                    paper_codes = self._get_macd_cross_paper_open_codes()
+                    if paper_codes:
+                        before = len(all_liquidation_targets)
+                        all_liquidation_targets = [
+                            ts for ts in all_liquidation_targets
+                            if ts.stock_code not in paper_codes
+                        ]
+                        excluded = before - len(all_liquidation_targets)
+                        if excluded > 0:
+                            self.logger.info(
+                                f"🌙 macd_cross paper 포지션 EOD 격리: {excluded}종목 "
+                                f"(hold_days=2 만료 전까지 유지)"
+                            )
+            except Exception as e:
+                self.logger.warning(f"⚠️ macd_cross EOD 격리 실패: {e} — 정상 청산 진행")
 
             if not all_liquidation_targets:
                 self.logger.info(f"📦 {eod_hour}:{eod_minute:02d} 시장가 매도: 청산 대상 포지션 없음")
@@ -2009,6 +2428,13 @@ class DayTradingBot:
             if not is_candle_completed:
                 self.logger.debug(f"⏱️ {candle_interval}분봉 미완성 또는 5초 미경과: {current_time.strftime('%H:%M:%S')} - 매수 판단 건너뜀")
                 return
+
+            # 🆕 macd_cross paper 평가 — should_stop_buy 게이트 우회 (G1: 14:30~15:00 진입창)
+            # 라이브 weighted_score 흐름과 완전 분리. paper 모드 비활성 시 즉시 return.
+            try:
+                await self._evaluate_macd_cross_paper_window(current_time)
+            except Exception as e:
+                self.logger.error(f"❌ macd_cross paper 평가 트리거 실패: {e}")
 
             # 데이터 업데이트 직후 매수 판단 실행
             # 매수 중단 시간 전이고 SELECTED/COMPLETED 상태 종목만 매수 판단 - 동적 시간 적용

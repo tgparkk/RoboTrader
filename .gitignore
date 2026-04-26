@@ -174,3 +174,6 @@ nul
 *.duckdb
 *.duckdb.wal
 nul
+
+# Claude Code worktrees (subagent-driven dev)
+.worktrees/

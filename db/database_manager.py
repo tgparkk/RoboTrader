@@ -700,6 +700,35 @@ class DatabaseManager:
             self.logger.error(f"미체결 포지션 조회 실패: {e}")
             return pd.DataFrame()
 
+    def get_virtual_paired_trades(self, strategy: str) -> pd.DataFrame:
+        """매수-매도 매칭된 가상 trade 조회 (KPI 계산용, 2026-04-26 macd_cross paper).
+
+        Args:
+            strategy: virtual_trading_records.strategy 필터 값.
+
+        Returns:
+            DataFrame columns: ['buy_time', 'sell_time', 'pnl']. sell_time 오름차순.
+            데이터 없거나 오류 시 빈 DataFrame.
+        """
+        try:
+            with self._pool_obj.connection() as conn:
+                df = pd.read_sql_query("""
+                    SELECT
+                        b.timestamp AS buy_time,
+                        s.timestamp AS sell_time,
+                        s.profit_loss AS pnl
+                    FROM virtual_trading_records s
+                    JOIN virtual_trading_records b ON s.buy_record_id = b.id
+                    WHERE s.action = 'SELL'
+                      AND s.strategy = %s
+                      AND s.is_test = TRUE
+                    ORDER BY s.timestamp
+                """, conn, params=[strategy])
+            return df
+        except Exception as e:
+            self.logger.error(f"get_virtual_paired_trades 실패: {e}")
+            return pd.DataFrame(columns=['buy_time', 'sell_time', 'pnl'])
+
     def get_virtual_trading_history(self, days: int = 30, include_open: bool = True) -> pd.DataFrame:
         """가상 매매 이력 조회"""
         try:
