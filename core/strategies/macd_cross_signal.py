@@ -8,7 +8,6 @@ Spec: docs/superpowers/specs/2026-04-26-macd-cross-live-integration-design.md §
 """
 from __future__ import annotations
 
-import math
 from typing import Optional
 
 import pandas as pd
@@ -52,11 +51,7 @@ def is_macd_golden_cross(
     백테스트 entry_signal 의 핵심 식 (prev_prev_hist < 0 AND prev_hist >= 0).
     한 픽셀이라도 다르면 OOS 재현 검증 의미를 잃는다.
     """
-    if prev_hist is None or prev_prev_hist is None:
-        return False
-    if isinstance(prev_hist, float) and math.isnan(prev_hist):
-        return False
-    if isinstance(prev_prev_hist, float) and math.isnan(prev_prev_hist):
+    if pd.isna(prev_hist) or pd.isna(prev_prev_hist):
         return False
     return prev_prev_hist < 0 and prev_hist >= 0
 

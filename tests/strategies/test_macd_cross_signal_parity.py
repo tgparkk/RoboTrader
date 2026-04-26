@@ -56,8 +56,8 @@ def test_golden_cross_nan_returns_false():
 def test_parity_against_backtest_strategy():
     """백테스트 MACDCrossStrategy._build_macd_maps 와 시그널 식이 동일해야 한다.
 
-    100개 랜덤 daily 시퀀스 × Stage 2 best params (14/34/12) 로 매일
-    is_macd_golden_cross 결과를 비교 → 모두 일치해야 통과.
+    100개 랜덤 daily 시퀀스 × Stage 2 best params (14/34/12) 로
+    prev_hist (shift-1) + prev_prev_hist (shift-2) 모두 1e-9 이내 일치해야 통과.
     """
     from backtests.strategies.macd_cross import MACDCrossStrategy
 
@@ -69,7 +69,8 @@ def test_parity_against_backtest_strategy():
     prev_hist_map, prev_prev_hist_map = bt._build_macd_maps(df)
 
     hist = compute_macd_histogram_series(df, fast=14, slow=34, signal=12)
-    # 공유 모듈 hist[i] 가 backtest 의 prev_hist_map[date[i+1]] 과 같아야 함 (shift1).
+
+    # shift-1 parity: hist[i] == backtest prev_hist for date[i+1]
     for i in range(len(df) - 1):
         date_next = df["trade_date"].iloc[i + 1]
         bt_prev_hist = prev_hist_map.get(date_next)
@@ -77,5 +78,16 @@ def test_parity_against_backtest_strategy():
         if pd.isna(bt_prev_hist) or pd.isna(shared_prev_hist):
             continue
         assert abs(bt_prev_hist - shared_prev_hist) < 1e-9, (
-            f"day {i+1}: backtest prev_hist={bt_prev_hist} vs shared={shared_prev_hist}"
+            f"shift1 day {i+1}: bt={bt_prev_hist} vs shared={shared_prev_hist}"
+        )
+
+    # shift-2 parity: hist[i] == backtest prev_prev_hist for date[i+2]
+    for i in range(len(df) - 2):
+        date_plus2 = df["trade_date"].iloc[i + 2]
+        bt_prev_prev = prev_prev_hist_map.get(date_plus2)
+        shared_prev_prev = hist.iloc[i]
+        if pd.isna(bt_prev_prev) or pd.isna(shared_prev_prev):
+            continue
+        assert abs(bt_prev_prev - shared_prev_prev) < 1e-9, (
+            f"shift2 day {i+2}: bt={bt_prev_prev} vs shared={shared_prev_prev}"
         )
