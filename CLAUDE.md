@@ -21,19 +21,38 @@
 
 ---
 
-## ⚠️ 현재 상태 (2026-04-23): weighted_score 실거래 운영 중 (Trial 837, look-ahead 제거)
+## ⚠️ 현재 상태 (2026-04-26): weighted_score 라이브 + macd_cross 페이퍼 (paper-first)
 
 ```python
-# config/strategy_settings.py — weighted_score 운영 수치는 전부 이 클래스에서 관리
-ACTIVE_STRATEGY = 'weighted_score'              # 2026-04-21 전환
-WeightedScore.STOP_LOSS_PCT = -3.84             # 손절 (Trial 837)
-WeightedScore.TAKE_PROFIT_PCT = 8.02            # 익절 (Trial 837)
-WeightedScore.MAX_HOLDING_DAYS = 5              # 최대 보유 거래일 (Trial 837)
-WeightedScore.ALLOW_OVERNIGHT_HOLD = True       # EOD 15:00 선별 스킵 (days < max_hold 인 포지션만)
-WeightedScore.MAX_DAILY_POSITIONS = 3           # 동시 보유 (Trial 837, 기존 9 → 3 축소)
-WeightedScore.BUY_BUDGET_RATIO = 0.30           # 건당 = 총자본 × 30% (고정, 3종목 × 30% = 90%)
-WeightedScore.VIRTUAL_ONLY = False              # 실 계좌 주문 모드
+# config/strategy_settings.py — 이중 운영
+ACTIVE_STRATEGY = 'weighted_score'              # 실거래 primary (Trial 837)
+PAPER_STRATEGY  = 'macd_cross'                  # 페이퍼 secondary (가상매매)
+
+# weighted_score 라이브 운영 (변경 없음)
+WeightedScore.STOP_LOSS_PCT = -3.84
+WeightedScore.TAKE_PROFIT_PCT = 8.02
+WeightedScore.MAX_HOLDING_DAYS = 5
+WeightedScore.VIRTUAL_ONLY = False
+
+# macd_cross 페이퍼 (4주 또는 30 trades 검증, G1 백테스트 100% 재현)
+MacdCross.FAST_PERIOD = 14
+MacdCross.SLOW_PERIOD = 34
+MacdCross.SIGNAL_PERIOD = 12
+MacdCross.ENTRY_HHMM_MIN = 1430
+MacdCross.HOLD_DAYS = 2
+MacdCross.VIRTUAL_CAPITAL = 10_000_000          # 가상 1천만
+MacdCross.BUY_BUDGET_RATIO = 0.20               # 200만/포지션
+MacdCross.MAX_DAILY_POSITIONS = 5
+MacdCross.UNIVERSE_TOP_N = 30
+MacdCross.APPLY_LIVE_OVERLAY = False            # G1: 라이브 필터 미적용
 ```
+
+설계서: `docs/superpowers/specs/2026-04-26-macd-cross-live-integration-design.md`
+구현 계획: `docs/superpowers/plans/2026-04-26-macd-cross-paper-integration.md`
+
+**페이퍼 종료 조건**: 4주 경과 또는 30 trades 도달 (먼저).
+**승격 게이트** (모두 충족): Calmar≥30, return≥0, MDD≤5%, 승률≥50%, top1share≤60%, max_consec_loss≤4.
+**중도 안전정지**: 누적 -5% 또는 연속 5패 → PAPER_STRATEGY=None 수동 전환.
 
 ### Trial 837 test 성과 (88일, look-ahead 제거)
 - Calmar 25.10, Return +9.60% (연환산 ~+40%), MDD 2.40%, Sharpe 4.10, Win% 55.7%, Overfit ratio 0.62
