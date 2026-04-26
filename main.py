@@ -495,7 +495,7 @@ class DayTradingBot:
             return 0
 
     def _has_macd_cross_buy_today(self, stock_code: str) -> bool:
-        """오늘 macd_cross 로 이미 진입했는지."""
+        """오늘 macd_cross 로 이미 진입했는지. DB 오류 시 보수적으로 True (차단)."""
         try:
             today = now_kst().strftime('%Y-%m-%d')
             row = self.db_manager._fetchone(
@@ -507,8 +507,8 @@ class DayTradingBot:
             )
             return (row[0] if row else 0) > 0
         except Exception as e:
-            self.logger.debug(f"_has_macd_cross_buy_today 실패: {e}")
-            return False
+            self.logger.warning(f"_has_macd_cross_buy_today DB 오류 → 보수적 차단: {e}")
+            return True
 
     async def _analyze_buy_decision(self, trading_stock, available_funds: float = None):
         """매수 판단 분석 (완성된 1분봉 기준)
@@ -522,6 +522,64 @@ class DayTradingBot:
             stock_name = trading_stock.stock_name
 
             #self.logger.debug(f"🔍 매수 판단 시작: {stock_code}({stock_name})")
+
+            # 🆕 macd_cross 페이퍼 분기 (Task 7, 2026-04-26)
+            # G1 (Spec §5): 라이브 필터·서킷브레이커·게이트·cooldown·positioned-check 우회.
+            # 시그널 발생 시 무조건 가상매수 (VTM 우회, db_manager 직접 기록).
+            from config.strategy_settings import StrategySettings
+            if (
+                StrategySettings.PAPER_STRATEGY == 'macd_cross'
+                and self.decision_engine.macd_cross_strategy is not None
+            ):
+                cfg_mc = StrategySettings.MacdCross
+                current_time = now_kst()
+                hhmm = current_time.hour * 100 + current_time.minute
+
+                if cfg_mc.ENTRY_HHMM_MIN <= hhmm <= cfg_mc.ENTRY_HHMM_MAX:
+                    if self.decision_engine.macd_cross_strategy.check_entry(stock_code, hhmm):
+                        # 동시 보유 한도 (paper 별도 카운트)
+                        paper_open = self._count_open_paper_positions('macd_cross')
+                        if paper_open >= cfg_mc.MAX_DAILY_POSITIONS:
+                            self.logger.debug(
+                                f"[macd_cross] {stock_code} 시그널 OK / "
+                                f"보유 한도 도달 ({paper_open}/{cfg_mc.MAX_DAILY_POSITIONS})"
+                            )
+                            return
+
+                        # 1일 1회 진입 가드
+                        if self._has_macd_cross_buy_today(stock_code):
+                            self.logger.debug(f"[macd_cross] {stock_code} 당일 이미 진입")
+                            return
+
+                        # 가격 + 수량 계산
+                        current_price_info = self.intraday_manager.get_cached_current_price(stock_code)
+                        if not current_price_info:
+                            return
+                        buy_price = float(current_price_info.get('current_price', 0))
+                        if buy_price <= 0:
+                            return
+                        budget = cfg_mc.VIRTUAL_CAPITAL * cfg_mc.BUY_BUDGET_RATIO
+                        quantity = max(1, int(budget / buy_price))
+
+                        result = await self.decision_engine.execute_virtual_buy_strategy_aware(
+                            trading_stock=trading_stock,
+                            buy_price=buy_price,
+                            quantity=quantity,
+                            strategy='macd_cross',
+                            reason=f"macd_cross_signal_hhmm{hhmm}",
+                        )
+                        if result:
+                            self.logger.info(
+                                f"👻 [macd_cross] 가상 매수: {stock_code} {quantity}주 "
+                                f"@{buy_price:,.0f} (id={result})"
+                            )
+                        else:
+                            self.logger.warning(
+                                f"⚠️ [macd_cross] 가상 매수 실패: {stock_code} "
+                                f"{quantity}주 @{buy_price:,.0f}"
+                            )
+                # macd_cross 분기는 weighted_score 흐름과 분리 — return 으로 종료
+                return
 
             # 추가 안전 검증: 현재 보유 중인 종목인지 다시 한번 확인
             positioned_stocks = self.trading_manager.get_stocks_by_state(StockState.POSITIONED)
@@ -556,56 +614,6 @@ class DayTradingBot:
             
             # 🆕 전략에 따라 1분봉 또는 3분봉 사용
             from config.strategy_settings import StrategySettings
-
-            # 🆕 macd_cross 페이퍼 분기 (Task 7, 2026-04-26)
-            # G1: 라이브 필터·서킷브레이커·게이트 우회. 시그널 발생 시 무조건 가상매수.
-            if (
-                StrategySettings.PAPER_STRATEGY == 'macd_cross'
-                and self.decision_engine.macd_cross_strategy is not None
-            ):
-                cfg_mc = StrategySettings.MacdCross
-                stock_code = trading_stock.stock_code
-                current_time = now_kst()
-                hhmm = current_time.hour * 100 + current_time.minute
-
-                if cfg_mc.ENTRY_HHMM_MIN <= hhmm <= cfg_mc.ENTRY_HHMM_MAX:
-                    if self.decision_engine.macd_cross_strategy.check_entry(stock_code, hhmm):
-                        # 동시 보유 한도 (paper 별도 카운트)
-                        paper_open = self._count_open_paper_positions('macd_cross')
-                        if paper_open >= cfg_mc.MAX_DAILY_POSITIONS:
-                            self.logger.debug(
-                                f"[macd_cross] {stock_code} 시그널 OK 이지만 "
-                                f"보유 한도 도달 ({paper_open}/{cfg_mc.MAX_DAILY_POSITIONS})"
-                            )
-                            return
-
-                        # 1일 1회 진입 가드
-                        if self._has_macd_cross_buy_today(stock_code):
-                            self.logger.debug(f"[macd_cross] {stock_code} 당일 이미 진입")
-                            return
-
-                        # 가격 + 수량 계산
-                        current_price_info = self.intraday_manager.get_cached_current_price(stock_code)
-                        if not current_price_info:
-                            return
-                        buy_price = float(current_price_info.get('current_price', 0))
-                        if buy_price <= 0:
-                            return
-                        budget = cfg_mc.VIRTUAL_CAPITAL * cfg_mc.BUY_BUDGET_RATIO
-                        quantity = max(1, int(budget / buy_price))
-
-                        await self.decision_engine.execute_virtual_buy_strategy_aware(
-                            trading_stock=trading_stock,
-                            buy_price=buy_price,
-                            quantity=quantity,
-                            strategy='macd_cross',
-                            reason=f"macd_cross_signal_hhmm{hhmm}",
-                        )
-                        self.logger.info(
-                            f"👻 [macd_cross] 가상 매수: {stock_code} {quantity}주 @{buy_price:,.0f}"
-                        )
-                # macd_cross 분기는 weighted_score 흐름과 분리 — return 으로 종료
-                return
 
             if StrategySettings.ACTIVE_STRATEGY in ('closing_trade', 'weighted_score'):
                 # 1분봉 직접 사용 — closing_trade는 시뮬 signal_prev_body_momentum 과

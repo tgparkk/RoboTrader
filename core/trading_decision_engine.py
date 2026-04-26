@@ -721,18 +721,22 @@ class TradingDecisionEngine:
     async def execute_virtual_buy_strategy_aware(
         self, trading_stock, buy_price: float, quantity: int,
         strategy: str, reason: str,
-    ):
-        """strategy 태그를 직접 받는 가상 매수 (weighted_score / macd_cross 등 분기 지원).
+    ) -> Optional[int]:
+        """페이퍼 전략용 가상매수 — VTM balance accounting 우회 (2026-04-26).
 
-        기존 execute_virtual_buy 는 ACTIVE_STRATEGY 기반이라
-        PAPER_STRATEGY (macd_cross) 분기를 표현 못함 → 신규 (2026-04-26).
+        기존 execute_virtual_buy 는 VirtualTradingManager 의 balance
+        (real_balance × 0.1) 을 공유해 paper strategies 의 자본 격리를
+        깨뜨림. 이 메서드는 db_manager.save_virtual_buy 를 직접 호출해
+        VTM 을 우회한다 — 각 전략 (macd_cross 등) 은 자체 VIRTUAL_CAPITAL
+        을 KPI 계산 기준으로 독립 사용.
+
+        Returns:
+            buy_record_id (성공) / None (실패).
         """
         try:
-            stock_code = trading_stock.stock_code
-            stock_name = trading_stock.stock_name
-            self.virtual_trading.execute_virtual_buy(
-                stock_code=stock_code,
-                stock_name=stock_name,
+            return self.db_manager.save_virtual_buy(
+                stock_code=trading_stock.stock_code,
+                stock_name=trading_stock.stock_name,
                 price=buy_price,
                 quantity=quantity,
                 strategy=strategy,
@@ -740,6 +744,7 @@ class TradingDecisionEngine:
             )
         except Exception as e:
             self.logger.error(f"❌ [{strategy}] 가상 매수 실행 오류: {e}")
+            return None
 
     async def execute_real_sell(self, trading_stock, sell_reason):
         """실제 매도 주문 실행 (TradeExecutor 위임)"""
