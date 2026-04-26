@@ -512,6 +512,31 @@ class DayTradingBot:
             self.logger.debug(f"_get_macd_cross_paper_open_codes 실패: {e}")
             return set()
 
+    def _count_krx_trading_days_between(self, buy_date, today_date) -> int:
+        """KRX 실거래일 기준 buy_date (exclusive) ~ today_date (inclusive) 영업일 수.
+
+        backtests.common.trading_day.count_trading_days_between 와 동일 의미.
+        np.busday_count 대비 KRX 휴일 (Lunar New Year / Chuseok / Children's Day 등) 인식.
+
+        Args:
+            buy_date: 매수일 (date 객체).
+            today_date: 오늘 날짜 (date 객체).
+        Returns:
+            거래일 수 (int). DB 오류 시 보수적으로 0 (만료 안 함).
+        """
+        try:
+            buy_str = buy_date.strftime('%Y%m%d')
+            today_str = today_date.strftime('%Y%m%d')
+            row = self.db_manager._fetchone(
+                """SELECT COUNT(DISTINCT stck_bsop_date) FROM daily_candles
+                   WHERE stck_bsop_date > %s AND stck_bsop_date <= %s""",
+                (buy_str, today_str),
+            )
+            return int(row[0]) if row else 0
+        except Exception as e:
+            self.logger.warning(f"_count_krx_trading_days_between DB 오류 → 0 반환: {e}")
+            return 0
+
     def _has_macd_cross_buy_today(self, stock_code: str) -> bool:
         """오늘 macd_cross 로 이미 진입했는지. DB 오류 시 보수적으로 True (차단)."""
         try:
@@ -1594,7 +1619,6 @@ class DayTradingBot:
         try:
             from config.strategy_settings import StrategySettings
             from datetime import datetime
-            import numpy as np
 
             cfg = StrategySettings.MacdCross
             df = self.db_manager.get_virtual_open_positions()
@@ -1611,7 +1635,7 @@ class DayTradingBot:
                     buy_dt = datetime.strptime(buy_time, "%Y-%m-%d %H:%M:%S")
                 else:
                     buy_dt = buy_time
-                days_held = int(np.busday_count(buy_dt.date(), today))
+                days_held = self._count_krx_trading_days_between(buy_dt.date(), today)
                 if days_held < cfg.HOLD_DAYS:
                     continue
 
