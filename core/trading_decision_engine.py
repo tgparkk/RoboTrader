@@ -717,7 +717,30 @@ class TradingDecisionEngine:
             )
         else:
             self.logger.error("❌ TradeExecutor 미초기화")
-    
+
+    async def execute_virtual_buy_strategy_aware(
+        self, trading_stock, buy_price: float, quantity: int,
+        strategy: str, reason: str,
+    ):
+        """strategy 태그를 직접 받는 가상 매수 (weighted_score / macd_cross 등 분기 지원).
+
+        기존 execute_virtual_buy 는 ACTIVE_STRATEGY 기반이라
+        PAPER_STRATEGY (macd_cross) 분기를 표현 못함 → 신규 (2026-04-26).
+        """
+        try:
+            stock_code = trading_stock.stock_code
+            stock_name = trading_stock.stock_name
+            self.virtual_trading.execute_virtual_buy(
+                stock_code=stock_code,
+                stock_name=stock_name,
+                price=buy_price,
+                quantity=quantity,
+                strategy=strategy,
+                reason=reason,
+            )
+        except Exception as e:
+            self.logger.error(f"❌ [{strategy}] 가상 매수 실행 오류: {e}")
+
     async def execute_real_sell(self, trading_stock, sell_reason):
         """실제 매도 주문 실행 (TradeExecutor 위임)"""
         if self._trade_executor:
