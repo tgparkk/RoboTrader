@@ -232,6 +232,27 @@ class TradingDecisionEngine:
         else:
             self.performance_gate = None
 
+        # 🆕 macd_cross 페이퍼 어댑터 초기화 (2026-04-26)
+        try:
+            from config.strategy_settings import StrategySettings
+            if StrategySettings.PAPER_STRATEGY == 'macd_cross':
+                from core.strategies.macd_cross_strategy import MacdCrossStrategy
+                cfg = StrategySettings.MacdCross
+                self.macd_cross_strategy = MacdCrossStrategy(
+                    fast=cfg.FAST_PERIOD,
+                    slow=cfg.SLOW_PERIOD,
+                    signal=cfg.SIGNAL_PERIOD,
+                    entry_hhmm_min=cfg.ENTRY_HHMM_MIN,
+                    entry_hhmm_max=cfg.ENTRY_HHMM_MAX,
+                    logger=self.logger,
+                )
+                self.logger.info("📈 macd_cross 페이퍼 어댑터 초기화 완료")
+            else:
+                self.macd_cross_strategy = None
+        except Exception as e:
+            self.logger.warning(f"⚠️ macd_cross 어댑터 초기화 실패: {e}")
+            self.macd_cross_strategy = None
+
     def _initialize_ml_predictor(self):
         """ML 예측기 초기화"""
         try:

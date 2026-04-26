@@ -875,6 +875,16 @@ class DayTradingBot:
                             import traceback
                             self.logger.error(traceback.format_exc())
 
+                        # 🆕 macd_cross 페이퍼 universe 준비 (Task 6)
+                        try:
+                            if (
+                                StrategySettings.PAPER_STRATEGY == 'macd_cross'
+                                and self.decision_engine.macd_cross_strategy is not None
+                            ):
+                                await self._prepare_macd_cross_universe(current_time)
+                        except Exception as e:
+                            self.logger.error(f"❌ [macd_cross] universe 준비 실패: {e}")
+
                         self.logger.info(
                             f"[프리마켓] 리포트 완료: "
                             f"심리={report.market_sentiment}({report.sentiment_score:+.2f}), "
@@ -1108,6 +1118,120 @@ class DayTradingBot:
             f"loaded={summary['loaded']}/{summary['n_requested']} "
             f"elapsed={summary['elapsed_sec']:.1f}s"
         )
+
+    async def _prepare_macd_cross_universe(self, current_time):
+        """macd_cross 페이퍼 universe + daily history 주입 (08:55).
+
+        - stock_screener.preload_macd_cross_universe(top_n=30) 로 universe 선정
+        - trading_manager.add_selected_stock 으로 intraday_manager 등록
+        - 각 종목의 daily history 를 macd_cross_strategy 에 주입 → MACD hist 캐시
+        """
+        from config.strategy_settings import StrategySettings
+
+        cfg = StrategySettings.MacdCross
+        loop = asyncio.get_event_loop()
+
+        # 1. universe 선정
+        candidates = await loop.run_in_executor(
+            None,
+            lambda: self.stock_screener.preload_macd_cross_universe(top_n=cfg.UNIVERSE_TOP_N),
+        )
+        if not candidates:
+            self.logger.warning("[macd_cross] universe 없음 → prep skip")
+            return
+
+        # 2. trading_manager / intraday_manager 등록
+        registered = 0
+        for stock in candidates:
+            try:
+                success = await self.trading_manager.add_selected_stock(
+                    stock_code=stock.code,
+                    stock_name=stock.name,
+                    selection_reason=stock.reason,
+                    prev_close=stock.current_price,
+                )
+                if success:
+                    registered += 1
+            except Exception as e:
+                self.logger.debug(f"[macd_cross] 등록 실패 {stock.code}: {e}")
+
+        # 3. daily history 주입 → MACD hist 캐시
+        today_str = current_time.strftime("%Y%m%d")
+        strategy = self.decision_engine.macd_cross_strategy
+        if strategy is None:
+            self.logger.warning("[macd_cross] strategy 미초기화 → daily 주입 skip")
+            return
+
+        cached_count = 0
+        for stock in candidates:
+            try:
+                df_daily = await loop.run_in_executor(
+                    None,
+                    lambda code=stock.code: self._load_macd_cross_daily(code, today_str),
+                )
+                if df_daily is None or df_daily.empty:
+                    continue
+                strategy.set_daily_history(stock.code, df_daily, today_str)
+                cached_count += 1
+            except Exception as e:
+                self.logger.debug(f"[macd_cross] daily prep {stock.code}: {e}")
+
+        self.logger.info(
+            f"🎯 [macd_cross] universe 준비 완료: 등록={registered}, "
+            f"daily 캐시={cached_count}/{len(candidates)}"
+        )
+
+    def _load_macd_cross_daily(self, stock_code: str, today_yyyymmdd: str):
+        """종목별 일봉 로드 (oobption B: daily_prices 직접 조회).
+
+        Returns:
+            pd.DataFrame with columns [trade_date (YYYYMMDD str), close],
+            오늘 이전 거래일까지 내림차순 없음(오름차순), MACD warmup 충분한 행 수 보장.
+            오류 시 None 반환.
+        """
+        import psycopg2
+        import pandas as pd
+        from config.settings import (
+            PG_HOST, PG_PORT, PG_DATABASE_QUANT, PG_USER, PG_PASSWORD,
+        )
+        from config.strategy_settings import StrategySettings
+
+        cfg = StrategySettings.MacdCross
+        # MACD warmup: slow * 3 + signal = 34*3 + 12 = 114 영업일 → 150 fetch 로 여유 확보
+        lookback = 150
+
+        try:
+            conn = psycopg2.connect(
+                host=PG_HOST, port=PG_PORT, database=PG_DATABASE_QUANT,
+                user=PG_USER, password=PG_PASSWORD, connect_timeout=5,
+            )
+            cur = conn.cursor()
+            # today_yyyymmdd 는 'YYYYMMDD' 형식; daily_prices.date 는 ISO date 형식
+            today_iso = f"{today_yyyymmdd[:4]}-{today_yyyymmdd[4:6]}-{today_yyyymmdd[6:]}"
+            cur.execute(
+                """SELECT TO_CHAR(date, 'YYYYMMDD') AS trade_date, close
+                   FROM daily_prices
+                   WHERE stock_code = %s AND date < %s AND close IS NOT NULL
+                   ORDER BY date DESC
+                   LIMIT %s""",
+                [stock_code, today_iso, lookback],
+            )
+            rows = cur.fetchall()
+            cur.close()
+            conn.close()
+
+            if not rows:
+                return None
+
+            df = pd.DataFrame(rows, columns=["trade_date", "close"])
+            df["close"] = df["close"].astype(float)
+            # 오름차순 정렬 (가장 오래된 거래일이 첫 행)
+            df = df.iloc[::-1].reset_index(drop=True)
+            return df
+
+        except Exception as e:
+            self.logger.debug(f"[macd_cross] daily load {stock_code}: {e}")
+            return None
 
     async def _send_morning_briefing(self, report):
         """프리마켓 모닝 브리핑 텔레그램 발송"""
