@@ -554,6 +554,63 @@ class DatabaseManager:
             self.logger.error(f"실거래 매도 기록 저장 실패: {e}")
             return False
 
+    def get_open_real_buy_strategy(self, stock_code: str) -> Optional[str]:
+        """해당 종목의 미매칭 BUY 의 strategy 컬럼 조회.
+
+        봇 재시작 시 strategy_tag 복원에 사용. 없으면 None.
+        """
+        try:
+            row = self._fetchone('''
+                SELECT b.strategy
+                FROM real_trading_records b
+                WHERE b.stock_code = %s AND b.action = 'BUY'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM real_trading_records s
+                    WHERE s.buy_record_id = b.id AND s.action = 'SELL'
+                  )
+                ORDER BY b.timestamp DESC
+                LIMIT 1
+            ''', (stock_code,))
+            return row[0] if row and row[0] else None
+        except Exception as e:
+            self.logger.error(f"미매칭 BUY strategy 조회 실패: {e}")
+            return None
+
+    def get_open_real_buys_by_strategy(self, strategy: str) -> list:
+        """특정 strategy 의 미매칭 BUY 레코드 전체 조회 (D+2 청산용).
+
+        Returns:
+            list of dict: [{'id', 'stock_code', 'stock_name', 'quantity', 'price', 'timestamp'}, ...]
+        """
+        try:
+            with self._pool_obj.connection() as conn:
+                cur = conn.cursor()
+                cur.execute('''
+                    SELECT b.id, b.stock_code, b.stock_name, b.quantity, b.price, b.timestamp
+                    FROM real_trading_records b
+                    WHERE b.action = 'BUY' AND b.strategy = %s
+                      AND NOT EXISTS (
+                        SELECT 1 FROM real_trading_records s
+                        WHERE s.buy_record_id = b.id AND s.action = 'SELL'
+                      )
+                    ORDER BY b.timestamp ASC
+                ''', (strategy,))
+                rows = cur.fetchall()
+            return [
+                {
+                    'id': int(r[0]),
+                    'stock_code': r[1],
+                    'stock_name': r[2],
+                    'quantity': int(r[3]),
+                    'price': float(r[4]),
+                    'timestamp': r[5],
+                }
+                for r in rows
+            ]
+        except Exception as e:
+            self.logger.error(f"실거래 strategy 미매칭 매수 조회 실패 (strategy={strategy}): {e}")
+            return []
+
     def get_last_open_real_buy(self, stock_code: str) -> Optional[int]:
         """해당 종목의 미매칭 매수(가장 최근) ID 조회"""
         try:

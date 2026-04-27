@@ -303,16 +303,16 @@ class TelegramIntegration:
             self.logger.error(f"포지션 현황 알림 실패: {e}")
     
     async def notify_daily_summary(self):
-        """일일 거래 요약 알림"""
+        """일일 거래 요약 알림 + closing_trade 전용 롤링 통계 리포트"""
         if not self.is_enabled or not self.notification_settings.get('daily_summary', True):
             return
-        
+
         try:
             # 수익률 계산 (임시)
             return_rate = 0.0  # TODO: 실제 수익률 계산 로직
-            
+
             current_date = now_kst().strftime('%Y-%m-%d')
-            
+
             await self.notifier.send_daily_summary(
                 date=current_date,
                 total_trades=self.daily_stats['trades_count'],
@@ -321,6 +321,23 @@ class TelegramIntegration:
             )
         except Exception as e:
             self.logger.error(f"일일 요약 알림 실패: {e}")
+
+        # 🆕 closing_trade 전략 활성 시 롤링 통계 리포트 추가
+        try:
+            from config.strategy_settings import is_overnight_strategy
+            if is_overnight_strategy():
+                from core.daily_report import DailyReportGenerator
+                gen = DailyReportGenerator(logger=self.logger)
+                stats = gen.build_stats()
+                msg = gen.format_telegram_report(stats)
+                if hasattr(self.notifier, 'send_message'):
+                    await self.notifier.send_message(msg)
+                elif hasattr(self.notifier, 'notify_system_status'):
+                    await self.notifier.notify_system_status(msg)
+                else:
+                    self.logger.warning('notifier에 send_message 메서드 없음 — 리포트 전송 skip')
+        except Exception as e:
+            self.logger.error(f"closing_trade 리포트 실패: {e}")
     
     async def periodic_status_task(self):
         """주기적 상태 알림 태스크"""

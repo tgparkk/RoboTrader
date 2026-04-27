@@ -145,63 +145,18 @@ class TradingDecisionEngine:
             self.pattern_logger = None
             self.logger.info("📊 패턴 데이터 로거 비활성화 (실시간 성능 최적화)")
 
-        # 🆕 전략 설정 로드
+        # 전략 설정 로드 (macd_cross 단일 운영)
         try:
             from config.strategy_settings import StrategySettings
             self.active_strategy = StrategySettings.ACTIVE_STRATEGY
             self.strategy_settings = StrategySettings
             self.logger.info(f"📈 활성 전략: {self.active_strategy}")
-
-            # 🆕 종가매매(오버나이트) 전략 초기화
-            if self.active_strategy == 'closing_trade':
-                from core.strategies.closing_trade_strategy import ClosingTradeStrategy
-                self.closing_trade_strategy = ClosingTradeStrategy(logger=self.logger)
-                ct = StrategySettings.ClosingTrade
-                self.logger.info(
-                    f"   진입조건: {ct.ENTRY_HHMM_START}~{ct.ENTRY_HHMM_END} "
-                    f"전일body>={ct.MIN_PREV_BODY_PCT}% 당일>={ct.MAX_DAY_DECLINE_PCT}% "
-                    f"익일{ct.EXIT_HHMM}시청산"
-                )
-            else:
-                self.closing_trade_strategy = None
-
-            # 🆕 가중 점수 전략 초기화 (Trial #1600, 2026-04-21)
-            if self.active_strategy == 'weighted_score':
-                try:
-                    from core.strategies.weighted_score_strategy import WeightedScoreStrategy
-                    ws = StrategySettings.WeightedScore
-                    # WeightedScore 설정을 명시적으로 주입 — trading_config.json 은 무시
-                    ws_config = {
-                        'allowed_weekdays': list(ws.ALLOWED_WEEKDAYS),
-                        'entry_start_hour': ws.ENTRY_START_HOUR,
-                        'entry_end_hour': ws.ENTRY_END_HOUR,
-                        'warmup_minutes': ws.WARMUP_MINUTES,
-                        'one_trade_per_stock_per_day': ws.ONE_TRADE_PER_STOCK_PER_DAY,
-                        'max_positions': ws.MAX_DAILY_POSITIONS,
-                        'stop_loss_pct': ws.STOP_LOSS_PCT,
-                        'take_profit_pct': ws.TAKE_PROFIT_PCT,
-                    }
-                    self.weighted_score_strategy = WeightedScoreStrategy(
-                        config=ws_config, logger=self.logger
-                    )
-                    info = self.weighted_score_strategy.get_strategy_info()
-                    self.logger.info(
-                        f"   weighted_score: threshold={info['entry_conditions']['threshold_abs']:+.4f} "
-                        f"max_pos={ws.MAX_DAILY_POSITIONS} "
-                        f"SL={ws.STOP_LOSS_PCT:+.2f}% TP={ws.TAKE_PROFIT_PCT:+.2f}% "
-                        f"max_hold={ws.MAX_HOLDING_DAYS}일 overnight={ws.ALLOW_OVERNIGHT_HOLD} "
-                        f"virtual_only={ws.VIRTUAL_ONLY}"
-                    )
-                except Exception as ws_err:
-                    self.logger.error(f"❌ weighted_score 전략 초기화 실패: {ws_err}")
-                    self.weighted_score_strategy = None
-                    self.active_strategy = 'pullback'
-            else:
-                self.weighted_score_strategy = None
-
+            # 폐기된 전략 호환 필드 (외부 참조 보호용 None 노출)
+            self.closing_trade_strategy = None
+            self.weighted_score_strategy = None
         except Exception as e:
-            self.logger.warning(f"⚠️ 전략 설정 로드 실패: {e}, 기본 전략(pullback) 사용")
-            self.active_strategy = 'pullback'
+            self.logger.warning(f"⚠️ 전략 설정 로드 실패: {e}")
+            self.active_strategy = 'macd_cross'
             self.strategy_settings = None
             self.closing_trade_strategy = None
             self.weighted_score_strategy = None
@@ -232,10 +187,11 @@ class TradingDecisionEngine:
         else:
             self.performance_gate = None
 
-        # 🆕 macd_cross 페이퍼 어댑터 초기화 (2026-04-26)
+        # macd_cross 어댑터 초기화 (active 또는 paper 둘 다 지원)
         try:
             from config.strategy_settings import StrategySettings
-            if StrategySettings.PAPER_STRATEGY == 'macd_cross':
+            if (StrategySettings.ACTIVE_STRATEGY == 'macd_cross'
+                    or StrategySettings.PAPER_STRATEGY == 'macd_cross'):
                 from core.strategies.macd_cross_strategy import MacdCrossStrategy
                 cfg = StrategySettings.MacdCross
                 self.macd_cross_strategy = MacdCrossStrategy(
@@ -246,7 +202,13 @@ class TradingDecisionEngine:
                     entry_hhmm_max=cfg.ENTRY_HHMM_MAX,
                     logger=self.logger,
                 )
-                self.logger.info("📈 macd_cross 페이퍼 어댑터 초기화 완료")
+                mode = ('실거래' if StrategySettings.ACTIVE_STRATEGY == 'macd_cross'
+                        and not cfg.VIRTUAL_ONLY else '가상')
+                self.logger.info(
+                    f"📈 macd_cross 어댑터 초기화 완료 ({mode}, "
+                    f"max_pos={cfg.MAX_DAILY_POSITIONS}, hold={cfg.HOLD_DAYS}d, "
+                    f"entry={cfg.ENTRY_HHMM_MIN}~{cfg.ENTRY_HHMM_MAX})"
+                )
             else:
                 self.macd_cross_strategy = None
         except Exception as e:
@@ -401,16 +363,13 @@ class TradingDecisionEngine:
             # 🆕 현재 처리 중인 종목 코드 저장 (디버깅용)
             self._current_stock_code = stock_code
 
-            # 🆕 전략에 따라 매수 신호 확인 분기 (게이트보다 먼저 — 전략 통과 종목만 가상 추적)
-            if self.active_strategy == 'closing_trade':
-                # 종가매매(오버나이트) 전략
-                signal_result, reason, price_info = self._check_closing_trade_buy_signal(combined_data, trading_stock)
-            elif self.active_strategy == 'weighted_score':
-                # 가중 점수 전략 (Trial #1600)
-                signal_result, reason, price_info = self._check_weighted_score_buy_signal(combined_data, trading_stock)
-            else:
-                # 기존 눌림목 캔들패턴 전략 (기본값)
-                signal_result, reason, price_info = self._check_pullback_candle_buy_signal(combined_data, trading_stock)
+            # macd_cross 는 main.py::_evaluate_macd_cross_window 에서 직접 분기 처리.
+            # 본 analyze_buy_decision 진입경로는 macd_cross 에서는 사용 안 함.
+            if self.active_strategy == 'macd_cross':
+                return False, "macd_cross 는 _evaluate_macd_cross_window 경로 사용", buy_info
+            # 폐기된 전략 호환 (실행되지 않음 — validate_settings 가 차단)
+            return False, f"미지원 전략: {self.active_strategy}", buy_info
+            signal_result, reason, price_info = False, "", None  # noqa: unreachable
             if signal_result and price_info:
                 # 성과 게이트 체크 (전략 신호 통과 후 — 가상 추적 정확도 보장)
                 if self.performance_gate:
@@ -586,7 +545,11 @@ class TradingDecisionEngine:
                 else:
                     return False, "수량 계산 실패", buy_info
             
-            return False, f"매수 조건 미충족 (눌림목패턴: {reason})" if reason else "매수 조건 미충족", buy_info
+            strategy_label = {
+                'weighted_score': 'weighted_score',
+                'closing_trade': 'closing_trade',
+            }.get(self.active_strategy, '눌림목패턴')
+            return False, f"매수 조건 미충족 ({strategy_label}: {reason})" if reason else "매수 조건 미충족", buy_info
             
         except Exception as e:
             self.logger.error(f"❌ {trading_stock.stock_code} 매수 판단 오류: {e}")
@@ -629,27 +592,10 @@ class TradingDecisionEngine:
         Returns:
             Tuple[매도신호여부, 매도사유]
         """
-        # 🆕 오버나이트 홀드 (closing_trade): 장중 매도 신호 항상 False
-        # 실제 청산은 main.py overnight_exit 태스크가 익일 09:00에 트리거
-        if self.active_strategy == 'closing_trade':
-            return False, "오버나이트 홀드"
-
-        # 🆕 weighted_score: max_holding_days 초과 시 강제 청산 시그널
-        if self.active_strategy == 'weighted_score':
-            try:
-                from config.strategy_settings import StrategySettings
-                buy_time = getattr(trading_stock, 'buy_time', None)
-                if buy_time is not None:
-                    import numpy as np
-                    entry_date = buy_time.date()
-                    today = now_kst().date()
-                    # 영업일 기준 (Mon-Fri). 한국 공휴일은 미반영 — 오차 수일/년 허용.
-                    days_held = int(np.busday_count(entry_date, today))
-                    max_days = StrategySettings.WeightedScore.MAX_HOLDING_DAYS
-                    if days_held >= max_days:
-                        return True, f"max_holding {days_held}/{max_days}일 도달"
-            except Exception as e:
-                self.logger.debug(f"max_hold 체크 실패 {trading_stock.stock_code}: {e}")
+        # macd_cross: 매도는 main.py::_macd_cross_live_exit_task 가 D+2 영업일 09:01~05 +
+        # EOD 안전망 경로로 처리. 본 analyze_sell_decision 는 macd_cross 에서 no-op.
+        if self.active_strategy == 'macd_cross':
+            return False, "macd_cross 매도는 _macd_cross_live_exit_task 경로"
 
         try:
             # 실시간 현재가 정보만 사용 (간단한 손절/익절 로직)
@@ -699,11 +645,20 @@ class TradingDecisionEngine:
             self.logger.error(f"❌ {trading_stock.stock_code} 매도 판단 오류: {e}")
             return False, f"오류: {e}"
     
-    async def execute_real_buy(self, trading_stock, buy_reason, buy_price, quantity, candle_time=None):
-        """실제 매수 주문 실행 (TradeExecutor 위임)"""
+    async def execute_real_buy(self, trading_stock, buy_reason, buy_price, quantity,
+                               candle_time=None, strategy_tag=None, market=False):
+        """실제 매수 주문 실행 (TradeExecutor 위임).
+
+        Args:
+            strategy_tag: real_trading_records.strategy 컬럼 명시 태그.
+                None 이면 trading_stock.selection_reason 폴백.
+            market: True 면 시장가 주문. False 면 지정가 (기본).
+        """
         if self._trade_executor:
             return await self._trade_executor.execute_real_buy(
-                trading_stock, buy_reason, buy_price, quantity, candle_time
+                trading_stock, buy_reason, buy_price, quantity, candle_time,
+                strategy_tag=strategy_tag,
+                market=market,
             )
         else:
             self.logger.error("❌ TradeExecutor 미초기화")
@@ -840,398 +795,6 @@ class TradingDecisionEngine:
     
     
 
-    def _check_pullback_candle_buy_signal(self, data, trading_stock=None) -> Tuple[bool, str, Optional[Dict[str, float]]]:
-        """전략 4: 눌림목 캔들패턴 매수 신호 확인 (3분봉 기준)
-        
-        Args:
-            data: 이미 3분봉으로 변환된 데이터 (중복 변환 방지)
-            
-        Returns:
-            Tuple[bool, str, Optional[Dict]]: (신고여부, 사유, 가격정보)
-            가격정보: {'buy_price': float, 'entry_low': float, 'target_profit': float}
-        """
-        try:
-            from core.indicators.pullback_candle_pattern import PullbackCandlePattern, SignalType
-            
-            # 필요한 컬럼 확인
-            required_cols = ['open', 'high', 'low', 'close', 'volume']
-            if not all(col in data.columns for col in required_cols):
-                return False, "필요한 데이터 컬럼 부족", None
-            
-            # ❌ 중복 변환 제거: data는 이미 3분봉으로 변환된 상태
-            # ❌ 중복 검증 제거: 상위 함수에서 이미 길이 확인함
-            data_3min = data  # main.py에서 이미 변환됨
-            
-            # 🆕 3분봉 확정 확인 (signal_replay 방식) - 로그는 확정될 때만
-            if not self._is_candle_confirmed(data_3min):
-                return False, "3분봉 미확정", None
-            
-            '''
-            # 일봉 데이터 가져오기 (intraday_manager에서)
-            daily_data = None
-            if self.intraday_manager:
-                try:
-                    stock_data = self.intraday_manager.get_stock_data(trading_stock.stock_code)
-                    if stock_data and hasattr(stock_data, 'daily_data'):
-                        daily_data = stock_data.daily_data
-                        if daily_data is not None and not daily_data.empty:
-                            self.logger.debug(f"📊 {trading_stock.stock_code} 일봉 데이터 전달: {len(daily_data)}개")
-                except Exception as e:
-                    self.logger.debug(f"⚠️ {trading_stock.stock_code} 일봉 데이터 조회 실패: {e}")
-            '''
-
-            # 🆕 개선된 신호 생성 로직 사용 (4/5가 계산 포함 + 일봉 데이터 제외 - 시뮬과 동일)
-            signal_strength = PullbackCandlePattern.generate_improved_signals(
-                data_3min,
-                #stock_code=getattr(self, '_current_stock_code', 'UNKNOWN'),
-                stock_code=trading_stock.stock_code,
-                debug=True
-                # daily_data=daily_data  # 시뮬과 동일하게 일봉 데이터 전달 안 함
-            )
-            
-            if signal_strength is None:
-                return False, "신호 계산 실패", None
-            
-            # 매수 신호 확인
-            if signal_strength.signal_type in [SignalType.STRONG_BUY, SignalType.CAUTIOUS_BUY]:
-                # 🎯 간단한 패턴 필터 적용 (시뮬레이션과 동일 - 명백히 약한 패턴만 차단)
-                try:
-                    from core.indicators.simple_pattern_filter import SimplePatternFilter
-
-                    pattern_filter = SimplePatternFilter()  # 시뮬과 동일하게 logger 없이 생성
-
-                    # 약한 패턴 필터링 (시뮬레이션과 동일한 로직)
-                    should_filter, filter_reason = pattern_filter.should_filter_out(
-                        trading_stock.stock_code, signal_strength, data_3min
-                    )
-
-                    if should_filter:
-                        self.logger.info(f"🚫 {trading_stock.stock_code} 약한 패턴으로 매수 차단: {filter_reason}")
-                        return False, f"간단한패턴필터차단: {filter_reason}", None
-                    else:
-                        self.logger.debug(f"✅ {trading_stock.stock_code} 패턴 필터 통과: {filter_reason}")
-
-                except Exception as e:
-                    self.logger.warning(f"⚠️ {trading_stock.stock_code} 패턴 필터 오류: {e}")
-                    # 필터 오류 시에도 매수 신호 진행 (안전장치)
-
-                # 신호 이유 생성
-                reasons = ' | '.join(signal_strength.reasons)
-                signal_desc = f"{signal_strength.signal_type.value} (신뢰도: {signal_strength.confidence:.0f}%)"
-
-                # 가격 정보 생성 (안전한 타입 변환 + ML용 패턴 데이터 포함)
-                price_info = {
-                    'buy_price': self._safe_float_convert(signal_strength.buy_price),
-                    'entry_low': self._safe_float_convert(signal_strength.entry_low),
-                    'target_profit': self._safe_float_convert(signal_strength.target_profit),
-                    'pattern_data': getattr(signal_strength, 'pattern_data', {})  # ML 필터용 패턴 데이터
-                }
-                
-                # 🆕 매수 신호 발생 상세 로깅 (데이터 정보 포함)
-                from utils.korean_time import now_kst
-                current_time = now_kst()
-                last_3min_time = data_3min['datetime'].iloc[-1]
-                data_count = len(data_3min)
-                
-                self.logger.info(f"🚀 매수 신호 발생!")
-                self.logger.info(f"📊 신호 발생 데이터:")
-                self.logger.info(f"  - 현재 시간: {current_time.strftime('%H:%M:%S')}")
-                self.logger.info(f"  - 3분봉 개수: {data_count}개")
-                self.logger.info(f"  - 신호 근거 3분봉: {last_3min_time}")
-                
-                # 최근 2개 봉 정보만 간단히
-                if data_count >= 2:
-                    for i in range(2):
-                        idx = -(2-i)
-                        row = data_3min.iloc[idx]
-                        # 문자열을 숫자로 변환하여 포맷팅
-                        close_price = self._safe_float_convert(row['close'])
-                        volume = int(self._safe_float_convert(row['volume']))
-                        self.logger.info(f"  - 3분봉[{i+1}]: {row['datetime'].strftime('%H:%M')} C:{close_price:,.0f} V:{volume:,}")
-                
-                self.logger.info(f"💡 신호 상세:")
-                self.logger.info(f"  - 신호 유형: {signal_desc}")
-                self.logger.info(f"  - 신호 이유: {reasons}")
-                # 안전한 타입 변환
-                buy_price = self._safe_float_convert(signal_strength.buy_price)
-                entry_low = self._safe_float_convert(signal_strength.entry_low)
-                self.logger.info(f"  - 매수 가격: {buy_price:,.0f}원 (4/5가)")
-                self.logger.info(f"  - 진입 저가: {entry_low:,.0f}원")
-                self.logger.info(f"  - 목표수익률: {signal_strength.target_profit:.1f}%")
-
-                # 📊 4단계 패턴 구간 데이터 로깅 및 동적 손익비용 데이터 저장
-                if self.pattern_logger and hasattr(signal_strength, 'pattern_data') and signal_strength.pattern_data:
-                    try:
-                        pattern_id = self.pattern_logger.log_pattern_data(
-                            stock_code=trading_stock.stock_code,
-                            signal_type=signal_strength.signal_type.value,
-                            confidence=signal_strength.confidence,
-                            support_pattern_info=signal_strength.pattern_data,
-                            data_3min=data_3min
-                        )
-                        # pattern_id를 나중에 매매 결과 업데이트에 사용
-                        trading_stock.last_pattern_id = pattern_id
-                        self.logger.debug(f"📝 패턴 데이터 로깅 완료: {pattern_id}")
-
-                        # 🔧 동적 손익비를 위한 패턴 데이터 저장 (기존 코드 흐름 방해 안 함)
-                        if not hasattr(trading_stock, 'pattern_data'):
-                            trading_stock.pattern_data = signal_strength.pattern_data
-                            self.logger.debug(f"🔧 패턴 데이터 저장 완료 (동적 손익비용)")
-                    except Exception as log_err:
-                        self.logger.warning(f"⚠️ 패턴 데이터 로깅 실패: {log_err}")
-
-                return True, f"{signal_desc} - {reasons}", price_info
-            
-            # 매수 신호가 아닌 경우
-            if signal_strength.signal_type == SignalType.AVOID:
-                reasons = ' | '.join(signal_strength.reasons)
-                return False, f"회피신호: {reasons}", None
-            elif signal_strength.signal_type == SignalType.WAIT:
-                reasons = ' | '.join(signal_strength.reasons)
-                return False, f"대기신호: {reasons}", None
-            else:
-                return False, "신호 조건 미충족", None
-            
-        except Exception as e:
-            self.logger.error(f"❌ 눌림목 캔들패턴 매수 신호 확인 오류: {e}")
-            return False, "", None
-
-    def _check_closing_trade_buy_signal(self, data, trading_stock=None) -> Tuple[bool, str, Optional[Dict[str, float]]]:
-        """
-        종가매매(오버나이트) 전략 매수 신호 확인.
-
-        조건:
-          - 14:00~14:20 진입 시간창
-          - 전일 양봉 몸통 ≥ 1.0%
-          - 당일 최저점 시가 대비 ≥ -3%
-          - 현재가 > 당일 시가 (본전)
-          - 현재가 > 당일 VWAP (상승 확정)
-
-        Returns:
-            Tuple[bool, str, Optional[Dict]]: (신호여부, 사유, 가격정보)
-        """
-        try:
-            if not self.closing_trade_strategy:
-                return False, "종가매매전략 미초기화", None
-
-            stock_code = trading_stock.stock_code if trading_stock else "UNKNOWN"
-
-            # 시뮬 정합: closing_trade는 프리로드 종목만 사용 (실시간 스크리너 제외)
-            try:
-                from config.strategy_settings import StrategySettings
-                if getattr(StrategySettings.ClosingTrade, 'PRELOAD_ONLY_CANDIDATES', False):
-                    sel_reason = (trading_stock.selection_reason or "") if trading_stock else ""
-                    if not sel_reason.startswith("프리로드"):
-                        return False, "프리로드 외 후보 차단", None
-            except Exception:
-                pass
-
-            if data is None or len(data) < 20:
-                return False, "데이터 부족", None
-
-            current_time = now_kst()
-            trade_date = current_time.strftime('%Y%m%d')
-            weekday = current_time.weekday()
-            time_str = current_time.strftime('%H%M%S')
-
-            # 🆕 K: 분봉 수집 지연 sanity check (2026-04-18)
-            # 14:20:05 평가 시점에 마지막 봉이 14:17 이하(lag>2)면 VWAP/day_low 왜곡
-            try:
-                last_time_str = str(data.iloc[-1].get('time', '') or '') if hasattr(data.iloc[-1], 'get') else str(data.iloc[-1]['time'])
-                if len(last_time_str) >= 4:
-                    last_hhmm = int(last_time_str[:4])
-                    cur_hhmm = current_time.hour * 100 + current_time.minute
-                    lag_min = cur_hhmm - last_hhmm  # 14:20~14:22 창 내 동일 시(hour)
-                    if lag_min > 2:
-                        return False, f"분봉 지연 {lag_min}분 (마지막 {last_time_str[:4]})", None
-            except Exception as _le:
-                self.logger.debug(f"분봉 지연 체크 skip ({stock_code}): {_le}")
-
-            # 시가
-            day_open = self._get_day_open_price(stock_code, trade_date, data)
-            if day_open is None or day_open <= 0:
-                return False, "시가 데이터 없음", None
-
-            current_price = self._safe_float_convert(data.iloc[-1]['close'])
-            if current_price <= 0:
-                return False, "현재가 데이터 없음", None
-
-            # 1차 진입 조건 (시간·요일·전일몸통·본전)
-            can_enter, reason = self.closing_trade_strategy.check_entry_conditions(
-                stock_code=stock_code,
-                current_price=current_price,
-                day_open=day_open,
-                current_time=time_str,
-                trade_date=trade_date,
-                weekday=weekday,
-            )
-            if not can_enter:
-                return False, reason, None
-
-            # 동시 보유 제한 (POSITIONED + BUY_PENDING)
-            if self.trading_manager:
-                from core.models import StockState
-                positioned = self.trading_manager.get_stocks_by_state(StockState.POSITIONED)
-                buy_pending = self.trading_manager.get_stocks_by_state(StockState.BUY_PENDING)
-                current_holding = len(positioned) + len(buy_pending)
-                effective_max = self.closing_trade_strategy.config['max_daily_positions']
-                if current_holding >= effective_max:
-                    return False, f"동시 보유 {effective_max}종목 도달 (현재 {current_holding})", None
-
-            # 2차 고급 조건 (VWAP + 당일 최저 체크)
-            adv_ok, adv_reason = self.closing_trade_strategy.check_advanced_conditions(
-                df=data, candle_idx=len(data) - 1,
-            )
-            if not adv_ok:
-                return False, f"고급필터: {adv_reason}", None
-
-            # 3차 surge_avoidance (급등/VI 종목 배제, 시뮬 정합)
-            prev_close_val = self.closing_trade_strategy.prev_close_map.get(stock_code, 0.0)
-            surge_ok, surge_reason = self.closing_trade_strategy.check_surge_avoidance(
-                df=data, candle_idx=len(data) - 1,
-                day_open=day_open, prev_close=prev_close_val,
-            )
-            if not surge_ok:
-                return False, f"surge배제: {surge_reason}", None
-
-            pct_from_open = (current_price / day_open - 1) * 100
-            prev_body = self.closing_trade_strategy.prev_body_map.get(stock_code, 0)
-
-            price_info = {
-                'buy_price': current_price,
-                'entry_low': day_open * (1 + self.closing_trade_strategy.config['max_day_decline_pct'] / 100),
-                'target_profit': 0.0,  # 장중 익절 없음 (오버나이트)
-                'pattern_data': {
-                    'pct_from_open': pct_from_open,
-                    'day_open': day_open,
-                    'current_price': current_price,
-                    'prev_body_pct': prev_body,
-                    'entry_hhmm': int(time_str[:4]),
-                    'weekday': weekday,
-                    'strategy': 'closing_trade',
-                }
-            }
-
-            self.logger.info(f"🌙 [종가매매전략] 매수 신호!")
-            self.logger.info(f"  - 종목: {stock_code}")
-            self.logger.info(f"  - 시가: {day_open:,.0f}원 / 현재가: {current_price:,.0f}원 (시가+{pct_from_open:+.2f}%)")
-            self.logger.info(f"  - 전일 양봉: {prev_body:+.2f}%")
-            self.logger.info(f"  - 시간: {current_time.strftime('%H:%M')} (익일 09:00 청산 예정)")
-
-            signal_reason = (f"종가매매전략: 전일body+{prev_body:.2f}% 시가+{pct_from_open:.2f}% "
-                             f"(익일청산)")
-            return True, signal_reason, price_info
-
-        except Exception as e:
-            self.logger.error(f"❌ 종가매매전략 매수 신호 확인 오류: {e}")
-            import traceback
-            self.logger.error(traceback.format_exc())
-            return False, f"오류: {e}", None
-
-    # =========================================================================
-    # 가중 점수 전략 (weighted_score, Trial #1600)
-    # =========================================================================
-
-    def _check_weighted_score_buy_signal(
-        self, data, trading_stock=None
-    ) -> Tuple[bool, str, Optional[Dict[str, float]]]:
-        """가중 점수 전략 매수 신호.
-
-        흐름:
-        1. 기본 게이트 (시간·요일·동시보유·중복·daily 피처 준비)
-        2. check_advanced_conditions → score > threshold_abs 판정
-        3. 신호 발생 시 buy_price 등 리턴
-
-        Returns:
-            Tuple[bool, str, Optional[Dict]]: (신호 여부, 사유, 가격 정보)
-        """
-        try:
-            if not getattr(self, 'weighted_score_strategy', None):
-                return False, "weighted_score 전략 미초기화", None
-
-            # Phase 5 (2026-04-21): VIRTUAL_ONLY 가드 해제.
-            # - VIRTUAL_ONLY=True  → main.py 분기에서 execute_virtual_buy 로 라우팅
-            # - VIRTUAL_ONLY=False → execute_real_buy (실거래)
-            # 신호 자체는 통과시키고, 실제 체결 경로만 main.py 에서 분기한다.
-
-            stock_code = trading_stock.stock_code if trading_stock else "UNKNOWN"
-
-            if data is None or len(data) < 31:
-                return False, f"분봉 데이터 부족 ({0 if data is None else len(data)} < 31)", None
-
-            current_time = now_kst()
-            trade_date = current_time.strftime('%Y%m%d')
-            weekday = current_time.weekday()
-            time_str = current_time.strftime('%H%M%S')
-
-            # 동시 보유 체크 (POSITIONED + BUY_PENDING)
-            if self.trading_manager:
-                from core.models import StockState
-                positioned = self.trading_manager.get_stocks_by_state(StockState.POSITIONED)
-                buy_pending = self.trading_manager.get_stocks_by_state(StockState.BUY_PENDING)
-                current_holding = len(positioned) + len(buy_pending)
-                effective_max = self.get_effective_max_positions()
-                if current_holding >= effective_max:
-                    return False, (
-                        f"동시 보유 최대 {effective_max}종목 도달 (현재 {current_holding})"
-                    ), None
-
-            # 시가 / 현재가
-            day_open = self._get_day_open_price(stock_code, trade_date, data)
-            if day_open is None or day_open <= 0:
-                return False, "시가 데이터 없음", None
-
-            current_price = self._safe_float_convert(data.iloc[-1]['close'])
-            if current_price <= 0:
-                return False, "현재가 데이터 없음", None
-
-            # 기본 게이트
-            can_enter, reason = self.weighted_score_strategy.check_entry_conditions(
-                stock_code=stock_code,
-                current_price=current_price,
-                day_open=day_open,
-                current_time=time_str,
-                trade_date=trade_date,
-                weekday=weekday,
-            )
-            if not can_enter:
-                return False, reason, None
-
-            # score 계산 — 분봉 DF + candle_idx
-            adv_ok, adv_reason = self.weighted_score_strategy.check_advanced_conditions(
-                df=data, candle_idx=len(data) - 1, stock_code=stock_code,
-            )
-            if not adv_ok:
-                return False, f"점수미달: {adv_reason}", None
-
-            # 신호 — buy_price 정보 구성
-            # weighted_score 는 고정 SL/TP 이므로 entry 기준 목표가 계산
-            strategy = self.weighted_score_strategy
-            buy_price = current_price
-            target_tp = current_price * (1.0 + strategy.take_profit_override / 100.0)
-            target_sl = current_price * (1.0 + strategy.stop_loss_override / 100.0)
-
-            price_info = {
-                'buy_price': buy_price,
-                'entry_low': buy_price,
-                'target_profit': target_tp,
-                'target_loss': target_sl,
-                'strategy_name': 'weighted_score',
-                'virtual_only': StrategySettings.WeightedScore.VIRTUAL_ONLY,
-            }
-
-            self.logger.info(
-                f"✅ [weighted_score] {stock_code} 매수신호 | "
-                f"{adv_reason} | price={buy_price:.0f} "
-                f"TP={target_tp:.0f} SL={target_sl:.0f}"
-            )
-            return True, adv_reason, price_info
-
-        except Exception as e:
-            import traceback
-            self.logger.error(f"❌ weighted_score 매수 신호 확인 오류: {e}")
-            self.logger.error(traceback.format_exc())
-            return False, f"오류: {e}", None
 
     # =========================================================================
     # 프리마켓 인텔리전스 연동
@@ -1252,37 +815,33 @@ class TradingDecisionEngine:
         return self._pre_market_report
 
     def get_effective_max_positions(self) -> int:
-        """프리마켓 분석 반영된 최대 동시 보유 종목 수 (활성 전략 기준)."""
+        """프리마켓 분석 반영된 최대 동시 보유 종목 수.
+
+        macd_cross 단일 운영: MacdCross.MAX_DAILY_POSITIONS (=5) 가 default.
+        프리마켓 리포트가 있으면 그 값 우선 (서킷브레이커 등 시나리오).
+        """
         from config.strategy_settings import StrategySettings
-
-        active = StrategySettings.ACTIVE_STRATEGY
-        if active == 'weighted_score':
-            default = StrategySettings.WeightedScore.MAX_DAILY_POSITIONS
-        elif active == 'closing_trade':
-            default = StrategySettings.ClosingTrade.MAX_DAILY_POSITIONS
-        else:
-            default = 5  # pullback 기본값
-
+        default = StrategySettings.MacdCross.MAX_DAILY_POSITIONS
         if self._pre_market_report and self._pre_market_report.nxt_available:
             return self._pre_market_report.recommended_max_positions
         return default
 
     def get_effective_stop_loss(self) -> float:
-        """활성 전략의 손절 비율 (0.05 = 5%, 양수로 반환)."""
-        from config.strategy_settings import StrategySettings
-        if StrategySettings.ACTIVE_STRATEGY == 'weighted_score':
-            # weighted_score 는 단일 지점(WeightedScore.STOP_LOSS_PCT) 관리
-            return abs(StrategySettings.WeightedScore.STOP_LOSS_PCT) / 100.0
+        """[deprecated] 손절 비율. macd_cross 는 SL 없음 (HOLD_DAYS=2).
+
+        호환용으로 trading_config 의 stop_loss_ratio (default 0.05) 반환.
+        macd_cross 매도 경로(_macd_cross_live_exit_task)는 본 메서드를 사용하지 않음.
+        """
         default = self.config.get('risk_management', {}).get('stop_loss_ratio', 0.05)
         if self._pre_market_report and self._pre_market_report.nxt_available:
             return self._pre_market_report.recommended_stop_loss_pct
         return default
 
     def get_effective_take_profit(self) -> float:
-        """활성 전략의 익절 비율 (0.06 = 6%, 양수로 반환)."""
-        from config.strategy_settings import StrategySettings
-        if StrategySettings.ACTIVE_STRATEGY == 'weighted_score':
-            return StrategySettings.WeightedScore.TAKE_PROFIT_PCT / 100.0
+        """[deprecated] 익절 비율. macd_cross 는 TP 없음 (HOLD_DAYS=2).
+
+        호환용으로 trading_config 의 take_profit_ratio (default 0.06) 반환.
+        """
         default = self.config.get('risk_management', {}).get('take_profit_ratio', 0.06)
         if self._pre_market_report and self._pre_market_report.nxt_available:
             return self._pre_market_report.recommended_take_profit_pct

@@ -34,8 +34,15 @@ class TradeExecutor:
         self.virtual_trading = engine.virtual_trading
         self.config = engine.config
 
-    async def execute_real_buy(self, trading_stock, buy_reason, buy_price, quantity, candle_time=None):
-        """실제 매수 주문 실행 (사전 계산된 가격, 수량 사용)"""
+    async def execute_real_buy(self, trading_stock, buy_reason, buy_price, quantity,
+                               candle_time=None, strategy_tag=None, market=False):
+        """실제 매수 주문 실행 (사전 계산된 가격, 수량 사용).
+
+        Args:
+            strategy_tag: real_trading_records.strategy 컬럼 명시 태그 (e.g. 'macd_cross').
+                None 이면 trading_stock.selection_reason 폴백 (기존 동작 보존).
+            market: True 면 시장가 주문 (macd_cross). False 면 지정가 (기본).
+        """
         try:
             stock_code = trading_stock.stock_code
 
@@ -54,7 +61,9 @@ class TradeExecutor:
                     stock_code=stock_code,
                     price=buy_price,
                     quantity=quantity,
-                    reason=buy_reason
+                    reason=buy_reason,
+                    strategy_tag=strategy_tag,
+                    market=market,
                 )
 
                 if success:
@@ -77,65 +86,25 @@ class TradeExecutor:
             return False
 
     async def execute_virtual_buy(self, trading_stock, combined_data, buy_reason, buy_price=None):
-        """가상 매수 실행"""
+        """가상 매수 실행 (현재 전략: macd_cross 페이퍼는 save_virtual_buy 직호출.
+        본 메서드는 일반 가상매매 라우팅 호환용)."""
         try:
             stock_code = trading_stock.stock_code
             stock_name = trading_stock.stock_name
 
-            # buy_price가 지정된 경우 사용, 아니면 4/5가 계산 로직 사용
             if buy_price is not None:
                 current_price = buy_price
-                self.logger.debug(f"📊 {stock_code} 지정된 매수가로 매수: {current_price:,.0f}원")
             else:
                 current_price = self.engine._safe_float_convert(combined_data['close'].iloc[-1])
-                self.logger.debug(f"📊 {stock_code} 현재가로 매수 (기본값): {current_price:,.0f}원")
 
-                # 4/5가 계산 (별도 클래스 사용)
-                try:
-                    from core.price_calculator import PriceCalculator
-                    from core.timeframe_converter import TimeFrameConverter
-                    data_3min = TimeFrameConverter.convert_to_3min_data(combined_data)
-
-                    four_fifths_price, entry_low = PriceCalculator.calculate_three_fifths_price(data_3min, self.logger)
-
-                    if four_fifths_price is not None:
-                        current_price = four_fifths_price
-                        self.logger.debug(f"🎯 4/5가로 매수: {stock_code} @{current_price:,.0f}원")
-
-                        # 진입 저가 저장
-                        if entry_low is not None:
-                            try:
-                                setattr(trading_stock, '_entry_low', entry_low)
-                            except Exception:
-                                pass
-                    else:
-                        self.logger.debug(f"⚠️ 4/5가 계산 실패 → 현재가 사용: {current_price:,.0f}원")
-
-                except Exception as e:
-                    self.logger.debug(f"4/5가 계산 오류: {e} → 현재가 사용")
-                    # 계산 실패 시 현재가 유지
-
-            # 가상 매수 수량 설정 (VirtualTradingManager 사용)
             quantity = self.virtual_trading.get_max_quantity(current_price)
             if quantity <= 0:
                 self.logger.warning(f"⚠️ 매수 불가: 잔고 부족 또는 가격 오류")
                 return
 
-            # 전략명 추출
-            if "가격박스" in buy_reason:
-                strategy = "가격박스+이등분선"
-            elif "다중볼린저밴드" in buy_reason:
-                strategy = "다중볼린저밴드"
-            elif "눌림목캔들패턴" in buy_reason:
-                strategy = "눌림목캔들패턴"
-            elif "score" in buy_reason.lower() or "weighted" in buy_reason.lower():
-                strategy = "weighted_score"
-            elif "종가매매" in buy_reason or "closing_trade" in buy_reason.lower():
-                strategy = "closing_trade"
-            else:
-                strategy = "볼린저밴드+이등분선"
+            # buy_reason 의 첫 단어를 strategy 태그로 사용 (e.g. 'macd_cross_signal_*' → 'macd_cross_signal_*')
+            strategy = buy_reason.split()[0] if buy_reason else 'unknown'
 
-            # 가상 매수 실행 (VirtualTradingManager 사용)
             buy_record_id = self.virtual_trading.execute_virtual_buy(
                 stock_code=stock_code,
                 stock_name=stock_name,
