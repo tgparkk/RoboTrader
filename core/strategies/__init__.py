@@ -1,4 +1,1 @@
-"""전략 모듈."""
-from .weighted_score_strategy import WeightedScoreStrategy
-
-__all__ = ['WeightedScoreStrategy']
+"""전략 모듈 (macd_cross 단일 운영)."""

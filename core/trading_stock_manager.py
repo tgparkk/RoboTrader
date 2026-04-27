@@ -160,17 +160,23 @@ class TradingStockManager:
     
 
     
-    async def execute_buy_order(self, stock_code: str, quantity: int, 
-                               price: float, reason: str = "") -> bool:
+    async def execute_buy_order(self, stock_code: str, quantity: int,
+                               price: float, reason: str = "",
+                               strategy_tag: Optional[str] = None,
+                               market: bool = False) -> bool:
         """
         매수 주문 실행
-        
+
         Args:
             stock_code: 종목코드
             quantity: 주문 수량
-            price: 주문 가격
+            price: 주문 가격 (시장가 주문 시 참고용; KIS 는 0 허용)
             reason: 매수 사유
-            
+            strategy_tag: real_trading_records.strategy 컬럼에 저장될 전략 태그.
+                None 이면 trading_stock.selection_reason 폴백 (기존 동작).
+                macd_cross 등 신규 전략 라우팅 시 명시적 'macd_cross' 전달.
+            market: True 면 시장가 주문 (macd_cross 등). False 면 지정가 (기본).
+
         Returns:
             bool: 주문 성공 여부
         """
@@ -179,8 +185,11 @@ class TradingStockManager:
                 if stock_code not in self.trading_stocks:
                     self.logger.warning(f"⚠️ {stock_code}: 관리 중이지 않은 종목")
                     return False
-                
+
                 trading_stock = self.trading_stocks[stock_code]
+                # save_real_buy 콜백 (체결/동기화/콜백 3경로) 에서 읽힘
+                if strategy_tag:
+                    setattr(trading_stock, 'strategy_tag', strategy_tag)
                 
                 # 🆕 중복 매수 방지: 이미 매수 진행 중인지 확인
                 if trading_stock.is_buying:
@@ -215,7 +224,7 @@ class TradingStockManager:
                 self.data_collector.add_candidate_stock(stock_code, trading_stock.stock_name)
             
             # 매수 주문 실행
-            order_id = await self.order_manager.place_buy_order(stock_code, quantity, price)
+            order_id = await self.order_manager.place_buy_order(stock_code, quantity, price, market=market)
             
             if order_id:
                 async with self._lock:
@@ -435,7 +444,7 @@ class TradingStockManager:
                                 stock_name=trading_stock.stock_name,
                                 price=float(order.price),
                                 quantity=int(order.quantity),
-                                strategy=trading_stock.selection_reason,
+                                strategy=getattr(trading_stock, 'strategy_tag', None) or trading_stock.selection_reason,
                                 reason="체결"
                             )
                         except Exception as db_err:
@@ -704,7 +713,7 @@ class TradingStockManager:
                                 stock_name=trading_stock.stock_name,
                                 price=float(order.price),
                                 quantity=int(order.quantity),
-                                strategy=trading_stock.selection_reason,
+                                strategy=getattr(trading_stock, 'strategy_tag', None) or trading_stock.selection_reason,
                                 reason="체결(동기화보완)"
                             )
                             self.logger.info(f"✅ {order.stock_code} 매수 기록 보완 저장 (동기화 후 콜백)")
@@ -750,7 +759,7 @@ class TradingStockManager:
                                 stock_name=trading_stock.stock_name,
                                 price=float(order.price),
                                 quantity=int(order.quantity),
-                                strategy=trading_stock.selection_reason,
+                                strategy=getattr(trading_stock, 'strategy_tag', None) or trading_stock.selection_reason,
                                 reason="체결(콜백)"
                             )
                         except Exception as db_err:

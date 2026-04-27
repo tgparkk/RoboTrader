@@ -83,19 +83,25 @@ class OrderManager:
             return False
     
     async def place_buy_order(self, stock_code: str, quantity: int, price: float, 
-                             timeout_seconds: int = None) -> Optional[str]:
-        """매수 주문 실행"""
+                             timeout_seconds: int = None,
+                             market: bool = False) -> Optional[str]:
+        """매수 주문 실행.
+
+        Args:
+            market: True 면 시장가 ("01"), False 면 지정가 ("00").
+                macd_cross 등 시장가 진입 전략용.
+        """
         try:
             timeout_seconds = timeout_seconds or self.config.order_management.buy_timeout_seconds
-            
-            self.logger.info(f"📈 매수 주문 시도: {stock_code} {quantity}주 @{price:,.0f}원 (타임아웃: {timeout_seconds}초)")
-            
+
+            self.logger.info(f"📈 매수 주문 시도: {stock_code} {quantity}주 @{price:,.0f}원 (타임아웃: {timeout_seconds}초, 시장가: {market})")
+
             # API 호출을 별도 스레드에서 실행
             loop = asyncio.get_event_loop()
             result: OrderResult = await loop.run_in_executor(
                 self.executor,
                 self.api_manager.place_buy_order,
-                stock_code, quantity, int(price)
+                stock_code, quantity, int(price), ("01" if market else "00")
             )
             
             if result.success:
