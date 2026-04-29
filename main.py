@@ -1960,7 +1960,14 @@ class DayTradingBot:
                         if tag != 'macd_cross':
                             to_close.append(ts)
                             continue
-                        buy_time = getattr(ts, 'buy_time', None)
+                        # Position.entry_time 우선 (정상 매수 + emergency_sync 둘 다 호환).
+                        # last_buy_time 은 정상 체결에서만 set, 재시작 후 복원 시 None.
+                        buy_time = None
+                        pos = getattr(ts, 'position', None)
+                        if pos is not None:
+                            buy_time = getattr(pos, 'entry_time', None)
+                        if buy_time is None:
+                            buy_time = getattr(ts, 'last_buy_time', None)
                         if buy_time is None:
                             # 매수 시각 미상 → 보수적으로 청산
                             to_close.append(ts)
