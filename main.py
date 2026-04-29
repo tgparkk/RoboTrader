@@ -1891,6 +1891,56 @@ class DayTradingBot:
         except Exception as e:
             self.logger.error(f"❌ macd_cross 일일 보고 실패: {e}")
 
+    def _filter_macd_cross_live_eod_targets(self, all_liquidation_targets, today_date):
+        """EOD 일괄청산 후보에서 macd_cross 실거래 D+N 미도달 포지션을 격리.
+
+        Args:
+            all_liquidation_targets: 청산 후보 trading_stock 리스트
+            today_date: 오늘 날짜 (date 객체, 영업일수 기준점)
+
+        Returns:
+            (held_over, to_close):
+              - held_over: List[Tuple[trading_stock, days_held]] — 보호된 포지션
+              - to_close: List[trading_stock] — 청산 대상으로 통과시킬 포지션
+
+        조건:
+          - ACTIVE_STRATEGY != 'macd_cross' or VIRTUAL_ONLY=True 시 격리 미적용
+            (held_over=[], to_close=원본 그대로)
+          - strategy_tag != 'macd_cross' 종목은 다른 전략 → 청산 통과
+          - get_buy_time() is None → 매수 시각 미상 → 보수적 청산
+          - days_held < HOLD_DAYS → held_over (격리)
+          - days_held >= HOLD_DAYS → to_close (청산)
+        """
+        from config.strategy_settings import StrategySettings
+        import numpy as np
+
+        if (
+            StrategySettings.ACTIVE_STRATEGY != 'macd_cross'
+            or StrategySettings.MacdCross.VIRTUAL_ONLY
+            or not all_liquidation_targets
+        ):
+            return [], all_liquidation_targets
+
+        max_days = StrategySettings.MacdCross.HOLD_DAYS
+        held_over = []
+        to_close = []
+        for ts in all_liquidation_targets:
+            tag = getattr(ts, 'strategy_tag', None)
+            if tag != 'macd_cross':
+                to_close.append(ts)
+                continue
+            buy_time = ts.get_buy_time() if hasattr(ts, 'get_buy_time') else None
+            if buy_time is None:
+                # 매수 시각 미상 → 보수적으로 청산
+                to_close.append(ts)
+                continue
+            days_held = int(np.busday_count(buy_time.date(), today_date))
+            if days_held < max_days:
+                held_over.append((ts, days_held))
+            else:
+                to_close.append(ts)
+        return held_over, to_close
+
     async def _execute_end_of_day_liquidation(self):
         """장마감 시간 모든 보유 종목 시장가 일괄매도 (동적 시간 적용).
 
@@ -1944,46 +1994,17 @@ class DayTradingBot:
             # trading_stock.strategy_tag == 'macd_cross' 로 식별 (P1-3 propagation).
             # days_held < HOLD_DAYS=2 인 포지션 skip → 익일 09:01~05 morning exit 가 청산.
             try:
-                from config.strategy_settings import StrategySettings
-                if (
-                    StrategySettings.ACTIVE_STRATEGY == 'macd_cross'
-                    and not StrategySettings.MacdCross.VIRTUAL_ONLY
-                    and all_liquidation_targets
-                ):
-                    import numpy as np
-                    max_days = StrategySettings.MacdCross.HOLD_DAYS
-                    today = current_time.date()
-                    held_over = []
-                    to_close = []
-                    for ts in all_liquidation_targets:
-                        tag = getattr(ts, 'strategy_tag', None)
-                        if tag != 'macd_cross':
-                            to_close.append(ts)
-                            continue
-                        # Position.entry_time 우선 (정상 매수 + emergency_sync 둘 다 호환).
-                        # last_buy_time 은 정상 체결에서만 set, 재시작 후 복원 시 None.
-                        buy_time = None
-                        pos = getattr(ts, 'position', None)
-                        if pos is not None:
-                            buy_time = getattr(pos, 'entry_time', None)
-                        if buy_time is None:
-                            buy_time = getattr(ts, 'last_buy_time', None)
-                        if buy_time is None:
-                            # 매수 시각 미상 → 보수적으로 청산
-                            to_close.append(ts)
-                            continue
-                        days_held = int(np.busday_count(buy_time.date(), today))
-                        if days_held < max_days:
-                            held_over.append((ts, days_held))
-                        else:
-                            to_close.append(ts)
-                    if held_over:
-                        self.logger.info(
-                            f"🌙 macd_cross live overnight 보유: {len(held_over)}종목 "
-                            f"(days < {max_days}): "
-                            + ", ".join(f"{ts.stock_code}={d}/{max_days}" for ts, d in held_over[:10])
-                        )
-                    all_liquidation_targets = to_close
+                held_over, all_liquidation_targets = self._filter_macd_cross_live_eod_targets(
+                    all_liquidation_targets, current_time.date()
+                )
+                if held_over:
+                    from config.strategy_settings import StrategySettings as _SS
+                    max_days = _SS.MacdCross.HOLD_DAYS
+                    self.logger.info(
+                        f"🌙 macd_cross live overnight 보유: {len(held_over)}종목 "
+                        f"(days < {max_days}): "
+                        + ", ".join(f"{ts.stock_code}={d}/{max_days}" for ts, d in held_over[:10])
+                    )
             except Exception as e:
                 self.logger.warning(f"⚠️ macd_cross live EOD 격리 실패: {e} — 정상 청산 진행")
 
