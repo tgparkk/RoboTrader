@@ -48,6 +48,7 @@ class DayTradingBot:
         self.pid_file = Path("bot.pid")
         self._last_eod_liquidation_date = None  # 장마감 일괄청산 실행 일자
         self._last_paper_morning_exit_date = None  # macd_cross paper morning exit 실행 일자 (Fix B)
+        self._pre_market_sync_done = False  # 봇 가동 후 1회 pre-market 보유 동기화 플래그
         
         # 프로세스 중복 실행 방지
         self._check_duplicate_process()
@@ -342,6 +343,27 @@ class DayTradingBot:
         except Exception as e:
             self.logger.error(f"❌ 주문 모니터링 태스크 오류: {e}")
     
+    async def _ensure_pre_market_sync_once(self) -> None:
+        """봇 가동 후 1회만 `emergency_sync_positions` 실행.
+
+        `_trading_decision_task` 의 `is_market_open()` 게이팅 전에 호출되어
+        D+2 morning exit window(09:01~) 이전에 보유 포지션이 trading_manager 에
+        등록되도록 보장. 봇 시작이 장 시작보다 빠른 케이스(예: 07:40 가동) 에서
+        09:00 이후 preload(분봉/일봉 캐시) 가 4분 가량 소요되어 09:04:30 에야
+        emergency_sync 가 동작 → morning trigger window 와 충돌하던 incident
+        2026-05-04 회귀 방지.
+
+        예외 발생해도 플래그 set (무한 재시도 방지). 실 sync 는 이후 정기
+        사이클에서 다시 시도됨.
+        """
+        if self._pre_market_sync_done:
+            return
+        try:
+            await self.emergency_sync_positions()
+        except Exception as e:
+            self.logger.warning(f"⚠️ pre-market sync 실패 (다음 정기 사이클에서 재시도): {e}")
+        self._pre_market_sync_done = True
+
     async def _trading_decision_task(self):
         """매매 의사결정 태스크"""
         try:
@@ -352,6 +374,11 @@ class DayTradingBot:
             preload_done_today = None  # 프리로드 실행 날짜 추적
 
             while self.is_running:
+                # 🆕 봇 가동 후 1회 pre-market 보유 동기화 (incident 2026-05-04 회귀 방지)
+                # 장 시작 전에도 미관리 종목을 trading_manager 에 등록 → 09:01 morning exit
+                # window 가 fire 할 때 dispatcher 가 trading_stock 을 찾을 수 있도록 보장.
+                await self._ensure_pre_market_sync_once()
+
                 if not is_market_open():
                     await asyncio.sleep(60)  # 장 마감 시 1분 대기
                     continue
@@ -361,20 +388,24 @@ class DayTradingBot:
                 if preload_done_today != today_date:
                     preload_done_today = today_date
                     await self._preload_stock_candidates()
-                
+
                 current_time = now_kst()
 
-                # 🆕 macd_cross D+2 morning exit (09:01~05) — backtest exit_signal 동등
+                # 🆕 macd_cross D+2 morning exit (09:01~30) — backtest exit_signal 동등
                 # paper/live 양쪽 모두 동일 시간대에 trigger. dispatcher 가 모드 분기.
+                # window 09:01~09:30 — preload 지연으로 emergency_sync 가 09:05 이후
+                # 완료되는 케이스 대비 (incident 2026-05-04). dispatcher 가 미등록 종목
+                # 만나 False 반환 시 가드 미설정 → 5초 후 재시도.
                 try:
                     _hhmm = current_time.hour * 100 + current_time.minute
                     if (
                         self._macd_cross_mode() != 'off'
-                        and 901 <= _hhmm <= 905
+                        and 901 <= _hhmm <= 930
                         and self._last_paper_morning_exit_date != current_time.date()
                     ):
-                        await self._macd_cross_exit_dispatcher()
-                        self._last_paper_morning_exit_date = current_time.date()
+                        all_handled = await self._macd_cross_exit_dispatcher()
+                        if all_handled:
+                            self._last_paper_morning_exit_date = current_time.date()
                 except Exception as e:
                     self.logger.error(f"❌ macd_cross morning exit 트리거 실패: {e}")
 
@@ -1656,29 +1687,40 @@ class DayTradingBot:
         except Exception as e:
             self.logger.error(f"❌ 장마감 일괄청산 오류: {e}")
     
-    async def _macd_cross_exit_dispatcher(self):
+    async def _macd_cross_exit_dispatcher(self) -> bool:
         """macd_cross 청산 dispatcher — virtual/real 모드 분기.
 
         모드 매트릭스 (`_macd_cross_mode`):
           - 'virtual': `_macd_cross_paper_exit_task` (virtual_trading_records)
           - 'real'   : `_macd_cross_live_exit_task` (real_trading_records + KIS 시장가)
           - 'off'    : no-op
+
+        Returns:
+            True if 모든 만료 BUY 가 처리됨 (또는 처리할 BUY 없음).
+            False if 미관리 종목/가격 미수집 등 transient 상태로 재시도 필요.
+            morning trigger guard (`_last_paper_morning_exit_date`) 설정 가부 결정.
         """
         mode = self._macd_cross_mode()
         if mode == 'virtual':
-            await self._macd_cross_paper_exit_task()
+            return await self._macd_cross_paper_exit_task()
         elif mode == 'real':
-            await self._macd_cross_live_exit_task()
+            return await self._macd_cross_live_exit_task()
+        return True  # off: no-op, 가드 set 가능
 
-    async def _macd_cross_live_exit_task(self):
+    async def _macd_cross_live_exit_task(self) -> bool:
         """macd_cross 실거래 포지션 hold_days=2 만료 시장가 청산.
 
         - real_trading_records 에서 strategy='macd_cross' AND 미매칭 BUY 조회
         - KRX 영업일 기준 hold_days >= HOLD_DAYS=2 인 종목 시장가 매도
         - trading_manager.execute_sell_order(market=True) 경유 (price=0)
-        - D+2 morning(09:01~05) + EOD(15:00 직후) 양쪽 트리거 → idempotent
+        - D+2 morning(09:01~30) + EOD(15:00 직후) 양쪽 트리거 → idempotent
           (체결 시 SELL 레코드 자동 저장 → 다음 호출 시 미매칭 제외)
+
+        Returns:
+            True if 모든 만료 BUY 가 처리됨 (또는 만료 BUY 없음).
+            False if 미관리 종목 발견 (emergency_sync 미완)·예외 발생 → 재시도 필요.
         """
+        pending_unregistered = False
         try:
             from config.strategy_settings import StrategySettings
             from datetime import datetime
@@ -1687,7 +1729,7 @@ class DayTradingBot:
 
             rows = self.db_manager.get_open_real_buys_by_strategy('macd_cross')
             if not rows:
-                return
+                return True
 
             today = now_kst().date()
             for row in rows:
@@ -1710,6 +1752,7 @@ class DayTradingBot:
                     self.logger.warning(
                         f"[macd_cross.live.exit] {stock_code} trading_stock 미등록 → skip (다음 사이클 재시도)"
                     )
+                    pending_unregistered = True
                     continue
                 if ts.state == StockState.POSITIONED:
                     moved = await self.trading_manager.move_to_sell_candidate(
@@ -1740,20 +1783,27 @@ class DayTradingBot:
                     self.logger.warning(
                         f"⚠️ [macd_cross.live] 청산 주문 실패: {stock_code} {quantity}주"
                     )
+            return not pending_unregistered
         except Exception as e:
             self.logger.error(f"❌ macd_cross live exit 실패: {e}")
+            return False
 
-    async def _macd_cross_paper_exit_task(self):
+    async def _macd_cross_paper_exit_task(self) -> bool:
         """macd_cross 가상 포지션 hold_days=2 만료 청산.
 
-        Fix B (2026-04-26): 청산 시점을 D2 장 시작 직후 (~09:01~05) 로 이동 — backtest
+        Fix B (2026-04-26): 청산 시점을 D2 장 시작 직후 (~09:01~30) 로 이동 — backtest
         의 exit_signal 이 D2 첫 분봉에서 fire 하는 것과 동등. EOD (15:00) 후에도
         한 번 더 호출되어 morning 트리거 실패 대비 안전망. save_virtual_sell 의
         dup-prevention (buy_record_id × action='SELL' 중복 차단) 으로 idempotent.
 
         Fix A 적용: 백테스트 마찰 동등 — sell_eff = current * (1 - SLIPPAGE) * (1 - SELL_COMMISSION)
         Fix C 적용: 하한가 buffer 위반 종목은 skip
+
+        Returns:
+            True if 모든 만료 BUY 처리 완료 (또는 만료 BUY 없음).
+            False if 가격 미수집 등 transient 상태로 skip 발생 → 재시도 필요.
         """
+        pending_skip = False
         try:
             from config.strategy_settings import StrategySettings
             from datetime import datetime
@@ -1764,10 +1814,10 @@ class DayTradingBot:
             cfg = StrategySettings.MacdCross
             df = self.db_manager.get_virtual_open_positions()
             if df is None or df.empty:
-                return
+                return True
             df_mc = df[df['strategy'] == 'macd_cross']
             if df_mc.empty:
-                return
+                return True
 
             strategy = self.decision_engine.macd_cross_strategy
             today = now_kst().date()
@@ -1786,13 +1836,15 @@ class DayTradingBot:
                 buy_record_id = int(row['id'])
                 quantity = int(row['quantity'])
 
-                # 현재가 (intraday_manager 캐시 — 09:01~05 morning 트리거 시점에 활성)
+                # 현재가 (intraday_manager 캐시 — 09:01~30 morning 트리거 시점에 활성)
                 price_info = self.intraday_manager.get_cached_current_price(stock_code)
                 if not price_info:
                     self.logger.warning(f"[macd_cross.exit] {stock_code} 가격 없음 → skip")
+                    pending_skip = True
                     continue
                 current_price = float(price_info.get('current_price', 0))
                 if current_price <= 0:
+                    pending_skip = True
                     continue
 
                 # Fix C: 하한가 buffer 체크 (sell side)
@@ -1805,6 +1857,7 @@ class DayTradingBot:
                     self.logger.debug(
                         f"[macd_cross.exit] {stock_code} 하한가 buffer 위반 → skip (다음 사이클 재시도)"
                     )
+                    pending_skip = True
                     continue
 
                 # Fix A: 매도 슬리피지 + 수수료/세금 적용 (backtest 동등)
@@ -1831,8 +1884,10 @@ class DayTradingBot:
                     self.logger.warning(
                         f"⚠️ [macd_cross] 가상 청산 DB 저장 실패: {stock_code}"
                     )
+            return not pending_skip
         except Exception as e:
             self.logger.error(f"❌ macd_cross paper exit 실패: {e}")
+            return False
 
     async def _macd_cross_paper_daily_report(self):
         """macd_cross 페이퍼 일일 KPI 집계 + 텔레그램 알림 + safety stop 체크.

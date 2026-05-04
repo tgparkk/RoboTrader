@@ -98,8 +98,9 @@ utils/                         # data_cache, korean_time
 `_system_monitoring_task` (13~45초) → `_update_intraday_data` → 캔들 완성 시점 (분봉마감 + 5초) → `_evaluate_macd_cross_window` (시그널 hit 시 시장가 매수)
 
 ### 매도 트리거 경로 (macd_cross)
-- D+2 morning (09:01~05): `_macd_cross_exit_dispatcher` → `_macd_cross_live_exit_task`
+- D+2 morning (09:01~30): `_macd_cross_exit_dispatcher` → `_macd_cross_live_exit_task` (미등록 종목 발견 시 가드 미설정 → 5초 후 재시도)
 - EOD (15:00): 같은 dispatcher 호출 (안전망)
+- pre-market 동기화: `_ensure_pre_market_sync_once()` 가 봇 가동 후 1회 `emergency_sync_positions` 호출 → 장 시작 전에도 보유 종목 등록
 
 > **주의**: `_trading_decision_task` 는 매도 판단만 담당. macd_cross 는 시간기반 청산이라 dispatcher 가 별도 처리.
 
