@@ -96,12 +96,15 @@ class OrderManager:
 
             self.logger.info(f"📈 매수 주문 시도: {stock_code} {quantity}주 @{price:,.0f}원 (타임아웃: {timeout_seconds}초, 시장가: {market})")
 
+            # KIS APBK1233: 시장가(ord_dvsn=01)는 ord_unpr=0 강제 (호출자 가격 무시)
+            order_unpr = 0 if market else int(price)
+
             # API 호출을 별도 스레드에서 실행
             loop = asyncio.get_event_loop()
             result: OrderResult = await loop.run_in_executor(
                 self.executor,
                 self.api_manager.place_buy_order,
-                stock_code, quantity, int(price), ("01" if market else "00")
+                stock_code, quantity, order_unpr, ("01" if market else "00")
             )
             
             if result.success:
@@ -152,13 +155,16 @@ class OrderManager:
             timeout_seconds = timeout_seconds or self.config.order_management.sell_timeout_seconds
             
             self.logger.info(f"📉 매도 주문 시도: {stock_code} {quantity}주 @{price:,.0f}원 (타임아웃: {timeout_seconds}초, 시장가: {market})")
-            
+
+            # KIS APBK1233: 시장가(ord_dvsn=01)는 ord_unpr=0 강제 (호출자 가격 무시)
+            order_unpr = 0 if market else int(price)
+
             # API 호출을 별도 스레드에서 실행
             loop = asyncio.get_event_loop()
             result: OrderResult = await loop.run_in_executor(
                 self.executor,
                 self.api_manager.place_sell_order,
-                stock_code, quantity, int(price), ("01" if market else "00")
+                stock_code, quantity, order_unpr, ("01" if market else "00")
             )
             
             if result.success:

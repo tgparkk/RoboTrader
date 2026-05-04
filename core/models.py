@@ -247,6 +247,20 @@ class TradingStock:
         """매수 시간 설정"""
         self.last_buy_time = buy_time
 
+    def get_buy_time(self) -> Optional[datetime]:
+        """매수 체결 시각 반환 (Position.entry_time 우선, last_buy_time 폴백).
+
+        EOD 격리 / 오버나이트 청산 등 D+N 보유 일수 계산에 사용. 정상 매수와
+        emergency_sync 잔고 복원 양쪽에서 일관되게 set 되는 entry_time 을
+        우선 사용. 속성명 오타로 인한 영구 미작동 사고 방지용
+        (incident 2026-04-29 macd_cross D+0 당일청산).
+
+        Position 도 last_buy_time 도 없으면 None — 호출 측에서 보수적 청산.
+        """
+        if self.position is not None and self.position.entry_time is not None:
+            return self.position.entry_time
+        return self.last_buy_time
+
     def is_buy_cooldown_active(self) -> bool:
         """매수 쿨다운 활성화 여부 확인"""
         if self.last_buy_time is None:

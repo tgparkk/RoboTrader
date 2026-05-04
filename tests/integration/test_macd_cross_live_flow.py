@@ -225,3 +225,219 @@ def test_circuit_breaker_inherit_caches_within_day(tmp_path):
     bot._macd_cross_circuit_breaker_blocks(current_time)
     # _get_prev_day_index_returns 는 1회만 호출되어야 함 (캐시)
     assert bot.pre_market_analyzer._get_prev_day_index_returns.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# EOD 격리 회귀 테스트 (incident 2026-04-29 D+0 당일청산 방지)
+# ---------------------------------------------------------------------------
+
+def test_get_buy_time_position_entry_time_priority():
+    """Position.entry_time 우선 사용 (정상 매수 케이스)."""
+    from core.models import TradingStock, StockState
+    ts = TradingStock(
+        stock_code='005010', stock_name='휴스틸',
+        state=StockState.POSITIONED, selected_time=datetime(2026, 4, 29, 8, 55),
+    )
+    expected = datetime(2026, 4, 29, 14, 31)
+    ts.set_position(quantity=10, avg_price=6970, entry_time=expected)
+    ts.last_buy_time = datetime(2026, 4, 30, 10, 0)  # 다른 값이라도 entry_time 우선
+    assert ts.get_buy_time() == expected
+
+
+def test_get_buy_time_falls_back_to_last_buy_time():
+    """Position 없을 때 last_buy_time 사용."""
+    from core.models import TradingStock, StockState
+    ts = TradingStock(
+        stock_code='005010', stock_name='휴스틸',
+        state=StockState.SELECTED, selected_time=datetime(2026, 4, 29, 8, 55),
+    )
+    expected = datetime(2026, 4, 29, 14, 31)
+    ts.last_buy_time = expected
+    assert ts.get_buy_time() == expected
+
+
+def test_get_buy_time_none_when_no_data():
+    """Position·last_buy_time 둘 다 None → None (보수 분기 트리거)."""
+    from core.models import TradingStock, StockState
+    ts = TradingStock(
+        stock_code='005010', stock_name='휴스틸',
+        state=StockState.SELECTED, selected_time=datetime(2026, 4, 29, 8, 55),
+    )
+    assert ts.get_buy_time() is None
+
+
+def _make_ts(stock_code, state, *, entry_time=None, last_buy_time=None,
+             strategy_tag=None):
+    """테스트용 TradingStock factory."""
+    from core.models import TradingStock
+    ts = TradingStock(
+        stock_code=stock_code, stock_name=f'TS_{stock_code}',
+        state=state, selected_time=datetime(2026, 4, 29, 8, 55),
+    )
+    if entry_time is not None:
+        ts.set_position(quantity=10, avg_price=10000, entry_time=entry_time)
+    if last_buy_time is not None:
+        ts.last_buy_time = last_buy_time
+    if strategy_tag is not None:
+        setattr(ts, 'strategy_tag', strategy_tag)
+    return ts
+
+
+def test_eod_filter_protects_macd_cross_d0(tmp_path):
+    """매수 당일(D+0) macd_cross 포지션 EOD 청산 차단 — incident 2026-04-29 회귀 방지."""
+    from core.models import StockState
+    bot = _FakeBot()
+    _bind(bot, '_filter_macd_cross_live_eod_targets')
+
+    ts = _make_ts('005010', StockState.POSITIONED,
+                  entry_time=datetime(2026, 4, 29, 14, 31),
+                  strategy_tag='macd_cross')
+
+    with patch.object(StrategySettings, 'ACTIVE_STRATEGY', 'macd_cross'):
+        with patch.object(StrategySettings.MacdCross, 'VIRTUAL_ONLY', False):
+            with patch.object(StrategySettings.MacdCross, 'HOLD_DAYS', 2):
+                held_over, to_close = bot._filter_macd_cross_live_eod_targets(
+                    [ts], datetime(2026, 4, 29).date()
+                )
+
+    assert len(held_over) == 1
+    assert held_over[0][0] is ts
+    assert held_over[0][1] == 0  # D+0
+    assert to_close == []
+
+
+def test_eod_filter_closes_macd_cross_at_d2(tmp_path):
+    """D+2 영업일 도달 macd_cross 포지션은 청산 대상."""
+    from core.models import StockState
+    bot = _FakeBot()
+    _bind(bot, '_filter_macd_cross_live_eod_targets')
+
+    # 04-27(월) 매수 → 04-29(수) 가 D+2
+    ts = _make_ts('005010', StockState.POSITIONED,
+                  entry_time=datetime(2026, 4, 27, 14, 31),
+                  strategy_tag='macd_cross')
+
+    with patch.object(StrategySettings, 'ACTIVE_STRATEGY', 'macd_cross'):
+        with patch.object(StrategySettings.MacdCross, 'VIRTUAL_ONLY', False):
+            with patch.object(StrategySettings.MacdCross, 'HOLD_DAYS', 2):
+                held_over, to_close = bot._filter_macd_cross_live_eod_targets(
+                    [ts], datetime(2026, 4, 29).date()
+                )
+
+    assert held_over == []
+    assert to_close == [ts]
+
+
+def test_eod_filter_passes_through_other_strategy(tmp_path):
+    """다른 전략 종목은 격리 안 함 → 청산 통과."""
+    from core.models import StockState
+    bot = _FakeBot()
+    _bind(bot, '_filter_macd_cross_live_eod_targets')
+
+    ts = _make_ts('000660', StockState.POSITIONED,
+                  entry_time=datetime(2026, 4, 29, 14, 31),
+                  strategy_tag='weighted_score')
+
+    with patch.object(StrategySettings, 'ACTIVE_STRATEGY', 'macd_cross'):
+        with patch.object(StrategySettings.MacdCross, 'VIRTUAL_ONLY', False):
+            with patch.object(StrategySettings.MacdCross, 'HOLD_DAYS', 2):
+                held_over, to_close = bot._filter_macd_cross_live_eod_targets(
+                    [ts], datetime(2026, 4, 29).date()
+                )
+
+    assert held_over == []
+    assert to_close == [ts]
+
+
+def test_eod_filter_conservative_close_when_buy_time_unknown(tmp_path):
+    """buy_time 미상 (position·last_buy_time 둘 다 None) → 보수적 청산."""
+    from core.models import StockState
+    bot = _FakeBot()
+    _bind(bot, '_filter_macd_cross_live_eod_targets')
+
+    ts = _make_ts('005010', StockState.POSITIONED, strategy_tag='macd_cross')
+    # entry_time, last_buy_time 둘 다 None
+
+    with patch.object(StrategySettings, 'ACTIVE_STRATEGY', 'macd_cross'):
+        with patch.object(StrategySettings.MacdCross, 'VIRTUAL_ONLY', False):
+            with patch.object(StrategySettings.MacdCross, 'HOLD_DAYS', 2):
+                held_over, to_close = bot._filter_macd_cross_live_eod_targets(
+                    [ts], datetime(2026, 4, 29).date()
+                )
+
+    assert held_over == []
+    assert to_close == [ts]
+
+
+def test_eod_filter_inactive_when_paper_only(tmp_path):
+    """VIRTUAL_ONLY=True (페이퍼) 시 격리 미작동 → 전체 통과 (held_over 없음)."""
+    from core.models import StockState
+    bot = _FakeBot()
+    _bind(bot, '_filter_macd_cross_live_eod_targets')
+
+    ts = _make_ts('005010', StockState.POSITIONED,
+                  entry_time=datetime(2026, 4, 29, 14, 31),
+                  strategy_tag='macd_cross')
+
+    with patch.object(StrategySettings, 'ACTIVE_STRATEGY', 'macd_cross'):
+        with patch.object(StrategySettings.MacdCross, 'VIRTUAL_ONLY', True):
+            with patch.object(StrategySettings.MacdCross, 'HOLD_DAYS', 2):
+                held_over, to_close = bot._filter_macd_cross_live_eod_targets(
+                    [ts], datetime(2026, 4, 29).date()
+                )
+
+    assert held_over == []
+    assert to_close == [ts]
+
+
+def test_eod_filter_inactive_when_other_active_strategy(tmp_path):
+    """ACTIVE_STRATEGY != 'macd_cross' 시 격리 미작동."""
+    from core.models import StockState
+    bot = _FakeBot()
+    _bind(bot, '_filter_macd_cross_live_eod_targets')
+
+    ts = _make_ts('005010', StockState.POSITIONED,
+                  entry_time=datetime(2026, 4, 29, 14, 31),
+                  strategy_tag='macd_cross')
+
+    with patch.object(StrategySettings, 'ACTIVE_STRATEGY', 'weighted_score'):
+        with patch.object(StrategySettings.MacdCross, 'VIRTUAL_ONLY', False):
+            with patch.object(StrategySettings.MacdCross, 'HOLD_DAYS', 2):
+                held_over, to_close = bot._filter_macd_cross_live_eod_targets(
+                    [ts], datetime(2026, 4, 29).date()
+                )
+
+    assert held_over == []
+    assert to_close == [ts]
+
+
+def test_eod_filter_mixed_targets(tmp_path):
+    """다양한 케이스 혼합 — 격리/청산이 올바르게 분리되는지 검증."""
+    from core.models import StockState
+    bot = _FakeBot()
+    _bind(bot, '_filter_macd_cross_live_eod_targets')
+
+    ts_d0 = _make_ts('005010', StockState.POSITIONED,
+                     entry_time=datetime(2026, 4, 29, 14, 31),
+                     strategy_tag='macd_cross')  # 보호
+    ts_d2 = _make_ts('425040', StockState.POSITIONED,
+                     entry_time=datetime(2026, 4, 27, 14, 31),
+                     strategy_tag='macd_cross')  # 청산
+    ts_other = _make_ts('000660', StockState.POSITIONED,
+                        entry_time=datetime(2026, 4, 29, 14, 31),
+                        strategy_tag='weighted_score')  # 다른 전략 → 청산
+    ts_unknown = _make_ts('006400', StockState.POSITIONED,
+                          strategy_tag='macd_cross')  # buy_time 미상 → 청산
+
+    with patch.object(StrategySettings, 'ACTIVE_STRATEGY', 'macd_cross'):
+        with patch.object(StrategySettings.MacdCross, 'VIRTUAL_ONLY', False):
+            with patch.object(StrategySettings.MacdCross, 'HOLD_DAYS', 2):
+                held_over, to_close = bot._filter_macd_cross_live_eod_targets(
+                    [ts_d0, ts_d2, ts_other, ts_unknown],
+                    datetime(2026, 4, 29).date()
+                )
+
+    held_codes = [pair[0].stock_code for pair in held_over]
+    closed_codes = [t.stock_code for t in to_close]
+    assert held_codes == ['005010']
+    assert sorted(closed_codes) == ['000660', '006400', '425040']
