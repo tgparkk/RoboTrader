@@ -599,6 +599,24 @@ class DayTradingBot:
             self.logger.warning(f"_count_krx_trading_days_between DB 오류 → 0 반환: {e}")
             return 0
 
+    def _previous_trading_day(self, dt: datetime) -> datetime:
+        """주어진 dt 의 직전 영업일을 반환 (자기 자신 제외).
+
+        KOREAN_HOLIDAYS + 주말 모두 스킵. 14일 안에 못 찾으면 ValueError.
+        설/추석 대형 연휴(최대 6~7일) + KOREAN_HOLIDAYS 미등록 케이스 방어.
+        """
+        from datetime import timedelta
+        from config.market_hours import MarketHours
+        candidate = dt - timedelta(days=1)
+        for _ in range(14):
+            if MarketHours.is_trading_day(dt=candidate):
+                return candidate
+            candidate -= timedelta(days=1)
+        raise ValueError(
+            f"_previous_trading_day: {dt.date()} 14일 내 영업일 없음 "
+            f"(KOREAN_HOLIDAYS 갱신 필요?)"
+        )
+
     def _has_macd_cross_buy_today(self, stock_code: str) -> bool:
         """오늘 macd_cross 로 이미 진입했는지. DB 오류 시 보수적으로 True (차단)."""
         try:
