@@ -1741,6 +1741,7 @@ class DayTradingBot:
 
         Returns:
             True if 모든 만료 BUY 가 처리됨 (또는 처리할 BUY 없음).
+            True if 휴일 가드 발동 (매도 미실행, off 모드와 동일 의미).
             False if 미관리 종목/가격 미수집 등 transient 상태로 재시도 필요.
             morning trigger guard (`_last_paper_morning_exit_date`) 설정 가부 결정.
         """

@@ -148,7 +148,8 @@ async def test_macd_cross_exit_dispatcher_skips_holiday():
     assert result is True
     bot._macd_cross_paper_exit_task.assert_not_awaited()
     bot._macd_cross_live_exit_task.assert_not_awaited()
-    # 첫 호출이라 로그 1회
+    # 첫 호출이라 로그 1회 + 상태 set 확인 (test 5 와 symmetry)
     info_calls = [c for c in bot.logger.info.call_args_list
                   if '[휴일가드]' in str(c)]
     assert len(info_calls) == 1
+    assert bot._holiday_logged_date == date(2026, 5, 5)
