@@ -225,7 +225,6 @@ Read `main.py` line 2390~2410. 현재 코드:
 
 ```python
             try:
-                from datetime import timedelta
                 import psycopg2
                 from config.settings import PG_HOST, PG_PORT, PG_DATABASE, PG_USER, PG_PASSWORD
                 _ct = now_kst()
