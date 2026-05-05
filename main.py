@@ -2406,13 +2406,10 @@ class DayTradingBot:
 
             # 🆕 F: 전일 분봉 종목 수 체크 + 부족하면 백필 (ExpandedMinuteCollector 15:45 스킵 대비)
             try:
-                from datetime import timedelta
                 import psycopg2
                 from config.settings import PG_HOST, PG_PORT, PG_DATABASE, PG_USER, PG_PASSWORD
                 _ct = now_kst()
-                _prev = _ct - timedelta(days=1)
-                while _prev.weekday() >= 5:
-                    _prev -= timedelta(days=1)
+                _prev = self._previous_trading_day(_ct)
                 _prev_date = _prev.strftime('%Y%m%d')
                 with psycopg2.connect(host=PG_HOST, port=PG_PORT, database=PG_DATABASE,
                                       user=PG_USER, password=PG_PASSWORD, connect_timeout=5) as _c:
