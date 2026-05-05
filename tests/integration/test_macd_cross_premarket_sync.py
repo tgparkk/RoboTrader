@@ -17,8 +17,12 @@ from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import pytz
 
 from config.strategy_settings import StrategySettings
+
+_KST = pytz.timezone('Asia/Seoul')
+_WEEKDAY_DT = _KST.localize(datetime(2026, 5, 4, 9, 1))  # 월요일 (평일)
 
 
 class _FakeBot:
@@ -32,6 +36,7 @@ class _FakeBot:
         self.intraday_manager = MagicMock()
         self.decision_engine = MagicMock()
         self._pre_market_sync_done = False
+        self._holiday_logged_date = None
 
 
 def _bind(bot, *method_names):
@@ -212,9 +217,10 @@ async def test_dispatcher_returns_true_when_mode_off():
     """mode=off → True (no-op, 가드 set OK)."""
     bot = _FakeBot()
     bot._macd_cross_mode = MagicMock(return_value='off')
-    _bind(bot, '_macd_cross_exit_dispatcher')
+    _bind(bot, '_macd_cross_exit_dispatcher', '_apply_holiday_guard')
 
-    result = await bot._macd_cross_exit_dispatcher()
+    with patch('main.now_kst', return_value=_WEEKDAY_DT):
+        result = await bot._macd_cross_exit_dispatcher()
 
     assert result is True
 
@@ -226,9 +232,10 @@ async def test_dispatcher_passes_through_live_bool():
     bot._macd_cross_mode = MagicMock(return_value='real')
     bot._macd_cross_live_exit_task = AsyncMock(return_value=False)
     bot._macd_cross_paper_exit_task = AsyncMock(return_value=True)
-    _bind(bot, '_macd_cross_exit_dispatcher')
+    _bind(bot, '_macd_cross_exit_dispatcher', '_apply_holiday_guard')
 
-    result = await bot._macd_cross_exit_dispatcher()
+    with patch('main.now_kst', return_value=_WEEKDAY_DT):
+        result = await bot._macd_cross_exit_dispatcher()
 
     assert result is False
     bot._macd_cross_live_exit_task.assert_awaited_once()
@@ -242,9 +249,10 @@ async def test_dispatcher_passes_through_paper_bool():
     bot._macd_cross_mode = MagicMock(return_value='virtual')
     bot._macd_cross_live_exit_task = AsyncMock(return_value=True)
     bot._macd_cross_paper_exit_task = AsyncMock(return_value=False)
-    _bind(bot, '_macd_cross_exit_dispatcher')
+    _bind(bot, '_macd_cross_exit_dispatcher', '_apply_holiday_guard')
 
-    result = await bot._macd_cross_exit_dispatcher()
+    with patch('main.now_kst', return_value=_WEEKDAY_DT):
+        result = await bot._macd_cross_exit_dispatcher()
 
     assert result is False
     bot._macd_cross_paper_exit_task.assert_awaited_once()

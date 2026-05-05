@@ -125,3 +125,30 @@ async def test_evaluate_macd_cross_window_skips_holiday():
     assert len(info_calls) == 0
     # 두 번째 호출이 _holiday_logged_date 를 reset 하지 않는지 확인
     assert bot._holiday_logged_date == date(2026, 5, 5)
+
+
+# ---------------------------------------------------------------------------
+# Task 4: _macd_cross_exit_dispatcher 휴일 가드
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_macd_cross_exit_dispatcher_skips_holiday():
+    """5/5 어린이날 09:01 호출 시 dispatcher 즉시 return + paper/live 미호출."""
+    bot = _FakeBot()
+    bot._macd_cross_paper_exit_task = AsyncMock()
+    bot._macd_cross_live_exit_task = AsyncMock()
+    bot._macd_cross_mode = MagicMock(return_value='real')
+    _bind(bot, '_macd_cross_exit_dispatcher', '_apply_holiday_guard')
+
+    holiday_dt = KST.localize(datetime(2026, 5, 5, 9, 1))
+    with patch('main.now_kst', return_value=holiday_dt):
+        result = await bot._macd_cross_exit_dispatcher()
+
+    # 휴일이라 즉시 return True (가드 set 가능 — off 모드와 동일 의미)
+    assert result is True
+    bot._macd_cross_paper_exit_task.assert_not_awaited()
+    bot._macd_cross_live_exit_task.assert_not_awaited()
+    # 첫 호출이라 로그 1회
+    info_calls = [c for c in bot.logger.info.call_args_list
+                  if '[휴일가드]' in str(c)]
+    assert len(info_calls) == 1

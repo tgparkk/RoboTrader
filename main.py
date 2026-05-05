@@ -1744,6 +1744,9 @@ class DayTradingBot:
             False if 미관리 종목/가격 미수집 등 transient 상태로 재시도 필요.
             morning trigger guard (`_last_paper_morning_exit_date`) 설정 가부 결정.
         """
+        if self._apply_holiday_guard(now_kst(), "청산"):
+            return True  # 가드 set 가능 — off 모드와 동일 의미
+
         mode = self._macd_cross_mode()
         if mode == 'virtual':
             return await self._macd_cross_paper_exit_task()
