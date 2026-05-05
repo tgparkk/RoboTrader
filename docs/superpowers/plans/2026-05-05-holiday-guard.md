@@ -436,14 +436,7 @@ Expected: FAIL — `_macd_cross_live_exit_task.assert_not_awaited()` 가 실패�
         """macd_cross 청산 dispatcher — virtual/real 모드 분기.
         ...
         """
-        # 휴일 가드 (KOREAN_HOLIDAYS + 주말 차단)
-        current_time = now_kst()
-        if not MarketHours.is_trading_day(dt=current_time):
-            if self._holiday_logged_date != current_time.date():
-                self.logger.info(
-                    f"[휴일가드] {current_time.date()} 비영업일 — 청산 차단"
-                )
-                self._holiday_logged_date = current_time.date()
+        if self._apply_holiday_guard(now_kst(), "청산"):
             return True  # 가드 set 가능 — off 모드와 동일 의미
 
         mode = self._macd_cross_mode()
@@ -454,7 +447,7 @@ Expected: FAIL — `_macd_cross_live_exit_task.assert_not_awaited()` 가 실패�
         return True
 ```
 
-(MarketHours import 는 Task 3 에서 이미 처리. 함수 docstring 은 기존 그대로 유지.)
+(`_apply_holiday_guard` 헬퍼는 Task 3 의 리팩터에서 추가됨. 함수 docstring 은 기존 그대로 유지.)
 
 - [ ] **Step 4.4: 테스트 6 실행 (PASS 확인)**
 

@@ -617,6 +617,29 @@ class DayTradingBot:
             f"(KOREAN_HOLIDAYS 갱신 필요?)"
         )
 
+    def _apply_holiday_guard(self, dt: datetime, trigger_name: str) -> bool:
+        """휴일 가드 헬퍼. 휴일이면 1회 INFO 로그 후 True 반환.
+
+        매수/매도 트리거 진입부에서 공통으로 호출. KOREAN_HOLIDAYS + 주말을
+        모두 차단하며, 같은 날짜에서 두 번째 호출부터는 로그 생략.
+
+        Args:
+            dt: 판정 기준 datetime (보통 now_kst() 또는 트리거의 current_time).
+            trigger_name: 로그에 표기할 트리거 명 (예: "매수", "청산").
+
+        Returns:
+            True 면 휴일이라 차단 — caller 는 즉시 return.
+            False 면 영업일 — caller 는 정상 로직 진행.
+        """
+        if MarketHours.is_trading_day(dt=dt):
+            return False
+        if self._holiday_logged_date != dt.date():
+            self.logger.info(
+                f"[휴일가드] {dt.date()} 비영업일 — {trigger_name} 차단"
+            )
+            self._holiday_logged_date = dt.date()
+        return True
+
     def _has_macd_cross_buy_today(self, stock_code: str) -> bool:
         """오늘 macd_cross 로 이미 진입했는지. DB 오류 시 보수적으로 True (차단)."""
         try:
@@ -853,13 +876,7 @@ class DayTradingBot:
             return
         is_virtual = (mode == 'virtual')
 
-        # 휴일 가드 (KOREAN_HOLIDAYS + 주말 차단)
-        if not MarketHours.is_trading_day(dt=current_time):
-            if self._holiday_logged_date != current_time.date():
-                self.logger.info(
-                    f"[휴일가드] {current_time.date()} 비영업일 — 매수 차단"
-                )
-                self._holiday_logged_date = current_time.date()
+        if self._apply_holiday_guard(current_time, "매수"):
             return
 
         cfg_mc = StrategySettings.MacdCross
