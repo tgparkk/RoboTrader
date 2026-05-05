@@ -606,7 +606,6 @@ class DayTradingBot:
         설/추석 대형 연휴(최대 6~7일) + KOREAN_HOLIDAYS 미등록 케이스 방어.
         """
         from datetime import timedelta
-        from config.market_hours import MarketHours
         candidate = dt - timedelta(days=1)
         for _ in range(14):
             if MarketHours.is_trading_day(dt=candidate):
