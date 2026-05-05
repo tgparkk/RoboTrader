@@ -88,3 +88,38 @@ def test_previous_trading_day_raises_on_runaway(monkeypatch):
     dt = KST.localize(datetime(2026, 5, 1, 9, 0))
     with pytest.raises(ValueError, match='14일 내 영업일 없음'):
         bot._previous_trading_day(dt)
+
+
+# ---------------------------------------------------------------------------
+# Task 3: _evaluate_macd_cross_window 휴일 가드
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_evaluate_macd_cross_window_skips_holiday():
+    """5/5 어린이날 14:31 호출 시 매수 트리거 미실행 + 1회만 로그."""
+    bot = _FakeBot()
+    bot.decision_engine = MagicMock()
+    bot.decision_engine.macd_cross_strategy = MagicMock()
+    bot.decision_engine.macd_cross_strategy._cache = {'005930': MagicMock()}
+    bot.decision_engine.execute_real_buy = AsyncMock()
+    bot.db_manager = MagicMock()
+    bot._macd_cross_mode = MagicMock(return_value='real')
+    _bind(bot, '_evaluate_macd_cross_window')
+
+    holiday_dt = KST.localize(datetime(2026, 5, 5, 14, 31))
+
+    # 첫 호출: return + 로그 1회
+    await bot._evaluate_macd_cross_window(holiday_dt)
+    bot.decision_engine.execute_real_buy.assert_not_awaited()
+    info_calls = [c for c in bot.logger.info.call_args_list
+                  if '[휴일가드]' in str(c)]
+    assert len(info_calls) == 1
+    assert bot._holiday_logged_date == date(2026, 5, 5)
+
+    # 두 번째 호출: 동일 날짜 → 로그 추가 안 됨
+    bot.logger.reset_mock()
+    await bot._evaluate_macd_cross_window(holiday_dt)
+    bot.decision_engine.execute_real_buy.assert_not_awaited()
+    info_calls = [c for c in bot.logger.info.call_args_list
+                  if '[휴일가드]' in str(c)]
+    assert len(info_calls) == 0

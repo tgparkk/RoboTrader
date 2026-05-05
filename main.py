@@ -44,6 +44,7 @@ class DayTradingBot:
     
     def __init__(self):
         self.logger = setup_logger(__name__)
+        self._holiday_logged_date = None  # 휴일 가드 1회 로깅용 (KST date)
         self.is_running = False
         self.pid_file = Path("bot.pid")
         self._last_eod_liquidation_date = None  # 장마감 일괄청산 실행 일자
@@ -851,6 +852,15 @@ class DayTradingBot:
         if mode == 'off' or self.decision_engine.macd_cross_strategy is None:
             return
         is_virtual = (mode == 'virtual')
+
+        # 휴일 가드 (KOREAN_HOLIDAYS + 주말 차단)
+        if not MarketHours.is_trading_day(dt=current_time):
+            if self._holiday_logged_date != current_time.date():
+                self.logger.info(
+                    f"[휴일가드] {current_time.date()} 비영업일 — 매수 차단"
+                )
+                self._holiday_logged_date = current_time.date()
+            return
 
         cfg_mc = StrategySettings.MacdCross
         hhmm = current_time.hour * 100 + current_time.minute
