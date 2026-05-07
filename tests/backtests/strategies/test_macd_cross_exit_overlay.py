@@ -118,3 +118,66 @@ def test_sl_takes_priority_over_tp_in_same_bar():
     out = s.exit_signal(pos, feats, bar_idx=400, current_price=10000.0)
     assert out is not None
     assert out.reason == "sl"  # SL 우선
+
+
+def test_intraday_reversal_at_last_bar_of_d_plus_1():
+    """D+1 의 last bar 에서 today_hist<0 → reason='macd_reversal'."""
+    # 일봉을 일부러 하락시켜 D+1 의 hist 가 음수가 되도록
+    minute = _make_minute_df(["20260331", "20260401"])
+    closes = [10000.0] * 50 + [9000.0] * 5  # 끝에 급락 → D+1 hist 음수 가능
+    dates = [f"2026{(2 + (i // 30)):02d}{(i % 30) + 1:02d}" for i in range(50)]
+    dates += ["20260331", "20260401"] + [f"202604{i+2:02d}" for i in range(3)]
+    # closes 길이 55, dates 55 매핑
+    daily = _make_daily_df(closes, dates)
+
+    s = MACDCrossExitOverlayStrategy(intraday_reversal=True,
+                                      fast_period=3, slow_period=6, signal_period=2)
+    feats = s.prepare_features(minute, daily)
+
+    # D+1 의 last bar = bar_idx 779 (390 + 389)
+    pos = Position(stock_code="TEST", entry_bar_idx=355, entry_price=10000.0,
+                   quantity=10, entry_date="20260331")
+
+    # today_hist 가 음수인지 사전 확인 (테스트 진단용)
+    today_hist_at_d1 = feats["today_hist"].iloc[779]
+    assert today_hist_at_d1 < 0, f"테스트 setup 실패: today_hist={today_hist_at_d1}"
+
+    out = s.exit_signal(pos, feats, bar_idx=779, current_price=9000.0)
+    assert out is not None
+    assert out.reason == "macd_reversal"
+
+
+def test_intraday_reversal_skipped_on_entry_day():
+    """진입일 (D) last bar 에서 today_hist<0 이어도 미발동 — D+1 부터만."""
+    minute = _make_minute_df(["20260331", "20260401"])
+    closes = [10000.0] * 50 + [9000.0] * 5
+    dates = [f"2026{(2 + (i // 30)):02d}{(i % 30) + 1:02d}" for i in range(50)]
+    dates += ["20260331", "20260401"] + [f"202604{i+2:02d}" for i in range(3)]
+    daily = _make_daily_df(closes, dates)
+
+    s = MACDCrossExitOverlayStrategy(intraday_reversal=True,
+                                      fast_period=3, slow_period=6, signal_period=2)
+    feats = s.prepare_features(minute, daily)
+    pos = Position(stock_code="TEST", entry_bar_idx=355, entry_price=10000.0,
+                   quantity=10, entry_date="20260331")
+    # D 의 last bar = 389
+    out = s.exit_signal(pos, feats, bar_idx=389, current_price=10000.0)
+    assert out is None  # 진입일에는 미발동
+
+
+def test_intraday_reversal_skipped_mid_day():
+    """D+1 의 mid-day bar 에서는 미발동 — last bar of day 만 평가."""
+    minute = _make_minute_df(["20260331", "20260401"])
+    closes = [10000.0] * 50 + [9000.0] * 5
+    dates = [f"2026{(2 + (i // 30)):02d}{(i % 30) + 1:02d}" for i in range(50)]
+    dates += ["20260331", "20260401"] + [f"202604{i+2:02d}" for i in range(3)]
+    daily = _make_daily_df(closes, dates)
+
+    s = MACDCrossExitOverlayStrategy(intraday_reversal=True,
+                                      fast_period=3, slow_period=6, signal_period=2)
+    feats = s.prepare_features(minute, daily)
+    pos = Position(stock_code="TEST", entry_bar_idx=355, entry_price=10000.0,
+                   quantity=10, entry_date="20260331")
+    # D+1 의 mid bar = 500 (last bar 779 가 아님)
+    out = s.exit_signal(pos, feats, bar_idx=500, current_price=9000.0)
+    assert out is None

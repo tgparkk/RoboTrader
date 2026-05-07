@@ -95,6 +95,26 @@ class MACDCrossExitOverlayStrategy(MACDCrossStrategy):
             high = float(arr["high"][bar_idx])
             if high >= position.entry_price * (1 + self.tp_pct):
                 return ExitOrder(stock_code=position.stock_code, reason="tp")
-        # === Task 8 에서 reversal 추가 ===
+        # intraday MACD reversal: D+1 부터 each day's last bar 에서 today_hist<0 시
+        if self.intraday_reversal and "today_hist" in arr:
+            trade_date_arr = arr["trade_date"]
+            today_hist_arr = arr["today_hist"]
+            current_date = trade_date_arr[bar_idx]
+            is_last_bar_of_day = (
+                bar_idx == len(trade_date_arr) - 1
+                or trade_date_arr[bar_idx + 1] != current_date
+            )
+            if is_last_bar_of_day and self._last_df_minute is not None:
+                days_held = count_trading_days_between(
+                    self._last_df_minute,
+                    from_idx=position.entry_bar_idx, to_idx=bar_idx,
+                )
+                if days_held >= 1:
+                    h = today_hist_arr[bar_idx]
+                    if not pd.isna(h) and h < 0:
+                        return ExitOrder(
+                            stock_code=position.stock_code,
+                            reason="macd_reversal",
+                        )
 
         return super().exit_signal(position, features, bar_idx, current_price)
