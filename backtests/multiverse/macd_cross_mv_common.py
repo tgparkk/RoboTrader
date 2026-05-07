@@ -1,7 +1,14 @@
 """macd_cross 멀티버스 공통 유틸 — KPI extras, dataset 로더, cell evaluator."""
-from typing import Iterable
+from dataclasses import dataclass, field
+from typing import Dict, Iterable, List
 
 import pandas as pd
+
+from backtests.common.metrics import (
+    compute_calmar,
+    compute_max_drawdown,
+    compute_win_rate,
+)
 
 
 def compute_top1_share(trade_pnls: pd.Series) -> float:
@@ -33,3 +40,59 @@ def compute_max_consec_loss(trade_pnls: Iterable[float]) -> int:
         else:
             cur_run = 0
     return max_run
+
+
+@dataclass
+class Dataset:
+    """단일 평가 dataset — fold1/fold2/fold3/oos."""
+
+    name: str
+    minute_start: str
+    minute_end: str
+    daily_start: str
+    minute_by_code: Dict[str, pd.DataFrame] = field(default_factory=dict)
+    daily_by_code: Dict[str, pd.DataFrame] = field(default_factory=dict)
+    universe: List[str] = field(default_factory=list)
+
+
+def build_cell_kpis(
+    equity: pd.Series,
+    trades: List[Dict],
+    trading_days: int,
+) -> Dict[str, float]:
+    """단일 cell × dataset 평가 결과 → KPI dict.
+
+    Args:
+        equity: 매 bar 의 cm.available_cash + 보유포지션 가치 시계열.
+        trades: BacktestResult.trades — 각 원소는 {"pnl": float, ...} 형태.
+        trading_days: dataset 의 영업일수 (monthly_trades 계산용).
+
+    Returns:
+        {calmar, return, mdd, trades, win_rate, top1_share, max_consec_loss, monthly_trades}
+    """
+    if trades:
+        pnl_series = pd.Series(
+            [t["pnl"] for t in trades], dtype=float
+        ).dropna()
+    else:
+        pnl_series = pd.Series(dtype=float)
+
+    if len(equity) >= 2:
+        total_return = float(equity.iloc[-1] / equity.iloc[0] - 1)
+    else:
+        total_return = 0.0
+
+    return {
+        "calmar": compute_calmar(equity, trading_days),
+        "return": total_return,
+        "mdd": compute_max_drawdown(equity),
+        "trades": int(len(pnl_series)),
+        "win_rate": compute_win_rate(pnl_series),
+        "top1_share": compute_top1_share(pnl_series),
+        "max_consec_loss": compute_max_consec_loss(pnl_series.tolist()),
+        "monthly_trades": (
+            float(len(pnl_series) * 21 / trading_days)
+            if trading_days > 0
+            else 0.0
+        ),
+    }

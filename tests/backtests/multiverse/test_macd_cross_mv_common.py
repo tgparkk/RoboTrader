@@ -49,3 +49,36 @@ def test_max_consec_loss_zero_breaks_streak():
     # -10 streak=1, 0 breaks, -20 -30 streak=2 → max=2
     pnls = [-10, 0, -20, -30]
     assert compute_max_consec_loss(pnls) == 2
+
+
+import pandas as pd
+
+from backtests.multiverse.macd_cross_mv_common import build_cell_kpis
+
+
+def _fake_trades(pnls):
+    return [{"pnl": p, "stock_code": f"S{i:03d}"} for i, p in enumerate(pnls)]
+
+
+def test_build_cell_kpis_with_trades():
+    equity = pd.Series([10_000_000, 10_050_000, 10_020_000, 10_100_000, 10_080_000])
+    trades = _fake_trades([50_000, -30_000, 80_000, -20_000])
+    kpis = build_cell_kpis(equity=equity, trades=trades, trading_days=20)
+    # 필수 키 존재
+    assert {"calmar", "return", "mdd", "trades", "win_rate",
+            "top1_share", "max_consec_loss", "monthly_trades"} <= kpis.keys()
+    assert kpis["trades"] == 4
+    assert kpis["win_rate"] == 0.5
+    assert abs(kpis["return"] - 0.008) < 1e-6  # 10080000/10000000 - 1
+    # monthly_trades = trades * 21 / trading_days = 4 * 21 / 20 = 4.2
+    assert abs(kpis["monthly_trades"] - 4.2) < 1e-9
+
+
+def test_build_cell_kpis_no_trades():
+    equity = pd.Series([10_000_000, 10_000_000])
+    kpis = build_cell_kpis(equity=equity, trades=[], trading_days=10)
+    assert kpis["trades"] == 0
+    assert kpis["win_rate"] == 0.0
+    assert kpis["top1_share"] == 0.0
+    assert kpis["max_consec_loss"] == 0
+    assert kpis["return"] == 0.0
