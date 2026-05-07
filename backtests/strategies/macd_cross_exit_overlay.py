@@ -90,7 +90,11 @@ class MACDCrossExitOverlayStrategy(MACDCrossStrategy):
             low = float(arr["low"][bar_idx])
             if low <= position.entry_price * (1 - self.sl_pct):
                 return ExitOrder(stock_code=position.stock_code, reason="sl")
-        # === Task 7 에서 TP 추가 ===
+        # TP: high ≥ entry × (1 + tp_pct). SL 우선이므로 SL 블록 뒤.
+        if self.tp_pct is not None:
+            high = float(arr["high"][bar_idx])
+            if high >= position.entry_price * (1 + self.tp_pct):
+                return ExitOrder(stock_code=position.stock_code, reason="tp")
         # === Task 8 에서 reversal 추가 ===
 
         return super().exit_signal(position, features, bar_idx, current_price)

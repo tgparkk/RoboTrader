@@ -88,3 +88,33 @@ def test_sl_no_trigger_when_low_above_threshold():
                    quantity=10, entry_date="20260331")
     out = s.exit_signal(pos, feats, bar_idx=400, current_price=9700.0)
     assert out is None
+
+
+def test_tp_triggers_when_high_breaks_threshold():
+    minute = _make_minute_df(["20260331", "20260401"])
+    minute.loc[400, "high"] = 10600.0  # +6%
+    daily = _make_daily_df([10000.0] * 30,
+                           [f"202602{i+1:02d}" for i in range(28)] + ["20260331", "20260401"])
+    s = MACDCrossExitOverlayStrategy(tp_pct=0.05)
+    feats = s.prepare_features(minute, daily)
+    pos = Position(stock_code="TEST", entry_bar_idx=355, entry_price=10000.0,
+                   quantity=10, entry_date="20260331")
+    out = s.exit_signal(pos, feats, bar_idx=400, current_price=10500.0)
+    assert out is not None
+    assert out.reason == "tp"
+
+
+def test_sl_takes_priority_over_tp_in_same_bar():
+    """한 분봉에서 low/high 둘 다 트리거 시 SL 우선 (보수적)."""
+    minute = _make_minute_df(["20260331", "20260401"])
+    minute.loc[400, "high"] = 10600.0  # +6% TP=5% 트리거
+    minute.loc[400, "low"] = 9300.0    # -7% SL=5% 트리거
+    daily = _make_daily_df([10000.0] * 30,
+                           [f"202602{i+1:02d}" for i in range(28)] + ["20260331", "20260401"])
+    s = MACDCrossExitOverlayStrategy(sl_pct=0.05, tp_pct=0.05)
+    feats = s.prepare_features(minute, daily)
+    pos = Position(stock_code="TEST", entry_bar_idx=355, entry_price=10000.0,
+                   quantity=10, entry_date="20260331")
+    out = s.exit_signal(pos, feats, bar_idx=400, current_price=10000.0)
+    assert out is not None
+    assert out.reason == "sl"  # SL 우선
