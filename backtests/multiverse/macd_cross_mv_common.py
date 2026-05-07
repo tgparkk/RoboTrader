@@ -69,11 +69,13 @@ def build_cell_kpis(
 
     Returns:
         {calmar, return, mdd, trades, win_rate, top1_share, max_consec_loss, monthly_trades}
+
+        calmar 은 MDD=0 (drawdown 없음) 또는 trading_days<=0 시 nan. 다운스트림 (Task 9-10 러너)
+        에서 평균 집계 시 nan 처리 필요.
     """
     if trades:
-        pnl_series = pd.Series(
-            [t["pnl"] for t in trades], dtype=float
-        ).dropna()
+        pnl_raw = pd.Series([t["pnl"] for t in trades], dtype=float)
+        pnl_series = pnl_raw.dropna()
     else:
         pnl_series = pd.Series(dtype=float)
 
@@ -86,12 +88,12 @@ def build_cell_kpis(
         "calmar": compute_calmar(equity, trading_days),
         "return": total_return,
         "mdd": compute_max_drawdown(equity),
-        "trades": int(len(pnl_series)),
+        "trades": int(len(trades)),
         "win_rate": compute_win_rate(pnl_series),
         "top1_share": compute_top1_share(pnl_series),
         "max_consec_loss": compute_max_consec_loss(pnl_series.tolist()),
         "monthly_trades": (
-            float(len(pnl_series) * 21 / trading_days)
+            float(len(trades) * 21 / trading_days)
             if trading_days > 0
             else 0.0
         ),

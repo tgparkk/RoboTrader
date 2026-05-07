@@ -51,8 +51,6 @@ def test_max_consec_loss_zero_breaks_streak():
     assert compute_max_consec_loss(pnls) == 2
 
 
-import pandas as pd
-
 from backtests.multiverse.macd_cross_mv_common import build_cell_kpis
 
 
@@ -82,3 +80,18 @@ def test_build_cell_kpis_no_trades():
     assert kpis["top1_share"] == 0.0
     assert kpis["max_consec_loss"] == 0
     assert kpis["return"] == 0.0
+
+
+def test_build_cell_kpis_nan_pnl_does_not_undercount_trades():
+    """trades 카운트는 NaN 이 있어도 raw 입력 길이 유지 (NaN 은 win_rate 등에서만 제외)."""
+    import math
+    equity = pd.Series([10_000_000, 10_010_000, 10_020_000])
+    trades = [
+        {"pnl": 50_000, "stock_code": "S001"},
+        {"pnl": math.nan, "stock_code": "S002"},  # NaN 제거되면 안 됨
+        {"pnl": -20_000, "stock_code": "S003"},
+    ]
+    kpis = build_cell_kpis(equity=equity, trades=trades, trading_days=10)
+    assert kpis["trades"] == 3  # raw count, NaN 포함
+    # win_rate 는 NaN 제외 → wins=1 (50k), losses=1 (-20k) = 0.5
+    assert kpis["win_rate"] == 0.5
