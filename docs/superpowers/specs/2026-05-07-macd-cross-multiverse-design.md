@@ -110,8 +110,8 @@ MV-A best 결과와 무관하게 **Stage 2 best 고정**: fast=14, slow=34, sign
 ### 4.3 Overlay 시맨틱 (정확한 정의 — 재현성)
 모든 overlay 는 `hold_days` 시간청산보다 **우선** (= 더 빨리 발동 시 그쪽이 청산).
 
-- **stop_loss_pct (SL)**: 보유 중 분봉 `low ≤ entry_price × (1 - sl_pct)` 도달 시, 그 분봉 **종가** 로 청산. `reason="sl"`.
-- **take_profit_pct (TP)**: 보유 중 분봉 `high ≥ entry_price × (1 + tp_pct)` 도달 시, 그 분봉 **종가** 로 청산. `reason="tp"`.
+- **stop_loss_pct (SL)**: 보유 중 분봉 `low ≤ entry_price × (1 - sl_pct)` 도달 시 ExitOrder(reason="sl") 발동. 실제 fill 가격은 엔진의 `next_fill_index(t)` next-bar open + 슬리피지 (`backtests/common/engine.py` 컨벤션, 기존 hold_limit 와 동일).
+- **take_profit_pct (TP)**: 보유 중 분봉 `high ≥ entry_price × (1 + tp_pct)` 도달 시 ExitOrder(reason="tp") 발동. fill 컨벤션 SL 동일.
 - **SL/TP 동시 충족** (한 분봉 안에서 low/high 둘 다 트리거): **SL 우선** (보수적). 실거래는 어떤 게 먼저 찍혔는지 알 수 없으므로 worst-case 가정.
 - **intraday_macd_reversal_exit**: 보유 시작 **다음 영업일부터** EOD 시점 (15:00 직전 마지막 분봉) 에 그날 daily hist 재계산. `hist < 0` 이면 그 분봉 종가로 청산. `reason="macd_reversal"`. (보유 시작 당일은 partial daily 로 hist 가 불안정하므로 평가 제외 — D+1 부터만 evaluate)
 - 어느 것도 미발동 시 hold_days=2 시간청산. `reason="hold_limit"`.
