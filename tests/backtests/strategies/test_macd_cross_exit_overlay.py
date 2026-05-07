@@ -55,3 +55,36 @@ def test_no_overlay_matches_base_exit():
     wrap_out = wrap.exit_signal(pos, feats_dummy, bar_idx=780, current_price=10000.0)
     assert base_out.reason == "hold_limit"
     assert wrap_out.reason == "hold_limit"
+
+
+def test_sl_triggers_when_low_breaks_threshold():
+    """SL=5%, 보유 중 low 가 entry × 0.94 까지 떨어지면 reason='sl'."""
+    minute = _make_minute_df(["20260331", "20260401"])
+    # entry 가격 10000, low 9400 = -6% (5% 깨짐)
+    minute.loc[400, "low"] = 9400.0
+    daily = _make_daily_df([10000.0] * 30,
+                           [f"202602{i+1:02d}" for i in range(28)] + ["20260331", "20260401"])
+
+    s = MACDCrossExitOverlayStrategy(sl_pct=0.05)
+    s.prepare_features(minute, daily)
+    feats = s.prepare_features(minute, daily)
+    pos = Position(stock_code="TEST", entry_bar_idx=355, entry_price=10000.0,
+                   quantity=10, entry_date="20260331")
+    out = s.exit_signal(pos, feats, bar_idx=400, current_price=9500.0)
+    assert out is not None
+    assert out.reason == "sl"
+
+
+def test_sl_no_trigger_when_low_above_threshold():
+    """SL=5%, low 가 9600 (4% 하락) 이면 미발동."""
+    minute = _make_minute_df(["20260331", "20260401"])
+    minute.loc[400, "low"] = 9600.0
+    daily = _make_daily_df([10000.0] * 30,
+                           [f"202602{i+1:02d}" for i in range(28)] + ["20260331", "20260401"])
+
+    s = MACDCrossExitOverlayStrategy(sl_pct=0.05)
+    feats = s.prepare_features(minute, daily)
+    pos = Position(stock_code="TEST", entry_bar_idx=355, entry_price=10000.0,
+                   quantity=10, entry_date="20260331")
+    out = s.exit_signal(pos, feats, bar_idx=400, current_price=9700.0)
+    assert out is None
