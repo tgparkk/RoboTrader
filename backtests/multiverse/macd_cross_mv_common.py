@@ -9,6 +9,9 @@ from backtests.common.metrics import (
     compute_max_drawdown,
     compute_win_rate,
 )
+from backtests.common.data_loader import load_minute_df, load_daily_df
+from backtests.multiverse.fold import STAGE2_FOLDS
+from backtests.multiverse.universe import select_top_universe
 
 
 def compute_top1_share(trade_pnls: pd.Series) -> float:
@@ -98,3 +101,92 @@ def build_cell_kpis(
             else 0.0
         ),
     }
+
+
+# OOS hold-out 정의 (Stage 2 fold 와 동일 universe 캐시 사용)
+OOS_TEST_START = "20260301"
+OOS_TEST_END = "20260424"
+
+
+def _trading_days_count(minute_by_code: Dict[str, pd.DataFrame]) -> int:
+    """모든 종목 분봉의 unique trade_date 수 — dataset 의 영업일수 추정."""
+    all_dates = set()
+    for df in minute_by_code.values():
+        if not df.empty:
+            all_dates.update(df["trade_date"].unique().tolist())
+    return len(all_dates)
+
+
+def load_all_datasets() -> Dict[str, Dataset]:
+    """4 dataset 일괄 로드 — Stage 2 와 동일 universe 사용.
+
+    분봉 1회 광역 로드 (2025-03 ~ 2026-04) 후 dataset 별 슬라이스.
+    daily 도 동일 (2025-01 ~ 2026-04, MACD warm-up 충분).
+
+    Returns:
+        {"fold1": Dataset, "fold2": Dataset, "fold3": Dataset, "oos": Dataset}
+    """
+    # 1. universe — Stage 2 캐시 재사용
+    universe = select_top_universe(
+        fold_train_start="20250301",
+        fold_test_end="20260228",
+        n_stocks=30,
+        min_days_present=120,
+    )
+
+    # 2. 광역 로드 (1회)
+    minute_start = STAGE2_FOLDS[0].test_start  # 20250901 — fold1 시작
+    minute_end = OOS_TEST_END                    # 20260424
+    daily_start = "20250101"
+
+    print(f"[load_all_datasets] universe={len(universe)}, "
+          f"minute {minute_start}~{minute_end}, daily {daily_start}~{minute_end}")
+
+    minute_df = load_minute_df(universe, minute_start, minute_end)
+    daily_df = load_daily_df(universe, daily_start, minute_end)
+
+    # 3. 종목별 dict
+    minute_full = {
+        c: minute_df[minute_df["stock_code"] == c].reset_index(drop=True)
+        for c in universe
+    }
+    daily_full = {
+        c: daily_df[daily_df["stock_code"] == c].reset_index(drop=True)
+        for c in universe
+    }
+
+    # 4. dataset 4개 만들기
+    datasets: Dict[str, Dataset] = {}
+    fold_specs = [
+        ("fold1", STAGE2_FOLDS[0].test_start, STAGE2_FOLDS[0].test_end),
+        ("fold2", STAGE2_FOLDS[1].test_start, STAGE2_FOLDS[1].test_end),
+        ("fold3", STAGE2_FOLDS[2].test_start, STAGE2_FOLDS[2].test_end),
+        ("oos", OOS_TEST_START, OOS_TEST_END),
+    ]
+    for name, start, end in fold_specs:
+        m_by = {
+            c: minute_full[c][
+                (minute_full[c]["trade_date"] >= start)
+                & (minute_full[c]["trade_date"] <= end)
+            ].reset_index(drop=True)
+            for c in universe
+        }
+        # daily 는 warm-up 위해 dataset 시작일 이전 모두 포함
+        d_by = {
+            c: daily_full[c][daily_full[c]["trade_date"] <= end].reset_index(drop=True)
+            for c in universe
+        }
+        nonempty = [c for c in universe if len(m_by[c]) > 0]
+        datasets[name] = Dataset(
+            name=name,
+            minute_start=start, minute_end=end,
+            daily_start=daily_start,
+            minute_by_code={c: m_by[c] for c in nonempty},
+            daily_by_code={c: d_by[c] for c in nonempty},
+            universe=nonempty,
+        )
+        print(f"  {name}: {start}~{end}, "
+              f"{len(nonempty)}/{len(universe)} stocks, "
+              f"{_trading_days_count(m_by)} trading days")
+
+    return datasets
