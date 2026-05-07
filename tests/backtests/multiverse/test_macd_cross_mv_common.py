@@ -95,3 +95,59 @@ def test_build_cell_kpis_nan_pnl_does_not_undercount_trades():
     assert kpis["trades"] == 3  # raw count, NaN 포함
     # win_rate 는 NaN 제외 → wins=1 (50k), losses=1 (-20k) = 0.5
     assert kpis["win_rate"] == 0.5
+
+
+import pytest
+
+from backtests.multiverse.macd_cross_mv_common import (
+    Dataset, evaluate_cell,
+)
+from backtests.strategies.macd_cross import MACDCrossStrategy
+
+
+def _make_flat_minute(stock, dates, n_bars_per_day=390, base_price=10000.0):
+    rows = []
+    for td in dates:
+        for i in range(n_bars_per_day):
+            hh = 9 + i // 60
+            mm = i % 60
+            rows.append({
+                "stock_code": stock, "trade_date": td,
+                "trade_time": f"{hh:02d}{mm:02d}00",
+                "open": base_price, "high": base_price * 1.001,
+                "low": base_price * 0.999, "close": base_price,
+                "volume": 1000.0,
+            })
+    return pd.DataFrame(rows)
+
+
+def _make_flat_daily(stock, dates, base_price=10000.0):
+    return pd.DataFrame([{
+        "stock_code": stock, "trade_date": d,
+        "open": base_price, "high": base_price,
+        "low": base_price, "close": base_price, "volume": 100000.0,
+    } for d in dates])
+
+
+def test_evaluate_cell_returns_kpi_dict():
+    """평탄 시세 (no signal) → 0 trades 시 KPI dict 정상 반환."""
+    dates = [f"2026010{i+1}" for i in range(5)]  # 5 영업일
+    minute = _make_flat_minute("TEST", dates)
+    daily_dates = [f"202512{i+1:02d}" for i in range(20)] + dates
+    daily = _make_flat_daily("TEST", daily_dates)
+    ds = Dataset(
+        name="synth",
+        minute_start=dates[0], minute_end=dates[-1],
+        daily_start=daily_dates[0],
+        minute_by_code={"TEST": minute},
+        daily_by_code={"TEST": daily},
+        universe=["TEST"],
+    )
+    strat = MACDCrossStrategy()
+    kpis = evaluate_cell(strategy=strat, dataset=ds, initial_capital=10_000_000)
+    assert kpis["trades"] == 0
+    assert kpis["return"] == 0.0
+    assert kpis["mdd"] == 0.0
+    # 모든 KPI 필드 존재
+    assert {"calmar", "return", "mdd", "trades", "win_rate",
+            "top1_share", "max_consec_loss", "monthly_trades"} <= kpis.keys()

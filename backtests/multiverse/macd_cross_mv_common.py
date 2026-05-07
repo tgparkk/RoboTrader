@@ -4,6 +4,7 @@ from typing import Dict, Iterable, List
 
 import pandas as pd
 
+from backtests.common.engine import BacktestEngine
 from backtests.common.metrics import (
     compute_calmar,
     compute_max_drawdown,
@@ -12,6 +13,7 @@ from backtests.common.metrics import (
 from backtests.common.data_loader import load_minute_df, load_daily_df
 from backtests.multiverse.fold import STAGE2_FOLDS
 from backtests.multiverse.universe import select_top_universe
+from backtests.strategies.base import StrategyBase
 
 
 def compute_top1_share(trade_pnls: pd.Series) -> float:
@@ -190,3 +192,29 @@ def load_all_datasets() -> Dict[str, Dataset]:
               f"{_trading_days_count(m_by)} trading days")
 
     return datasets
+
+
+def evaluate_cell(
+    strategy: StrategyBase,
+    dataset: Dataset,
+    initial_capital: float = 10_000_000,
+) -> Dict[str, float]:
+    """단일 cell × dataset 평가. engine 실행 + KPI 빌드.
+
+    Returns:
+        build_cell_kpis 와 동일 dict.
+    """
+    eng = BacktestEngine(
+        strategy=strategy,
+        initial_capital=initial_capital,
+        universe=dataset.universe,
+        minute_df_by_code=dataset.minute_by_code,
+        daily_df_by_code=dataset.daily_by_code,
+    )
+    result = eng.run()
+    trading_days = _trading_days_count(dataset.minute_by_code)
+    return build_cell_kpis(
+        equity=result.equity_curve,
+        trades=result.trades,
+        trading_days=trading_days,
+    )
