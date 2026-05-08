@@ -44,6 +44,7 @@ class DayTradingBot:
     
     def __init__(self):
         self.logger = setup_logger(__name__)
+        self._holiday_logged_date = None  # 휴일 가드 1회 로깅용 (KST date)
         self.is_running = False
         self.pid_file = Path("bot.pid")
         self._last_eod_liquidation_date = None  # 장마감 일괄청산 실행 일자
@@ -599,6 +600,46 @@ class DayTradingBot:
             self.logger.warning(f"_count_krx_trading_days_between DB 오류 → 0 반환: {e}")
             return 0
 
+    def _previous_trading_day(self, dt: datetime) -> datetime:
+        """주어진 dt 의 직전 영업일을 반환 (자기 자신 제외).
+
+        KOREAN_HOLIDAYS + 주말 모두 스킵. 14일 안에 못 찾으면 ValueError.
+        설/추석 대형 연휴(최대 6~7일) + KOREAN_HOLIDAYS 미등록 케이스 방어.
+        """
+        from datetime import timedelta
+        candidate = dt - timedelta(days=1)
+        for _ in range(14):
+            if MarketHours.is_trading_day(dt=candidate):
+                return candidate
+            candidate -= timedelta(days=1)
+        raise ValueError(
+            f"_previous_trading_day: {dt.date()} 14일 내 영업일 없음 "
+            f"(KOREAN_HOLIDAYS 갱신 필요?)"
+        )
+
+    def _apply_holiday_guard(self, dt: datetime, trigger_name: str) -> bool:
+        """휴일 가드 헬퍼. 휴일이면 1회 INFO 로그 후 True 반환.
+
+        매수/매도 트리거 진입부에서 공통으로 호출. KOREAN_HOLIDAYS + 주말을
+        모두 차단하며, 같은 날짜에서 두 번째 호출부터는 로그 생략.
+
+        Args:
+            dt: 판정 기준 datetime (보통 now_kst() 또는 트리거의 current_time).
+            trigger_name: 로그에 표기할 트리거 명 (예: "매수", "청산").
+
+        Returns:
+            True 면 휴일이라 차단 — caller 는 즉시 return.
+            False 면 영업일 — caller 는 정상 로직 진행.
+        """
+        if MarketHours.is_trading_day(dt=dt):
+            return False
+        if self._holiday_logged_date != dt.date():
+            self.logger.info(
+                f"[휴일가드] {dt.date()} 비영업일 — {trigger_name} 차단"
+            )
+            self._holiday_logged_date = dt.date()
+        return True
+
     def _has_macd_cross_buy_today(self, stock_code: str) -> bool:
         """오늘 macd_cross 로 이미 진입했는지. DB 오류 시 보수적으로 True (차단)."""
         try:
@@ -834,6 +875,9 @@ class DayTradingBot:
         if mode == 'off' or self.decision_engine.macd_cross_strategy is None:
             return
         is_virtual = (mode == 'virtual')
+
+        if self._apply_holiday_guard(current_time, "매수"):
+            return
 
         cfg_mc = StrategySettings.MacdCross
         hhmm = current_time.hour * 100 + current_time.minute
@@ -1697,9 +1741,13 @@ class DayTradingBot:
 
         Returns:
             True if 모든 만료 BUY 가 처리됨 (또는 처리할 BUY 없음).
+            True if 휴일 가드 발동 (매도 미실행, off 모드와 동일 의미).
             False if 미관리 종목/가격 미수집 등 transient 상태로 재시도 필요.
             morning trigger guard (`_last_paper_morning_exit_date`) 설정 가부 결정.
         """
+        if self._apply_holiday_guard(now_kst(), "청산"):
+            return True  # 가드 set 가능 — off 모드와 동일 의미
+
         mode = self._macd_cross_mode()
         if mode == 'virtual':
             return await self._macd_cross_paper_exit_task()
@@ -2389,13 +2437,10 @@ class DayTradingBot:
 
             # 🆕 F: 전일 분봉 종목 수 체크 + 부족하면 백필 (ExpandedMinuteCollector 15:45 스킵 대비)
             try:
-                from datetime import timedelta
                 import psycopg2
                 from config.settings import PG_HOST, PG_PORT, PG_DATABASE, PG_USER, PG_PASSWORD
                 _ct = now_kst()
-                _prev = _ct - timedelta(days=1)
-                while _prev.weekday() >= 5:
-                    _prev -= timedelta(days=1)
+                _prev = self._previous_trading_day(_ct)
                 _prev_date = _prev.strftime('%Y%m%d')
                 with psycopg2.connect(host=PG_HOST, port=PG_PORT, database=PG_DATABASE,
                                       user=PG_USER, password=PG_PASSWORD, connect_timeout=5) as _c:
