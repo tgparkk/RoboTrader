@@ -85,6 +85,7 @@ class StrategySettings:
         Spec: docs/superpowers/specs/2026-05-09-macd-cross-alt-paper-validation-design.md
         근거: MV-A 멀티버스 4ds-avg calmar 65→128 (+95%), plateau robust.
         """
+        CANDLE_INTERVAL = 1                    # MacdCross 와 인터페이스 parity
         FAST_PERIOD = 16
         SLOW_PERIOD = 32
         SIGNAL_PERIOD = 12
