@@ -640,21 +640,26 @@ class DayTradingBot:
             self._holiday_logged_date = dt.date()
         return True
 
-    def _has_macd_cross_buy_today(self, stock_code: str) -> bool:
-        """오늘 macd_cross 로 이미 진입했는지. DB 오류 시 보수적으로 True (차단)."""
+    def _has_macd_cross_paper_buy_today(self, stock_code: str, label: str = 'macd_cross') -> bool:
+        """오늘 paper macd_cross (label 별) 로 이미 진입했는지. DB 오류 시 보수적으로 True (차단)."""
         try:
             today = now_kst().strftime('%Y-%m-%d')
             row = self.db_manager._fetchone(
                 """SELECT COUNT(*) FROM virtual_trading_records
                    WHERE stock_code=%s AND action='BUY'
-                     AND strategy='macd_cross'
+                     AND strategy=%s
                      AND DATE(timestamp) = %s""",
-                (stock_code, today),
+                (stock_code, label, today),
             )
             return (row[0] if row else 0) > 0
         except Exception as e:
-            self.logger.warning(f"_has_macd_cross_buy_today DB 오류 → 보수적 차단: {e}")
+            self.logger.warning(f"_has_macd_cross_paper_buy_today DB 오류 → 보수적 차단: {e}")
             return True
+
+    # Backwards-compat alias (기존 호출자 호환)
+    def _has_macd_cross_buy_today(self, stock_code: str) -> bool:
+        """Deprecated: _has_macd_cross_paper_buy_today(code, 'macd_cross') 사용."""
+        return self._has_macd_cross_paper_buy_today(stock_code, 'macd_cross')
 
     def _count_today_macd_cross_real_buys(self) -> int:
         """오늘 macd_cross 실거래 BUY 건수 (real_trading_records 기준)."""
@@ -853,35 +858,47 @@ class DayTradingBot:
             return 'virtual'
         return 'off'
 
-    async def _evaluate_macd_cross_window(self, current_time):
-        """macd_cross 진입 평가 (14:31~15:00).
+    async def _evaluate_macd_cross_instance(
+        self,
+        current_time,
+        *,
+        strategy,
+        cfg_class,
+        label: str,
+        mode: str,
+    ):
+        """단일 macd_cross 인스턴스 진입 평가.
 
-        모드별 분기 (`_macd_cross_mode`):
+        Args:
+            current_time: 평가 시점 datetime (KST).
+            strategy: MacdCrossStrategy 인스턴스 (cached universe 보유).
+            cfg_class: StrategySettings.MacdCross 또는 MacdCrossAlt.
+            label: 'macd_cross' / 'macd_cross_alt' — 로그/DB strategy 컬럼 값.
+            mode: 'real' / 'virtual' / 'off'.
+
+        모드별 분기:
         - 'virtual': db_manager.save_virtual_buy 직접 호출 (백테스트 마찰 적용, VTM 우회)
         - 'real'   : decision_engine.execute_real_buy 호출 (KIS 시장가 주문)
         - 'off'    : 즉시 return
 
         공통:
-        - decision_engine.macd_cross_strategy 의 캐시된 universe 만 평가
-        - 시그널 hit 시점은 14:31:00+ (백테스트 next_bar_open 정렬)
+        - 전달된 strategy 의 캐시된 universe 만 평가
+        - 시그널 hit 시점은 ENTRY_HHMM_MIN+ (백테스트 next_bar_open 정렬)
         - 백테스트 가드 적용: 가격제한 buffer + 거래량 feasibility (실거래에도 동일 적용)
         """
-        from config.strategy_settings import StrategySettings
         from backtests.common.execution_model import (
             BUY_COMMISSION, SLIPPAGE_ONE_WAY, ExecutionModel,
         )
 
-        mode = self._macd_cross_mode()
-        if mode == 'off' or self.decision_engine.macd_cross_strategy is None:
+        if mode == 'off' or strategy is None:
             return
         is_virtual = (mode == 'virtual')
 
         if self._apply_holiday_guard(current_time, "매수"):
             return
 
-        cfg_mc = StrategySettings.MacdCross
         hhmm = current_time.hour * 100 + current_time.minute
-        if not (cfg_mc.ENTRY_HHMM_MIN <= hhmm <= cfg_mc.ENTRY_HHMM_MAX):
+        if not (cfg_class.ENTRY_HHMM_MIN <= hhmm <= cfg_class.ENTRY_HHMM_MAX):
             return
 
         # 🚨 실거래 모드 한정: 전일 -3% 서킷브레이커 inherit (자본 보호 absolute)
@@ -889,23 +906,22 @@ class DayTradingBot:
         if not is_virtual and self._macd_cross_circuit_breaker_blocks(current_time):
             return
 
-        strategy = self.decision_engine.macd_cross_strategy
         universe_codes = list(strategy._cache.keys()) if hasattr(strategy, '_cache') else []
         if not universe_codes:
             return
 
         # 일일 진입 한도 체크 (모드별 카운팅)
         def _today_buy_count() -> int:
-            return (self._count_open_paper_positions('macd_cross')
+            return (self._count_open_paper_positions(label)
                     if is_virtual
                     else self._count_today_macd_cross_real_buys())
 
         def _has_buy_today(code: str) -> bool:
-            return (self._has_macd_cross_buy_today(code)
+            return (self._has_macd_cross_paper_buy_today(code, label)
                     if is_virtual
                     else self._has_macd_cross_real_buy_today(code))
 
-        if _today_buy_count() >= cfg_mc.MAX_DAILY_POSITIONS:
+        if _today_buy_count() >= cfg_class.MAX_DAILY_POSITIONS:
             return
 
         for stock_code in universe_codes:
@@ -914,7 +930,7 @@ class DayTradingBot:
                     continue
                 if _has_buy_today(stock_code):
                     continue
-                if _today_buy_count() >= cfg_mc.MAX_DAILY_POSITIONS:
+                if _today_buy_count() >= cfg_class.MAX_DAILY_POSITIONS:
                     break
 
                 price_info = self.intraday_manager.get_cached_current_price(stock_code)
@@ -930,7 +946,7 @@ class DayTradingBot:
                     current_price, prev_close, side="buy"
                 ):
                     self.logger.debug(
-                        f"[macd_cross] {stock_code} 상한가 buffer 위반 → skip"
+                        f"[{label}] {stock_code} 상한가 buffer 위반 → skip"
                     )
                     continue
 
@@ -942,11 +958,11 @@ class DayTradingBot:
                     # 백테스트 마찰: 슬리피지 + 매수 수수료
                     buy_fill = current_price * (1 + SLIPPAGE_ONE_WAY)
                     buy_price_effective = buy_fill * (1 + BUY_COMMISSION)
-                    budget = cfg_mc.VIRTUAL_CAPITAL * cfg_mc.BUY_BUDGET_RATIO
+                    budget = cfg_class.VIRTUAL_CAPITAL * cfg_class.BUY_BUDGET_RATIO
                     quantity = int(budget / buy_price_effective)
                     if quantity <= 0:
                         self.logger.debug(
-                            f"[macd_cross] {stock_code} buy_price {buy_price_effective:,.0f} > "
+                            f"[{label}] {stock_code} buy_price {buy_price_effective:,.0f} > "
                             f"budget {budget:,.0f} → quantity 0 → skip"
                         )
                         continue
@@ -955,7 +971,7 @@ class DayTradingBot:
                         order_value, prev_trading_value
                     ):
                         self.logger.debug(
-                            f"[macd_cross] {stock_code} 거래량 한도 위반 "
+                            f"[{label}] {stock_code} 거래량 한도 위반 "
                             f"(주문 {order_value:,.0f} > {prev_trading_value*0.02:,.0f}) → skip"
                         )
                         continue
@@ -964,17 +980,17 @@ class DayTradingBot:
                         stock_name=stock_name,
                         price=buy_price_effective,
                         quantity=quantity,
-                        strategy='macd_cross',
-                        reason=f"macd_cross_signal_hhmm{hhmm}",
+                        strategy=label,
+                        reason=f"{label}_signal_hhmm{hhmm}",
                     )
                     if buy_record_id:
                         self.logger.info(
-                            f"👻 [macd_cross] 가상 매수: {stock_code} {quantity}주 "
+                            f"👻 [{label}] 가상 매수: {stock_code} {quantity}주 "
                             f"@{buy_price_effective:,.0f} (mid={current_price:,.0f}, id={buy_record_id})"
                         )
                     else:
                         self.logger.warning(
-                            f"⚠️ [macd_cross] 가상 매수 실패: {stock_code} {quantity}주"
+                            f"⚠️ [{label}] 가상 매수 실패: {stock_code} {quantity}주"
                         )
                 else:
                     # === Real path (실 계좌 시장가 주문) ===
@@ -982,18 +998,18 @@ class DayTradingBot:
                     # MAX_DAILY_POSITIONS=5 의 남은 슬롯 수 = 5 - 오늘 진입 건수
                     # 첫 진입: 6.43M / 5 = 1.286M, 두번째: 5.14M / 4 = 1.285M ...
                     fund_status = self.fund_manager.get_status()
-                    remaining_slots = cfg_mc.MAX_DAILY_POSITIONS - _today_buy_count()
+                    remaining_slots = cfg_class.MAX_DAILY_POSITIONS - _today_buy_count()
                     if remaining_slots <= 0:
                         break
                     budget = fund_status['available_funds'] / remaining_slots
                     # 안전 캡: 단일 포지션 최대 = total × BUY_BUDGET_RATIO
-                    budget = min(budget, fund_status['total_funds'] * cfg_mc.BUY_BUDGET_RATIO)
+                    budget = min(budget, fund_status['total_funds'] * cfg_class.BUY_BUDGET_RATIO)
                     if budget <= 0 or current_price <= 0:
                         continue
                     quantity = int(budget / current_price)
                     if quantity <= 0:
                         self.logger.debug(
-                            f"[macd_cross] {stock_code} budget {budget:,.0f} / price "
+                            f"[{label}] {stock_code} budget {budget:,.0f} / price "
                             f"{current_price:,.0f} → quantity 0 → skip"
                         )
                         continue
@@ -1003,35 +1019,53 @@ class DayTradingBot:
                         order_value, prev_trading_value
                     ):
                         self.logger.debug(
-                            f"[macd_cross] {stock_code} 거래량 한도 위반 "
+                            f"[{label}] {stock_code} 거래량 한도 위반 "
                             f"(주문 {order_value:,.0f} > {prev_trading_value*0.02:,.0f}) → skip"
                         )
                         continue
                     if ts is None:
                         self.logger.warning(
-                            f"⚠️ [macd_cross] {stock_code} trading_stock 미등록 → skip"
+                            f"⚠️ [{label}] {stock_code} trading_stock 미등록 → skip"
                         )
                         continue
                     ok = await self.decision_engine.execute_real_buy(
                         ts,
-                        f"macd_cross_signal_hhmm{hhmm}",
+                        f"{label}_signal_hhmm{hhmm}",
                         current_price,
                         quantity,
                         candle_time=current_time,
-                        strategy_tag='macd_cross',
+                        strategy_tag=label,
                         market=True,
                     )
                     if ok:
                         self.logger.info(
-                            f"🔥 [macd_cross] 실 매수 주문: {stock_code} {quantity}주 "
+                            f"🔥 [{label}] 실 매수 주문: {stock_code} {quantity}주 "
                             f"@~{current_price:,.0f} (시장가, 예산 {budget:,.0f})"
                         )
                     else:
                         self.logger.warning(
-                            f"⚠️ [macd_cross] 실 매수 주문 실패: {stock_code} {quantity}주"
+                            f"⚠️ [{label}] 실 매수 주문 실패: {stock_code} {quantity}주"
                         )
             except Exception as e:
-                self.logger.error(f"❌ [macd_cross] {stock_code} 평가 오류: {e}")
+                self.logger.error(f"❌ [{label}] {stock_code} 평가 오류: {e}")
+
+    async def _evaluate_macd_cross_window(self, current_time):
+        """macd_cross 라이브 진입 평가 (14:31~15:00). 기존 단일 인스턴스 경로 유지.
+
+        instance helper (`_evaluate_macd_cross_instance`) 로 위임. paper 추가
+        인스턴스 (16/32 등) 도 동일 helper 를 다른 strategy/cfg/label/mode 로
+        호출 가능.
+        """
+        from config.strategy_settings import StrategySettings
+        mode = self._macd_cross_mode()
+        strategy = self.decision_engine.macd_cross_strategy if self.decision_engine else None
+        await self._evaluate_macd_cross_instance(
+            current_time,
+            strategy=strategy,
+            cfg_class=StrategySettings.MacdCross,
+            label='macd_cross',
+            mode=mode,
+        )
 
     async def _analyze_buy_decision(self, trading_stock, available_funds: float = None):
         """매수 판단 분석 (완성된 1분봉 기준)
