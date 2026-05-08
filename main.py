@@ -1878,11 +1878,23 @@ class DayTradingBot:
 
         from config.strategy_settings import StrategySettings
         mode = self._macd_cross_mode()
-        return await self._macd_cross_exit_instance(
+        live_result = await self._macd_cross_exit_instance(
             label='macd_cross',
             cfg_class=StrategySettings.MacdCross,
             mode=mode,
         )
+        # 신규: paper 16/32 alt 청산 — 라이브 결과와 별도, 항상 'virtual' mode
+        if (StrategySettings.PAPER_STRATEGY == 'macd_cross_alt'
+                and getattr(self, 'paper_macd_cross_strategy', None) is not None):
+            try:
+                await self._macd_cross_exit_instance(
+                    label='macd_cross_alt',
+                    cfg_class=StrategySettings.MacdCrossAlt,
+                    mode='virtual',
+                )
+            except Exception as e:
+                self.logger.warning(f"[paper.macd_cross_alt] 청산 오류: {e}")
+        return live_result
 
     async def _macd_cross_live_exit_task(self) -> bool:
         """macd_cross 실거래 포지션 hold_days=2 만료 시장가 청산.
