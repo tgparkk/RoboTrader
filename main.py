@@ -1093,6 +1093,16 @@ class DayTradingBot:
             label='macd_cross',
             mode=mode,
         )
+        # 신규: paper 16/32 alt 평가 — 라이브와 분리, 항상 'virtual' mode
+        if (StrategySettings.PAPER_STRATEGY == 'macd_cross_alt'
+                and getattr(self, 'paper_macd_cross_strategy', None) is not None):
+            await self._evaluate_macd_cross_instance(
+                current_time,
+                strategy=self.paper_macd_cross_strategy,
+                cfg_class=StrategySettings.MacdCrossAlt,
+                label='macd_cross_alt',
+                mode='virtual',
+            )
 
     async def _analyze_buy_decision(self, trading_stock, available_funds: float = None):
         """매수 판단 분석 (완성된 1분봉 기준)
