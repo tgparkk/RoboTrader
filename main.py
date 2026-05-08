@@ -1846,12 +1846,13 @@ class DayTradingBot:
             True if 모든 만료 BUY 가 처리됨 (또는 처리할 BUY 없음).
             False if 미관리 종목/가격 미수집 등 transient 상태로 재시도 필요.
 
-        Note: 현재 live/paper exit task 는 label='macd_cross' 하드코딩 상태.
-        paper 추가 인스턴스 (macd_cross_alt 등) 통합 시 label/cfg_class 가
-        하위 task 로 전파되어야 함 (후속 task 에서 진행).
+        Paper alt (macd_cross_alt) 통합: virtual 모드 시 label/cfg_class 를
+        paper exit task 에 전파하여 strategy 별 분리 청산.
         """
         if mode == 'virtual':
-            return await self._macd_cross_paper_exit_task()
+            return await self._macd_cross_paper_exit_task(
+                label=label, cfg_class=cfg_class,
+            )
         elif mode == 'real':
             return await self._macd_cross_live_exit_task()
         return True  # off: no-op
@@ -1977,8 +1978,18 @@ class DayTradingBot:
             self.logger.error(f"❌ macd_cross live exit 실패: {e}")
             return False
 
-    async def _macd_cross_paper_exit_task(self) -> bool:
-        """macd_cross 가상 포지션 hold_days=2 만료 청산.
+    async def _macd_cross_paper_exit_task(
+        self,
+        label: str = 'macd_cross',
+        cfg_class=None,
+    ) -> bool:
+        """macd_cross 가상 포지션 hold_days 만료 청산. label 별 분리.
+
+        Args:
+            label: 'macd_cross' (live paper) / 'macd_cross_alt' (16/32 paper).
+                strategy 컬럼 필터 + save_virtual_sell strategy 인자.
+            cfg_class: StrategySettings.MacdCross 또는 MacdCrossAlt.
+                None 이면 MacdCross (backwards-compat).
 
         Fix B (2026-04-26): 청산 시점을 D2 장 시작 직후 (~09:01~30) 로 이동 — backtest
         의 exit_signal 이 D2 첫 분봉에서 fire 하는 것과 동등. EOD (15:00) 후에도
@@ -2000,15 +2011,19 @@ class DayTradingBot:
                 SELL_COMMISSION, SLIPPAGE_ONE_WAY, ExecutionModel,
             )
 
-            cfg = StrategySettings.MacdCross
+            cfg = cfg_class if cfg_class is not None else StrategySettings.MacdCross
             df = self.db_manager.get_virtual_open_positions()
             if df is None or df.empty:
                 return True
-            df_mc = df[df['strategy'] == 'macd_cross']
+            df_mc = df[df['strategy'] == label]
             if df_mc.empty:
                 return True
 
-            strategy = self.decision_engine.macd_cross_strategy
+            # paper alt 는 paper_macd_cross_strategy, live paper 는 decision_engine 인스턴스 사용
+            if label == 'macd_cross_alt':
+                strategy = getattr(self, 'paper_macd_cross_strategy', None)
+            else:
+                strategy = self.decision_engine.macd_cross_strategy
             today = now_kst().date()
             for _, row in df_mc.iterrows():
                 buy_time = row['buy_time']
@@ -2028,7 +2043,7 @@ class DayTradingBot:
                 # 현재가 (intraday_manager 캐시 — 09:01~30 morning 트리거 시점에 활성)
                 price_info = self.intraday_manager.get_cached_current_price(stock_code)
                 if not price_info:
-                    self.logger.warning(f"[macd_cross.exit] {stock_code} 가격 없음 → skip")
+                    self.logger.warning(f"[{label}.exit] {stock_code} 가격 없음 → skip")
                     pending_skip = True
                     continue
                 current_price = float(price_info.get('current_price', 0))
@@ -2044,7 +2059,7 @@ class DayTradingBot:
                     current_price, prev_close, side="sell"
                 ):
                     self.logger.debug(
-                        f"[macd_cross.exit] {stock_code} 하한가 buffer 위반 → skip (다음 사이클 재시도)"
+                        f"[{label}.exit] {stock_code} 하한가 buffer 위반 → skip (다음 사이클 재시도)"
                     )
                     pending_skip = True
                     continue
@@ -2060,22 +2075,22 @@ class DayTradingBot:
                     stock_name=stock_name,
                     price=sell_price_effective,
                     quantity=quantity,
-                    strategy='macd_cross',
+                    strategy=label,
                     reason=f"hold_limit_days={days_held}",
                     buy_record_id=buy_record_id,
                 )
                 if ok:
                     self.logger.info(
-                        f"👻 [macd_cross] 가상 청산: {stock_code} {quantity}주 "
+                        f"👻 [{label}] 가상 청산: {stock_code} {quantity}주 "
                         f"@{sell_price_effective:,.0f} (mid={current_price:,.0f}, hold {days_held}d)"
                     )
                 else:
                     self.logger.warning(
-                        f"⚠️ [macd_cross] 가상 청산 DB 저장 실패: {stock_code}"
+                        f"⚠️ [{label}] 가상 청산 DB 저장 실패: {stock_code}"
                     )
             return not pending_skip
         except Exception as e:
-            self.logger.error(f"❌ macd_cross paper exit 실패: {e}")
+            self.logger.error(f"❌ {label} paper exit 실패: {e}")
             return False
 
     async def _build_macd_cross_kpi_section(self, label: str, virtual_capital: float):
