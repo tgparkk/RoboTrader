@@ -116,6 +116,33 @@ class DayTradingBot:
             _fm_ratio = self.config.order_management.buy_budget_ratio
         self.fund_manager = FundManager(buy_budget_ratio=_fm_ratio)
         self.chart_generator = None  # 🆕 장 마감 후 차트 생성기 (지연 초기화)
+
+        # 신규: macd_cross_alt (16/32) paper 인스턴스 (PAPER_STRATEGY 활성 시에만)
+        # Spec: docs/superpowers/specs/2026-05-09-macd-cross-alt-paper-validation-design.md
+        try:
+            from config.strategy_settings import StrategySettings as _SS_PA
+            if _SS_PA.PAPER_STRATEGY == 'macd_cross_alt':
+                from core.strategies.macd_cross_strategy import MacdCrossStrategy
+                mca = _SS_PA.MacdCrossAlt
+                self.paper_macd_cross_strategy = MacdCrossStrategy(
+                    fast=mca.FAST_PERIOD,
+                    slow=mca.SLOW_PERIOD,
+                    signal=mca.SIGNAL_PERIOD,
+                    entry_hhmm_min=mca.ENTRY_HHMM_MIN,
+                    entry_hhmm_max=mca.ENTRY_HHMM_MAX,
+                    logger=self.logger,
+                    label='macd_cross_alt',
+                )
+                self.logger.info(
+                    f"[paper.macd_cross_alt] 인스턴스 생성 "
+                    f"(fast={mca.FAST_PERIOD}, slow={mca.SLOW_PERIOD}, "
+                    f"signal={mca.SIGNAL_PERIOD})"
+                )
+            else:
+                self.paper_macd_cross_strategy = None
+        except Exception as _paper_e:
+            self.logger.warning(f"[paper.macd_cross_alt] 인스턴스 생성 실패: {_paper_e}")
+            self.paper_macd_cross_strategy = None
         
         
         # 신호 핸들러 등록
@@ -1441,8 +1468,11 @@ class DayTradingBot:
             return
 
         codes = [s.code for s in candidates]
+        # 신규 paper alt: 활성 시 라이브와 동일 daily history 를 paper 인스턴스에도 주입
+        paper_strategy = getattr(self, 'paper_macd_cross_strategy', None)
         cached_count = await loop.run_in_executor(
-            None, self._load_macd_cross_daily_batch, codes, today_str, strategy
+            None, self._load_macd_cross_daily_batch,
+            codes, today_str, strategy, paper_strategy,
         )
 
         self.logger.info(
@@ -1450,15 +1480,23 @@ class DayTradingBot:
             f"daily 캐시={cached_count}/{len(candidates)}"
         )
 
-    def _load_macd_cross_daily_batch(self, stock_codes, today_yyyymmdd: str, strategy) -> int:
+    def _load_macd_cross_daily_batch(
+        self,
+        stock_codes,
+        today_yyyymmdd: str,
+        strategy,
+        paper_strategy=None,
+    ) -> int:
         """macd_cross 일괄 daily history 로드 + 캐시 주입 (option B: 단일 connection).
 
         Args:
             stock_codes: 종목 코드 리스트.
             today_yyyymmdd: 오늘 (YYYYMMDD). daily_prices 조회 상한 기준.
-            strategy: MacdCrossStrategy 인스턴스.
+            strategy: 라이브 MacdCrossStrategy 인스턴스 (필수).
+            paper_strategy: 페이퍼 MacdCrossStrategy 인스턴스 (옵션, macd_cross_alt 등).
+                동일 daily history 를 paper 인스턴스에도 주입한다.
         Returns:
-            성공 캐시된 종목 수.
+            성공 캐시된 종목 수 (라이브 기준).
         """
         import psycopg2
         import pandas as pd
@@ -1503,6 +1541,16 @@ class DayTradingBot:
                     strategy.set_daily_history(
                         code, df, today_yyyymmdd, prev_trading_value=prev_tv
                     )
+                    # 신규 paper alt: 동일 daily history → paper 인스턴스에도 주입
+                    if paper_strategy is not None:
+                        try:
+                            paper_strategy.set_daily_history(
+                                code, df, today_yyyymmdd, prev_trading_value=prev_tv
+                            )
+                        except Exception as pe:
+                            self.logger.debug(
+                                f"[paper.macd_cross_alt] daily prep {code}: {pe}"
+                            )
                     cached += 1
                 except Exception as e:
                     try:
