@@ -93,3 +93,34 @@ class MacdCross:
 
 - **weighted_score / closing_trade / pullback**: 2026-04-27 폐기. 핵심 코드 삭제 완료. 차트 의존 잔존 코드 (`core/indicators/pullback*`, `price_calculator.py`, `visualization/*`) 는 1주 안정 운영 후 정리 예정.
 - **price_position**: 2026-04-21 완전 삭제됨.
+
+---
+
+## macd_cross_alt (16/32) Paper 검증 — 2026-05-09 ~
+
+**목적**: MV-A 멀티버스 결과 (4ds-avg calmar 65→128, +95%) 의 OOS 재현성 검증.
+
+**활성화 조건**:
+- `StrategySettings.PAPER_STRATEGY = 'macd_cross_alt'`
+- 라이브 14/34 (`ACTIVE_STRATEGY='macd_cross'`, `VIRTUAL_ONLY=False`) 그대로 유지
+- 양 인스턴스가 같은 universe top 30 공유 (KIS API 1회 호출, validate_settings 가 강제)
+
+**종료 조건**: 4주 또는 30 trades 도달 시 (먼저 충족).
+
+**승격 게이트** (모두 통과 시 swap PR — `MacdCross.FAST_PERIOD = 16, SLOW_PERIOD = 32` 일괄 교체):
+1. paper Calmar ≥ 30
+2. paper return ≥ 0
+3. paper MDD ≤ 5%
+4. paper 승률 ≥ 50%
+5. top1 trade P&L 점유율 ≤ 60%
+6. max consecutive losses ≤ 4
+
+**중도 안전정지**: 누적 -5% 또는 5연패 → `PAPER_STRATEGY=None` 자동 정지.
+
+**모니터링**:
+- 일일 EOD 텔레그램 보고에 `[macd_cross]` (real) / `[macd_cross_alt]` (paper) 두 섹션 출력
+- 운영 로그: `grep "macd_cross_alt" logs/trading_YYYYMMDD.log`
+
+**스펙/플랜**:
+- Spec: `docs/superpowers/specs/2026-05-09-macd-cross-alt-paper-validation-design.md`
+- Plan: `docs/superpowers/plans/2026-05-09-macd-cross-alt-paper-validation.md`

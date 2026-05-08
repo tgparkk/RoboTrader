@@ -26,7 +26,7 @@ class StrategySettings:
     # 다른 전략 (pullback / closing_trade / weighted_score) 은 모두 폐기됨.
     # 신규 전략 도입 시 valid_strategies 에 추가하고 dispatch 분기를 별도 작성한다.
     ACTIVE_STRATEGY = 'macd_cross'
-    PAPER_STRATEGY = None
+    PAPER_STRATEGY = 'macd_cross_alt'   # 2026-05-09: MV-A best 16/32 paper 검증 활성화
 
     # ========================================
     # macd_cross 전략 설정 (페이퍼 단계, 2026-04-26)
