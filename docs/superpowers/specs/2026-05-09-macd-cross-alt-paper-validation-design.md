@@ -140,14 +140,16 @@ self.paper_macd = MacdCrossStrategy(cfg=StrategySettings.MacdCrossAlt, label='ma
 | `MacdCrossKpi(label='macd_cross')` | `real_trading_records WHERE strategy='macd_cross'` | 라이브 KPI |
 | `MacdCrossKpi(label='macd_cross_alt')` | `virtual_trading_records WHERE strategy_label='macd_cross_alt'` | paper 게이트 평가 (4주/30 trades 통과 판정) |
 
-### 4.5 DB 스키마 변경
+### 4.5 DB 스키마 (변경 없음)
 
-`virtual_trading_records` 테이블에 `strategy_label TEXT NOT NULL DEFAULT 'macd_cross'` 컬럼 추가.
+`virtual_trading_records.strategy` 컬럼이 **이미 존재** (기존 `save_virtual_buy/sell` signature 의 `strategy` 인자가 그대로 저장됨). 마이그레이션 불필요.
 
-마이그레이션:
-- `db/migrations/202605091200_add_strategy_label.sql` (신규)
-- 기존 row 는 모두 'macd_cross' 로 백필 (현재 macd_cross paper 만 가상매매 사용 중)
-- `database_manager.insert_virtual_trade()` signature 에 `strategy_label='macd_cross'` 기본 인자 추가
+호출자만 변경:
+- 라이브 매수 (실 거래) → `real_trading_records` 별도 테이블 (영향 없음)
+- 기존 paper macd_cross → `save_virtual_buy(..., strategy='macd_cross', ...)` (변경 없음)
+- 신규 paper macd_cross_alt → `save_virtual_buy(..., strategy='macd_cross_alt', ...)` (호출 인자만 다름)
+
+KPI 쿼리는 `SELECT ... FROM virtual_trading_records WHERE strategy='macd_cross_alt'` 로 분리.
 
 ## 5. 데이터 흐름
 
@@ -213,7 +215,7 @@ KPI 집계 (일일 EOD 텔레그램 보고)
 
 ## 10. 산출물
 
-- 코드: `config/strategy_settings.py` 수정, `core/strategies/macd_cross_strategy.py` cfg 주입 변경, `core/strategies/macd_cross_kpi.py` label 인자, `core/virtual_trading_manager.py` strategy_label 추적, `db/database_manager.py` 컬럼 추가, `main.py` dispatch 5곳, DB 마이그레이션 SQL 1개
+- 코드: `config/strategy_settings.py` 수정 (MacdCrossAlt 추가), `core/strategies/macd_cross_strategy.py` label 파라미터 추가, `main.py` dispatch 분기 추출 + paper 인스턴스 + 호출 5곳, 텔레그램 EOD dual KPI. KPI/DB 모듈 변경 없음 (기존 `strategy` 컬럼 + DataFrame-driven KPI 재사용).
 - 테스트: 신규 3개 (`test_macd_cross_alt.py`, `test_macd_cross_alt_signal_parity.py`, `test_macd_cross_alt_paper_flow.py`)
 - 문서: `docs/macd_cross_operation.md` 운영 노트 추가
 
