@@ -453,9 +453,9 @@ class DayTradingBot:
                             self._check_macd_cross_kill_switch_thresholds()
                         except Exception as e:
                             self.logger.error(f"❌ macd_cross 킬 스위치 체크 실패: {e}")
-                        # macd_cross paper 일일 보고 + safety stop 체크 (Task 11)
+                        # macd_cross / macd_cross_alt paper 일일 보고 + safety stop 체크
                         try:
-                            if StrategySettings.PAPER_STRATEGY == 'macd_cross':
+                            if StrategySettings.PAPER_STRATEGY in ('macd_cross', 'macd_cross_alt'):
                                 await self._macd_cross_paper_daily_report()
                         except Exception as e:
                             self.logger.error(f"❌ macd_cross 일일 보고 트리거 실패: {e}")
@@ -2078,23 +2078,25 @@ class DayTradingBot:
             self.logger.error(f"❌ macd_cross paper exit 실패: {e}")
             return False
 
-    async def _macd_cross_paper_daily_report(self):
-        """macd_cross 페이퍼 일일 KPI 집계 + 텔레그램 알림 + safety stop 체크.
+    async def _build_macd_cross_kpi_section(self, label: str, virtual_capital: float):
+        """단일 paper 전략의 KPI 섹션 텍스트 + safety_stop 플래그 반환.
 
-        EOD 직후 (paper exit 끝난 다음) 1회 호출. KPI 계산은 KPI 모듈
-        (core.strategies.macd_cross_kpi.MacdCrossKpi) 에 위임.
+        Args:
+            label: 'macd_cross' / 'macd_cross_alt' — virtual_trading_records.strategy 필터 값.
+            virtual_capital: KPI 계산 기준 자본 (cfg.VIRTUAL_CAPITAL).
+
+        Returns:
+            (section_text, safety_stop) 튜플. 실패 시 (None, False).
         """
         try:
-            from config.strategy_settings import StrategySettings
             from core.strategies.macd_cross_kpi import MacdCrossKpi
 
-            cfg = StrategySettings.MacdCross
-            kpi = MacdCrossKpi(virtual_capital=cfg.VIRTUAL_CAPITAL)
+            kpi = MacdCrossKpi(virtual_capital=virtual_capital)
 
             loop = asyncio.get_running_loop()
             df = await loop.run_in_executor(
                 None,
-                lambda: self.db_manager.get_virtual_paired_trades(strategy='macd_cross'),
+                lambda: self.db_manager.get_virtual_paired_trades(strategy=label),
             )
 
             metrics = kpi.compute(df) if df is not None else kpi.compute(pd.DataFrame())
@@ -2105,7 +2107,7 @@ class DayTradingBot:
             progress_pct = (metrics['trade_count'] / target_trades * 100) if target_trades else 0
 
             lines = [
-                "📊 macd_cross 페이퍼 일일 보고",
+                f"📊 {label} 페이퍼 일일 보고",
                 f"진행: {metrics['trade_count']} trades / {progress_pct:.0f}% (목표 {target_trades})",
                 f"return: {metrics['return']*100:+.2f}% | MDD: {metrics['mdd']*100:+.2f}% | win: {metrics['win_rate']*100:.1f}%",
                 f"Calmar: {metrics['calmar']:.1f} | top1: {metrics['top1_share']*100:.1f}% | streak: {metrics['max_consec_losses']}",
@@ -2123,9 +2125,57 @@ class DayTradingBot:
                     val_str = str(g['value'])
                 lines.append(f"  {mark} {g['label']} → {val_str}")
             if safety:
-                lines.append("⚠️ SAFETY STOP 충족 — paper 즉시 중단 권고. PAPER_STRATEGY=None 으로 설정.")
+                lines.append(
+                    f"⚠️ {label} SAFETY STOP 충족 — paper 즉시 중단 권고. "
+                    "PAPER_STRATEGY=None 으로 설정."
+                )
+            return "\n".join(lines), safety
+        except Exception as e:
+            self.logger.error(f"❌ {label} KPI 섹션 생성 실패: {e}")
+            return None, False
 
-            msg = "\n".join(lines)
+    async def _macd_cross_paper_daily_report(self):
+        """macd_cross / macd_cross_alt 페이퍼 일일 KPI 집계 + 텔레그램 알림 + safety stop.
+
+        EOD 직후 (paper exit 끝난 다음) 1회 호출. PAPER_STRATEGY 활성 전략별로
+        섹션을 생성해 dual KPI 출력. KPI 계산은 KPI 모듈
+        (core.strategies.macd_cross_kpi.MacdCrossKpi) 에 위임.
+
+        섹션 매트릭스:
+          - PAPER_STRATEGY='macd_cross'      → macd_cross 섹션
+          - PAPER_STRATEGY='macd_cross_alt'  → macd_cross_alt 섹션
+          - 활성 paper 가 둘 다이면 두 섹션 모두 출력 (현재는 단일 활성만 가능)
+        """
+        try:
+            from config.strategy_settings import StrategySettings
+
+            sections = []
+            any_safety = False
+
+            # 섹션 1: macd_cross (paper) — 기존 경로
+            if StrategySettings.PAPER_STRATEGY == 'macd_cross':
+                section, safety = await self._build_macd_cross_kpi_section(
+                    label='macd_cross',
+                    virtual_capital=StrategySettings.MacdCross.VIRTUAL_CAPITAL,
+                )
+                if section:
+                    sections.append(section)
+                    any_safety = any_safety or safety
+
+            # 섹션 2: macd_cross_alt (paper) — 신규 (16/32 검증)
+            if StrategySettings.PAPER_STRATEGY == 'macd_cross_alt':
+                section, safety = await self._build_macd_cross_kpi_section(
+                    label='macd_cross_alt',
+                    virtual_capital=StrategySettings.MacdCrossAlt.VIRTUAL_CAPITAL,
+                )
+                if section:
+                    sections.append(section)
+                    any_safety = any_safety or safety
+
+            if not sections:
+                return
+
+            msg = "\n\n".join(sections)
             if self.telegram is not None:
                 try:
                     await self.telegram.notify_system_status(msg)
