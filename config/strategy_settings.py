@@ -77,6 +77,29 @@ class StrategySettings:
         VIRTUAL_ONLY = False
 
     # ========================================
+    # macd_cross_alt 페이퍼 (16/32 검증, 2026-05-09)
+    # ========================================
+    class MacdCrossAlt:
+        """16/32 paper 검증 (MV-A best).
+
+        Spec: docs/superpowers/specs/2026-05-09-macd-cross-alt-paper-validation-design.md
+        근거: MV-A 멀티버스 4ds-avg calmar 65→128 (+95%), plateau robust.
+        """
+        FAST_PERIOD = 16
+        SLOW_PERIOD = 32
+        SIGNAL_PERIOD = 12
+        ENTRY_HHMM_MIN = 1431
+        ENTRY_HHMM_MAX = 1500
+        HOLD_DAYS = 2
+        VIRTUAL_CAPITAL = 10_000_000
+        BUY_BUDGET_RATIO = 0.20
+        MAX_DAILY_POSITIONS = 5
+        UNIVERSE_TOP_N = 30
+        APPLY_LIVE_OVERLAY = False
+        ALLOWED_WEEKDAYS = [0, 1, 2, 3, 4]
+        VIRTUAL_ONLY = True
+
+    # ========================================
     # 실시간 종목 스크리너 설정
     # ========================================
     # macd_cross 는 자체 universe (preload_macd_cross_universe, top_n=30) 만 사용.
@@ -230,7 +253,7 @@ def validate_settings():
             f"사용 가능: {valid_strategies}"
         )
 
-    valid_paper_strategies = [None, 'macd_cross']
+    valid_paper_strategies = [None, 'macd_cross', 'macd_cross_alt']  # 'macd_cross_alt' 추가
     if StrategySettings.PAPER_STRATEGY not in valid_paper_strategies:
         raise ValueError(
             f"잘못된 페이퍼 전략: {StrategySettings.PAPER_STRATEGY}. "
@@ -245,6 +268,23 @@ def validate_settings():
             raise ValueError("MacdCross.MAX_DAILY_POSITIONS는 1 이상이어야 합니다")
         if not mc.ALLOWED_WEEKDAYS:
             raise ValueError("MacdCross.ALLOWED_WEEKDAYS가 비어있습니다")
+
+    if StrategySettings.PAPER_STRATEGY == 'macd_cross_alt':
+        mca = StrategySettings.MacdCrossAlt
+        if mca.ENTRY_HHMM_MIN >= mca.ENTRY_HHMM_MAX:
+            raise ValueError("MacdCrossAlt.ENTRY_HHMM_MIN은 ENTRY_HHMM_MAX보다 작아야 합니다")
+        if mca.MAX_DAILY_POSITIONS <= 0:
+            raise ValueError("MacdCrossAlt.MAX_DAILY_POSITIONS는 1 이상이어야 합니다")
+        if not mca.ALLOWED_WEEKDAYS:
+            raise ValueError("MacdCrossAlt.ALLOWED_WEEKDAYS가 비어있습니다")
+        if mca.UNIVERSE_TOP_N != StrategySettings.MacdCross.UNIVERSE_TOP_N:
+            raise ValueError(
+                f"MacdCrossAlt.UNIVERSE_TOP_N ({mca.UNIVERSE_TOP_N})은 "
+                f"MacdCross.UNIVERSE_TOP_N ({StrategySettings.MacdCross.UNIVERSE_TOP_N})와 "
+                f"같아야 합니다 (universe 공유 정책)"
+            )
+        if not mca.VIRTUAL_ONLY:
+            raise ValueError("MacdCrossAlt.VIRTUAL_ONLY는 True여야 합니다 (paper 전용)")
 
     return True
 
