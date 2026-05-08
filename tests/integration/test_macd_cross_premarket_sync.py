@@ -217,7 +217,8 @@ async def test_dispatcher_returns_true_when_mode_off():
     """mode=off → True (no-op, 가드 set OK)."""
     bot = _FakeBot()
     bot._macd_cross_mode = MagicMock(return_value='off')
-    _bind(bot, '_macd_cross_exit_dispatcher', '_apply_holiday_guard')
+    _bind(bot, '_macd_cross_exit_dispatcher', '_macd_cross_exit_instance',
+          '_apply_holiday_guard')
 
     with patch('main.now_kst', return_value=_WEEKDAY_DT):
         result = await bot._macd_cross_exit_dispatcher()
@@ -232,7 +233,8 @@ async def test_dispatcher_passes_through_live_bool():
     bot._macd_cross_mode = MagicMock(return_value='real')
     bot._macd_cross_live_exit_task = AsyncMock(return_value=False)
     bot._macd_cross_paper_exit_task = AsyncMock(return_value=True)
-    _bind(bot, '_macd_cross_exit_dispatcher', '_apply_holiday_guard')
+    _bind(bot, '_macd_cross_exit_dispatcher', '_macd_cross_exit_instance',
+          '_apply_holiday_guard')
 
     with patch('main.now_kst', return_value=_WEEKDAY_DT):
         result = await bot._macd_cross_exit_dispatcher()
@@ -249,7 +251,8 @@ async def test_dispatcher_passes_through_paper_bool():
     bot._macd_cross_mode = MagicMock(return_value='virtual')
     bot._macd_cross_live_exit_task = AsyncMock(return_value=True)
     bot._macd_cross_paper_exit_task = AsyncMock(return_value=False)
-    _bind(bot, '_macd_cross_exit_dispatcher', '_apply_holiday_guard')
+    _bind(bot, '_macd_cross_exit_dispatcher', '_macd_cross_exit_instance',
+          '_apply_holiday_guard')
 
     with patch('main.now_kst', return_value=_WEEKDAY_DT):
         result = await bot._macd_cross_exit_dispatcher()

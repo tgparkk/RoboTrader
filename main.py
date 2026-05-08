@@ -1765,8 +1765,44 @@ class DayTradingBot:
         except Exception as e:
             self.logger.error(f"❌ 장마감 일괄청산 오류: {e}")
     
+    async def _macd_cross_exit_instance(
+        self,
+        *,
+        label: str,
+        cfg_class,
+        mode: str,
+    ) -> bool:
+        """단일 macd_cross 인스턴스 청산 (D+2 hold_limit_days 만료).
+
+        Args:
+            label: 'macd_cross' / 'macd_cross_alt' — 로그/DB strategy 컬럼 값.
+            cfg_class: StrategySettings.MacdCross 또는 MacdCrossAlt.
+            mode: 'real' / 'virtual' / 'off'.
+
+        모드별 분기:
+        - 'virtual': `_macd_cross_paper_exit_task` (virtual_trading_records)
+        - 'real'   : `_macd_cross_live_exit_task` (real_trading_records + KIS 시장가)
+        - 'off'    : no-op
+
+        Returns:
+            True if 모든 만료 BUY 가 처리됨 (또는 처리할 BUY 없음).
+            False if 미관리 종목/가격 미수집 등 transient 상태로 재시도 필요.
+
+        Note: 현재 live/paper exit task 는 label='macd_cross' 하드코딩 상태.
+        paper 추가 인스턴스 (macd_cross_alt 등) 통합 시 label/cfg_class 가
+        하위 task 로 전파되어야 함 (후속 task 에서 진행).
+        """
+        if mode == 'virtual':
+            return await self._macd_cross_paper_exit_task()
+        elif mode == 'real':
+            return await self._macd_cross_live_exit_task()
+        return True  # off: no-op
+
     async def _macd_cross_exit_dispatcher(self) -> bool:
         """macd_cross 청산 dispatcher — virtual/real 모드 분기.
+
+        instance helper (`_macd_cross_exit_instance`) 로 위임. paper 추가
+        인스턴스 (16/32 등) 도 동일 helper 를 다른 cfg/label/mode 로 호출 가능.
 
         모드 매트릭스 (`_macd_cross_mode`):
           - 'virtual': `_macd_cross_paper_exit_task` (virtual_trading_records)
@@ -1782,12 +1818,13 @@ class DayTradingBot:
         if self._apply_holiday_guard(now_kst(), "청산"):
             return True  # 가드 set 가능 — off 모드와 동일 의미
 
+        from config.strategy_settings import StrategySettings
         mode = self._macd_cross_mode()
-        if mode == 'virtual':
-            return await self._macd_cross_paper_exit_task()
-        elif mode == 'real':
-            return await self._macd_cross_live_exit_task()
-        return True  # off: no-op, 가드 set 가능
+        return await self._macd_cross_exit_instance(
+            label='macd_cross',
+            cfg_class=StrategySettings.MacdCross,
+            mode=mode,
+        )
 
     async def _macd_cross_live_exit_task(self) -> bool:
         """macd_cross 실거래 포지션 hold_days=2 만료 시장가 청산.
