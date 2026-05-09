@@ -47,5 +47,16 @@ class MACDCrossRegimeFilterStrategy(MACDCrossStrategy):
             return feat
         if df_minute.empty:
             return feat
-        # Task 2 에서 채울 자리
+
+        # KOSPI MA20 lookup table — shift(1) 로 D-1 신호만 사용 (lookahead 방지)
+        ks = self.kospi_daily_df.sort_values("trade_date").copy()
+        ks["ma"] = ks["close"].rolling(self.ma_period).mean()
+        ks["below"] = (ks["close"] < ks["ma"]).astype(bool)
+        ks["below_prev"] = ks["below"].shift(1).fillna(False).astype(bool)
+        block_map = dict(zip(ks["trade_date"].astype(str), ks["below_prev"]))
+
+        feat["kospi_below_ma20"] = (
+            df_minute["trade_date"].astype(str)
+            .map(block_map).fillna(False).astype(bool).values
+        )
         return feat
