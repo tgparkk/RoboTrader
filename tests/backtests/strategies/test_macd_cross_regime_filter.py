@@ -187,3 +187,44 @@ def test_filter_off_does_not_check_kospi():
     )
     result = strat.entry_signal(feat, bar_idx=0, stock_code="000001")
     assert result is not None  # base allows
+
+
+def test_no_lookahead_d_close_not_used():
+    """D 일 종가를 변경해도 D 일 의 kospi_below_ma20 신호가 동일.
+
+    shift(1) 검증: 신호는 D-1 까지만 의존 → D 일 close 는 무관.
+    """
+    n = 25
+    base_closes = list(range(1000, 1000 + n))
+    kospi_a = pd.DataFrame({
+        "trade_date": [f"202509{d+1:02d}" for d in range(n)],
+        "close": base_closes,
+    })
+    # D 일 (마지막) close 만 다른 사본 — D 일 close=1024 → 9999 변경
+    kospi_b = kospi_a.copy()
+    kospi_b.loc[n - 1, "close"] = 9999.0  # D 일 close 만 다름
+
+    target_date = f"202509{n:02d}"  # D 일
+    df_min = pd.DataFrame([{
+        "stock_code": "000001",
+        "trade_date": target_date,
+        "trade_time": "143100",
+        "open": 1000.0, "high": 1010.0, "low": 990.0, "close": 1005.0,
+        "volume": 1000,
+    }])
+    df_daily = pd.DataFrame({"trade_date": [target_date], "close": [1024.0]})
+
+    strat_a = MACDCrossRegimeFilterStrategy(
+        regime_filter_enabled=True, kospi_daily_df=kospi_a,
+        fast_period=14, slow_period=34, signal_period=12,
+    )
+    strat_b = MACDCrossRegimeFilterStrategy(
+        regime_filter_enabled=True, kospi_daily_df=kospi_b,
+        fast_period=14, slow_period=34, signal_period=12,
+    )
+    feat_a = strat_a.prepare_features(df_min, df_daily)
+    feat_b = strat_b.prepare_features(df_min, df_daily)
+
+    # D 일 close 변경이 D 일 신호에 영향 없어야 — shift(1) lookahead 0 보증
+    assert (feat_a["kospi_below_ma20"].values
+            == feat_b["kospi_below_ma20"].values).all()
