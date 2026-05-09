@@ -14,6 +14,7 @@ import pandas as pd
 
 PG_DIR = Path("backtests/reports/macd_cross_mv/param_grid")
 EO_DIR = Path("backtests/reports/macd_cross_mv/exit_overlay")
+RF_DIR = Path("backtests/reports/macd_cross_mv/regime_filter")
 
 
 def _heatmap(ax, df, x_col, y_col, value_col, title):
@@ -208,6 +209,88 @@ def write_exit_overlay_summary():
     print(f"[summary] {out}")
 
 
+def plot_regime_filter():
+    df = pd.read_csv(RF_DIR / "cells.csv")
+    out = RF_DIR / "heatmaps"
+    out.mkdir(exist_ok=True)
+    # heatmap: index=param_label, columns=(filter, dataset), value=calmar
+    pivot = df.pivot_table(
+        index="param_label", columns=["filter", "dataset"],
+        values="calmar", aggfunc="mean",
+    )
+    fig, ax = plt.subplots(figsize=(12, 4))
+    im = ax.imshow(pivot.values, aspect="auto", cmap="RdYlGn", origin="lower")
+    ax.set_xticks(range(len(pivot.columns)))
+    ax.set_xticklabels([f"{f}\n{d}" for f, d in pivot.columns], fontsize=8)
+    ax.set_yticks(range(len(pivot.index)))
+    ax.set_yticklabels(pivot.index)
+    ax.set_title("Calmar — param × filter × dataset")
+    for i in range(len(pivot.index)):
+        for j in range(len(pivot.columns)):
+            v = pivot.values[i, j]
+            if not np.isnan(v):
+                ax.text(j, i, f"{v:.1f}", ha="center", va="center", fontsize=8, color="black")
+    plt.colorbar(im, ax=ax, fraction=0.04)
+    fig.tight_layout()
+    fig.savefig(out / "calmar_summary.png", dpi=110)
+    plt.close(fig)
+    print(f"[plot] regime_filter heatmap → {out}")
+
+
+def write_regime_filter_summary():
+    df = pd.read_csv(RF_DIR / "cells.csv")
+    # ON vs OFF 비교 (param, dataset 별)
+    pivot = df.pivot_table(
+        index=["param_label", "dataset"], columns="filter",
+        values=["calmar", "return", "mdd", "block_days"], aggfunc="mean",
+    )
+    # delta calmar (on - off), per (param, dataset)
+    delta_calmar = pivot[("calmar", "on")] - pivot[("calmar", "off")]
+    # gate evaluation
+    fold2_delta = delta_calmar.xs("fold2", level="dataset").mean()
+    f1_off = pivot[("calmar", "off")].xs("fold1", level="dataset").mean()
+    f3_off = pivot[("calmar", "off")].xs("fold3", level="dataset").mean()
+    f1_delta = delta_calmar.xs("fold1", level="dataset").mean()
+    f3_delta = delta_calmar.xs("fold3", level="dataset").mean()
+    # 손실율 % (off 대비)
+    f1_loss_pct = (f1_delta / f1_off * 100) if abs(f1_off) > 1e-6 else 0.0
+    f3_loss_pct = (f3_delta / f3_off * 100) if abs(f3_off) > 1e-6 else 0.0
+    oos_delta = delta_calmar.xs("oos", level="dataset").mean()
+    fold2_block = pivot[("block_days", "on")].xs("fold2", level="dataset").mean()
+    fold1_block = pivot[("block_days", "on")].xs("fold1", level="dataset").mean()
+    fold3_block = pivot[("block_days", "on")].xs("fold3", level="dataset").mean()
+
+    gates = [
+        ("fold2 calmar +20+", fold2_delta >= 20.0,
+         f"Δcalmar = {fold2_delta:+.2f} (요구: ≥+20)"),
+        ("fold1/3 손실 -5% 이내",
+         abs(f1_loss_pct) <= 5.0 and abs(f3_loss_pct) <= 5.0,
+         f"fold1 {f1_loss_pct:+.1f}% / fold3 {f3_loss_pct:+.1f}% (요구: 둘 다 |-5%| 이내)"),
+        ("oos calmar ±0 이상", oos_delta >= 0.0,
+         f"Δcalmar = {oos_delta:+.2f} (요구: ≥0)"),
+        ("block_days selectivity",
+         fold2_block > 5.0 and max(fold1_block, fold3_block) <= 2.0,
+         f"f2={fold2_block:.0f} f1={fold1_block:.0f} f3={fold3_block:.0f} "
+         f"(요구: f2>5, f1/f3≤2)"),
+    ]
+    all_pass = all(g[1] for g in gates)
+
+    body = []
+    body.append("# MV-C regime filter summary\n")
+    body.append("## Calmar (filter on - off, mean over params)\n")
+    delta_table = delta_calmar.unstack().to_markdown()
+    body.append(delta_table)
+    body.append("\n## Decision Gate 4조건 평가\n")
+    for name, passed, msg in gates:
+        body.append(f"- {'✓' if passed else '✗'} **{name}**: {msg}")
+    body.append(f"\n## 종합: {'**PASS** — Phase 2 진입 권고' if all_pass else '**FAIL** — 보완 또는 폐기'}")
+    body.append("")
+    body.append("heatmaps/calmar_summary.png 와 cells.csv 함께 검토.")
+
+    (RF_DIR / "summary.md").write_text("\n".join(body), encoding="utf-8")
+    print(f"[summary] {RF_DIR / 'summary.md'}")
+
+
 def main():
     if (PG_DIR / "cells.csv").exists():
         plot_param_grid()
@@ -215,6 +298,9 @@ def main():
     if (EO_DIR / "cells.csv").exists():
         plot_exit_overlay()
         write_exit_overlay_summary()
+    if (RF_DIR / "cells.csv").exists():
+        plot_regime_filter()
+        write_regime_filter_summary()
 
 
 if __name__ == "__main__":
