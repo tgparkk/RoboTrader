@@ -31,6 +31,7 @@ class MacdCrossStrategy:
         entry_hhmm_min: int = 1430,
         entry_hhmm_max: int = 1500,
         logger=None,
+        label: str = 'macd_cross',
     ):
         self.fast = fast
         self.slow = slow
@@ -38,6 +39,7 @@ class MacdCrossStrategy:
         self.entry_hhmm_min = entry_hhmm_min
         self.entry_hhmm_max = entry_hhmm_max
         self.logger = logger
+        self.label = label
         # {stock_code: (prev_hist, prev_prev_hist)} — 매일 pre_market 에서 갱신
         self._cache: Dict[str, Tuple[float, float]] = {}
         # {stock_code: (prev_close, prev_trading_value)} — feasibility 체크용 (Fix C)

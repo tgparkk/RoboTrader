@@ -83,3 +83,29 @@ def test_set_daily_history_clears_meta_on_date_change():
     )
     assert s.get_daily_meta("005930") == (None, None)
     assert s.get_daily_meta("000660") != (None, None)
+
+
+def test_macd_cross_strategy_default_label():
+    """label 기본값 = 'macd_cross'."""
+    from core.strategies.macd_cross_strategy import MacdCrossStrategy
+    s = MacdCrossStrategy()
+    assert s.label == 'macd_cross'
+
+
+def test_macd_cross_strategy_custom_label():
+    """label 인자 주입 시 그대로 저장."""
+    from core.strategies.macd_cross_strategy import MacdCrossStrategy
+    s = MacdCrossStrategy(label='macd_cross_alt')
+    assert s.label == 'macd_cross_alt'
+
+
+def test_macd_cross_strategy_alt_params_via_kwargs():
+    """16/32 파라미터 주입 시 정상 보관."""
+    from core.strategies.macd_cross_strategy import MacdCrossStrategy
+    s = MacdCrossStrategy(fast=16, slow=32, signal=12,
+                          entry_hhmm_min=1431, label='macd_cross_alt')
+    assert s.fast == 16
+    assert s.slow == 32
+    assert s.signal == 12
+    assert s.entry_hhmm_min == 1431
+    assert s.label == 'macd_cross_alt'

@@ -104,7 +104,8 @@ async def test_evaluate_macd_cross_window_skips_holiday():
     bot.decision_engine.execute_real_buy = AsyncMock()
     bot.db_manager = MagicMock()
     bot._macd_cross_mode = MagicMock(return_value='real')
-    _bind(bot, '_evaluate_macd_cross_window', '_apply_holiday_guard')
+    _bind(bot, '_evaluate_macd_cross_window', '_evaluate_macd_cross_instance',
+          '_apply_holiday_guard')
 
     holiday_dt = KST.localize(datetime(2026, 5, 5, 14, 31))
 

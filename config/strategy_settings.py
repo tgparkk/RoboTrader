@@ -26,7 +26,7 @@ class StrategySettings:
     # 다른 전략 (pullback / closing_trade / weighted_score) 은 모두 폐기됨.
     # 신규 전략 도입 시 valid_strategies 에 추가하고 dispatch 분기를 별도 작성한다.
     ACTIVE_STRATEGY = 'macd_cross'
-    PAPER_STRATEGY = None
+    PAPER_STRATEGY = 'macd_cross_alt'   # 2026-05-09: MV-A best 16/32 paper 검증 활성화
 
     # ========================================
     # macd_cross 전략 설정 (페이퍼 단계, 2026-04-26)
@@ -75,6 +75,30 @@ class StrategySettings:
         # True : 시그널 발생 시 execute_virtual_buy 라우팅 (페이퍼)
         # False: KIS 실 계좌 시장가 주문 (실거래) ← 현재
         VIRTUAL_ONLY = False
+
+    # ========================================
+    # macd_cross_alt 페이퍼 (16/32 검증, 2026-05-09)
+    # ========================================
+    class MacdCrossAlt:
+        """16/32 paper 검증 (MV-A best).
+
+        Spec: docs/superpowers/specs/2026-05-09-macd-cross-alt-paper-validation-design.md
+        근거: MV-A 멀티버스 4ds-avg calmar 65→128 (+95%), plateau robust.
+        """
+        CANDLE_INTERVAL = 1                    # MacdCross 와 인터페이스 parity
+        FAST_PERIOD = 16
+        SLOW_PERIOD = 32
+        SIGNAL_PERIOD = 12
+        ENTRY_HHMM_MIN = 1431
+        ENTRY_HHMM_MAX = 1500
+        HOLD_DAYS = 2
+        VIRTUAL_CAPITAL = 10_000_000
+        BUY_BUDGET_RATIO = 0.20
+        MAX_DAILY_POSITIONS = 5
+        UNIVERSE_TOP_N = 30
+        APPLY_LIVE_OVERLAY = False
+        ALLOWED_WEEKDAYS = [0, 1, 2, 3, 4]
+        VIRTUAL_ONLY = True
 
     # ========================================
     # 실시간 종목 스크리너 설정
@@ -230,7 +254,7 @@ def validate_settings():
             f"사용 가능: {valid_strategies}"
         )
 
-    valid_paper_strategies = [None, 'macd_cross']
+    valid_paper_strategies = [None, 'macd_cross', 'macd_cross_alt']  # 'macd_cross_alt' 추가
     if StrategySettings.PAPER_STRATEGY not in valid_paper_strategies:
         raise ValueError(
             f"잘못된 페이퍼 전략: {StrategySettings.PAPER_STRATEGY}. "
@@ -245,6 +269,23 @@ def validate_settings():
             raise ValueError("MacdCross.MAX_DAILY_POSITIONS는 1 이상이어야 합니다")
         if not mc.ALLOWED_WEEKDAYS:
             raise ValueError("MacdCross.ALLOWED_WEEKDAYS가 비어있습니다")
+
+    if StrategySettings.PAPER_STRATEGY == 'macd_cross_alt':
+        mca = StrategySettings.MacdCrossAlt
+        if mca.ENTRY_HHMM_MIN >= mca.ENTRY_HHMM_MAX:
+            raise ValueError("MacdCrossAlt.ENTRY_HHMM_MIN은 ENTRY_HHMM_MAX보다 작아야 합니다")
+        if mca.MAX_DAILY_POSITIONS <= 0:
+            raise ValueError("MacdCrossAlt.MAX_DAILY_POSITIONS는 1 이상이어야 합니다")
+        if not mca.ALLOWED_WEEKDAYS:
+            raise ValueError("MacdCrossAlt.ALLOWED_WEEKDAYS가 비어있습니다")
+        if mca.UNIVERSE_TOP_N != StrategySettings.MacdCross.UNIVERSE_TOP_N:
+            raise ValueError(
+                f"MacdCrossAlt.UNIVERSE_TOP_N ({mca.UNIVERSE_TOP_N})은 "
+                f"MacdCross.UNIVERSE_TOP_N ({StrategySettings.MacdCross.UNIVERSE_TOP_N})와 "
+                f"같아야 합니다 (universe 공유 정책)"
+            )
+        if not mca.VIRTUAL_ONLY:
+            raise ValueError("MacdCrossAlt.VIRTUAL_ONLY는 True여야 합니다 (paper 전용)")
 
     return True
 
