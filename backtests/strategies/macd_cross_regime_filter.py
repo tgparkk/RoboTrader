@@ -60,3 +60,12 @@ class MACDCrossRegimeFilterStrategy(MACDCrossStrategy):
             .map(block_map).fillna(False).astype(bool).values
         )
         return feat
+
+    def entry_signal(
+        self, features: pd.DataFrame, bar_idx: int, stock_code: str
+    ) -> Optional[EntryOrder]:
+        if self.regime_filter_enabled and "kospi_below_ma20" in features.columns:
+            arr = get_arrays(features)
+            if bool(arr["kospi_below_ma20"][bar_idx]):
+                return None  # filter block
+        return super().entry_signal(features, bar_idx, stock_code)

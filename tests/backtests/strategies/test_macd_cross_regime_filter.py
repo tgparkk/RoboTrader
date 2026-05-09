@@ -134,3 +134,56 @@ def test_warmup_insufficient_returns_false():
     feat = strat.prepare_features(df_min, df_daily)
     # NaN MA20 → fillna(False) → 안전
     assert feat["kospi_below_ma20"].iloc[0] == False
+
+
+def test_filter_blocks_entry_when_below_ma20():
+    """filter ON + below_prev=True 시 entry_signal None 반환."""
+    # 인위 mock features
+    feat = pd.DataFrame({
+        "prev_hist": [0.5],
+        "prev_prev_hist": [-0.3],
+        "hhmm": [1430],
+        "kospi_below_ma20": [True],
+    })
+    strat = MACDCrossRegimeFilterStrategy(
+        regime_filter_enabled=True,
+        kospi_daily_df=pd.DataFrame({"trade_date": ["20250101"], "close": [1000]}),
+        fast_period=14, slow_period=34, signal_period=12,
+    )
+    result = strat.entry_signal(feat, bar_idx=0, stock_code="000001")
+    assert result is None  # blocked
+
+
+def test_filter_allows_entry_when_above_ma20():
+    """filter ON + below_prev=False + golden cross 시 entry order 반환."""
+    feat = pd.DataFrame({
+        "prev_hist": [0.5],
+        "prev_prev_hist": [-0.3],  # golden cross: prev_prev<0, prev>0
+        "hhmm": [1430],
+        "kospi_below_ma20": [False],
+    })
+    strat = MACDCrossRegimeFilterStrategy(
+        regime_filter_enabled=True,
+        kospi_daily_df=pd.DataFrame({"trade_date": ["20250101"], "close": [1000]}),
+        fast_period=14, slow_period=34, signal_period=12,
+        entry_hhmm_min=1430, entry_hhmm_max=1500,
+    )
+    result = strat.entry_signal(feat, bar_idx=0, stock_code="000001")
+    assert result is not None  # allowed
+    assert result.stock_code == "000001"
+
+
+def test_filter_off_does_not_check_kospi():
+    """filter OFF 시 kospi_below_ma20 컬럼 없어도 정상 — base 그대로."""
+    feat = pd.DataFrame({
+        "prev_hist": [0.5],
+        "prev_prev_hist": [-0.3],
+        "hhmm": [1430],
+    })
+    strat = MACDCrossRegimeFilterStrategy(
+        regime_filter_enabled=False,
+        fast_period=14, slow_period=34, signal_period=12,
+        entry_hhmm_min=1430, entry_hhmm_max=1500,
+    )
+    result = strat.entry_signal(feat, bar_idx=0, stock_code="000001")
+    assert result is not None  # base allows
