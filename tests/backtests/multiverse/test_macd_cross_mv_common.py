@@ -151,3 +151,12 @@ def test_evaluate_cell_returns_kpi_dict():
     # 모든 KPI 필드 존재
     assert {"calmar", "return", "mdd", "trades", "win_rate",
             "top1_share", "max_consec_loss", "monthly_trades"} <= kpis.keys()
+
+
+def test_dataset_has_kospi_daily_df_field():
+    """Dataset dataclass 에 kospi_daily_df: Optional[pd.DataFrame] 필드 존재."""
+    from backtests.multiverse.macd_cross_mv_common import Dataset
+    ds = Dataset(name="t", minute_start="20250901", minute_end="20250930",
+                 daily_start="20250101")
+    assert hasattr(ds, "kospi_daily_df")
+    assert ds.kospi_daily_df is None  # default
