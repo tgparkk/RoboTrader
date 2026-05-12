@@ -562,10 +562,18 @@ class DayTradingBot:
           `WHERE date <= today` 로 카운트하면 D2 09:01 morning trigger 에서
           백테스트 대비 1일 적게 카운트되어 exit 1일 지연 (체계적 버그).
 
-          해결: 과거 거래일은 daily_candles (어제까지) 에서 count, 오늘 영업일
-          여부는 minute_candles (실시간 09:00 부터 갱신) 에 today row 존재
-          여부로 판정. 미래 데이터 미참조 — backtest 의 분봉 trade_date
-          nunique 와 의미 1:1 동등.
+          해결: 과거 거래일은 daily_candles (어제까지) 에서 count, 오늘 거래일
+          여부는 KRX 거래일 캘린더(주말 + KOREAN_HOLIDAYS) 로 판정.
+
+        2026-05-12 fix:
+          (b) 를 minute_candles row 존재 여부 → MarketHours.is_trading_day 로 교체.
+          minute_candles 는 장중 DB 에 안 쌓이고 EOD post_market_data_saver 에서
+          일괄 저장되므로, 09:01 morning exit 시점에는 today row 가 항상 0 →
+          hold_days 가 1일 적게 계산돼 D+2 청산이 morning(09:01) 대신 EOD(15:00)
+          generic 일괄매도로 밀리는 버그(2026-05-11 006800, 2026-05-12 3종목 재현).
+          거래일 캘린더는 정적 사실이라 미래 데이터 참조 아님 — backtest 의 D2 bar
+          포함 trade_date nunique 와 의미 1:1 동등이며, EOD 격리 경로의
+          np.busday_count 보다 휴일 처리가 정확하다.
 
         Args:
             buy_date: 매수일 (date 객체).
@@ -577,7 +585,6 @@ class DayTradingBot:
             from datetime import timedelta
             buy_str = buy_date.strftime('%Y%m%d')
             yesterday_str = (today_date - timedelta(days=1)).strftime('%Y%m%d')
-            today_str = today_date.strftime('%Y%m%d')
 
             # (a) 어제까지 EOD 마감된 과거 거래일 수
             row_past = self.db_manager._fetchone(
@@ -587,13 +594,8 @@ class DayTradingBot:
             )
             past_count = int(row_past[0]) if row_past else 0
 
-            # (b) today 가 영업일이면 +1 — minute_candles 에 today row 가 있으면 영업일.
-            #     09:00 부터 분봉 수집되므로 휴일에는 row 가 없고 영업일에는 있음.
-            row_today = self.db_manager._fetchone(
-                "SELECT 1 FROM minute_candles WHERE trade_date = %s LIMIT 1",
-                (today_str,),
-            )
-            today_count = 1 if row_today else 0
+            # (b) today 가 KRX 거래일이면 +1 — 주말/공휴일 캘린더 기준 (분봉 DB 의존 X).
+            today_count = 1 if MarketHours.is_trading_day('KRX', today_date) else 0
 
             return past_count + today_count
         except Exception as e:

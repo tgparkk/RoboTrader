@@ -153,3 +153,66 @@ async def test_macd_cross_exit_dispatcher_skips_holiday():
                   if '[휴일가드]' in str(c)]
     assert len(info_calls) == 1
     assert bot._holiday_logged_date == date(2026, 5, 5)
+
+
+# ---------------------------------------------------------------------------
+# 2026-05-12 fix: _count_krx_trading_days_between — today 거래일 판정을
+#   minute_candles row 존재 여부 → MarketHours.is_trading_day 로 교체.
+#   (분봉은 장중 DB 미저장이라 09:01 morning exit 시점엔 항상 0 → hold_days 가
+#    1일 적게 계산 → D+2 청산이 morning(09:01) 대신 EOD(15:00) 로 밀리는 버그.
+#    2026-05-11 006800, 2026-05-12 010170/028050/068270 에서 재현됨.)
+# ---------------------------------------------------------------------------
+
+def _make_bot_with_db(past_trading_days: int):
+    """db_manager._fetchone 이 (past_trading_days,) 를 돌려주는 _FakeBot."""
+    bot = _FakeBot()
+    bot.db_manager = MagicMock()
+    bot.db_manager._fetchone = MagicMock(return_value=(past_trading_days,))
+    _bind(bot, '_count_krx_trading_days_between')
+    return bot
+
+
+def test_count_krx_days_d2_morning_counts_today():
+    """D+2 아침(09:01) 시점 — 분봉 DB 가 비어도 today 거래일이 카운트돼야 만료된다.
+
+    회귀: 2026-05-08(금) 매수 → 2026-05-12(화) 가 D+2.
+    과거 거래일 = 05-11(월) 1개, today(05-12) = 거래일 → 합계 2 == HOLD_DAYS.
+    """
+    bot = _make_bot_with_db(past_trading_days=1)
+    n = bot._count_krx_trading_days_between(date(2026, 5, 8), date(2026, 5, 12))
+    assert n == 2
+    # minute_candles 조회를 더 이상 하지 않음 — daily_candles 1회만 호출
+    assert bot.db_manager._fetchone.call_count == 1
+
+
+def test_count_krx_days_d1_not_yet_expired():
+    """D+1(매수 다음 거래일) 은 아직 만료 전 (합계 1 < HOLD_DAYS=2)."""
+    bot = _make_bot_with_db(past_trading_days=0)
+    # 2026-05-08(금) 매수, today=2026-05-11(월) → 과거 0, today 거래일 → 1
+    n = bot._count_krx_trading_days_between(date(2026, 5, 8), date(2026, 5, 11))
+    assert n == 1
+
+
+def test_count_krx_days_today_holiday_not_counted():
+    """today 가 공휴일이면 +1 안 함 (어린이날 5/5)."""
+    bot = _make_bot_with_db(past_trading_days=2)
+    n = bot._count_krx_trading_days_between(date(2026, 4, 30), date(2026, 5, 5))
+    assert n == 2  # 과거 2개만, 휴일 today 미카운트
+    assert '20260505' in KOREAN_HOLIDAYS
+
+
+def test_count_krx_days_today_weekend_not_counted():
+    """today 가 주말이면 +1 안 함."""
+    bot = _make_bot_with_db(past_trading_days=1)
+    n = bot._count_krx_trading_days_between(date(2026, 5, 7), date(2026, 5, 9))  # 5/9 토
+    assert n == 1
+
+
+def test_count_krx_days_db_error_returns_zero():
+    """daily_candles 조회 실패 시 보수적으로 0 (만료 안 함)."""
+    bot = _FakeBot()
+    bot.db_manager = MagicMock()
+    bot.db_manager._fetchone = MagicMock(side_effect=RuntimeError('boom'))
+    _bind(bot, '_count_krx_trading_days_between')
+    n = bot._count_krx_trading_days_between(date(2026, 5, 8), date(2026, 5, 12))
+    assert n == 0
