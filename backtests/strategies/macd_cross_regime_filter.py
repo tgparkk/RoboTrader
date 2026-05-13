@@ -60,6 +60,22 @@ class MACDCrossRegimeFilterStrategy(MACDCrossStrategy):
                 "regime_filter_enabled=True 인데 kospi_daily_df 가 None"
             )
 
+    def _compute_block_series(self, kospi: pd.DataFrame) -> pd.Series:
+        """signal_type 분기 → 'below_prev' boolean Series 반환.
+
+        shift(1) 명시 적용으로 D 일 신호는 D-1 까지 데이터만 의존 (lookahead 0).
+        반환 index 는 kospi 정렬 후 default RangeIndex.
+        """
+        ks = kospi.sort_values("trade_date").reset_index(drop=True).copy()
+        if self.signal_type == "ma20_below_prev":
+            ma = ks["close"].rolling(self.ma_period).mean()
+            cond = ks["close"] < ma
+        else:
+            raise NotImplementedError(
+                f"signal_type {self.signal_type!r} 는 후속 task 에서 구현"
+            )
+        return cond.fillna(False).astype(bool).shift(1).fillna(False).astype(bool)
+
     def prepare_features(
         self, df_minute: pd.DataFrame, df_daily: pd.DataFrame
     ) -> pd.DataFrame:
@@ -69,12 +85,9 @@ class MACDCrossRegimeFilterStrategy(MACDCrossStrategy):
         if df_minute.empty:
             return feat
 
-        # KOSPI MA20 lookup table — shift(1) 로 D-1 신호만 사용 (lookahead 방지)
-        ks = self.kospi_daily_df.sort_values("trade_date").copy()
-        ks["ma"] = ks["close"].rolling(self.ma_period).mean()
-        ks["below"] = (ks["close"] < ks["ma"]).astype(bool)
-        ks["below_prev"] = ks["below"].shift(1).fillna(False).astype(bool)
-        block_map = dict(zip(ks["trade_date"].astype(str), ks["below_prev"]))
+        ks_sorted = self.kospi_daily_df.sort_values("trade_date").reset_index(drop=True)
+        below_prev = self._compute_block_series(ks_sorted)
+        block_map = dict(zip(ks_sorted["trade_date"].astype(str), below_prev))
 
         feat["kospi_below_ma20"] = (
             df_minute["trade_date"].astype(str)
