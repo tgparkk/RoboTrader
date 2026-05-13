@@ -60,19 +60,27 @@ class MACDCrossRegimeFilterStrategy(MACDCrossStrategy):
                 "regime_filter_enabled=True 인데 kospi_daily_df 가 None"
             )
 
-    def _compute_block_series(self, kospi: pd.DataFrame) -> pd.Series:
+    def compute_block_series(self, kospi: pd.DataFrame) -> pd.Series:
         """signal_type 분기 → 'below_prev' boolean Series 반환.
 
+        Args:
+            kospi: KOSPI daily DataFrame, **assumed sorted by trade_date with
+                reset RangeIndex** (caller responsibility). 정렬 안 된 입력 시
+                결과가 잘못됨.
+
+        Returns:
+            boolean Series, index = RangeIndex same as input. True 인 행의
+            date 에는 진입 차단해야 함.
+
         shift(1) 명시 적용으로 D 일 신호는 D-1 까지 데이터만 의존 (lookahead 0).
-        반환 index 는 kospi 정렬 후 default RangeIndex.
         """
-        ks = kospi.sort_values("trade_date").reset_index(drop=True).copy()
         if self.signal_type == "ma20_below_prev":
-            ma = ks["close"].rolling(self.ma_period).mean()
-            cond = ks["close"] < ma
+            ma = kospi["close"].rolling(self.ma_period).mean()
+            cond = kospi["close"] < ma
         else:
             raise NotImplementedError(
-                f"signal_type {self.signal_type!r} 는 후속 task 에서 구현"
+                f"signal_type {self.signal_type!r} 는 아직 미구현. "
+                f"현재 지원: 'ma20_below_prev'"
             )
         return cond.fillna(False).astype(bool).shift(1).fillna(False).astype(bool)
 
@@ -86,7 +94,7 @@ class MACDCrossRegimeFilterStrategy(MACDCrossStrategy):
             return feat
 
         ks_sorted = self.kospi_daily_df.sort_values("trade_date").reset_index(drop=True)
-        below_prev = self._compute_block_series(ks_sorted)
+        below_prev = self.compute_block_series(ks_sorted)
         block_map = dict(zip(ks_sorted["trade_date"].astype(str), below_prev))
 
         feat["kospi_below_ma20"] = (
