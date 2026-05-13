@@ -422,3 +422,93 @@ def test_signal_20d_return_neg_default_threshold_is_zero():
     feat = strat.prepare_features(df_min, df_daily)
     # closes[23]/closes[3]-1 = 0 ≤ 0 → True
     assert feat["kospi_below_ma20"].iloc[0] == True
+
+
+def test_no_lookahead_ma20_and_ma5_below():
+    """D 일 close 변경 → ma20_and_ma5_below 신호 불변."""
+    closes_a = [1000 + i for i in range(25)]
+    closes_b = closes_a.copy()
+    closes_b[-1] = 99999  # D 일 close 만 다름
+
+    target_date = "20250925"  # 마지막 kospi row (index 24)
+    df_min = pd.DataFrame([{
+        "stock_code": "000001", "trade_date": target_date,
+        "trade_time": "143100",
+        "open": 1000.0, "high": 1010.0, "low": 990.0, "close": 1005.0,
+        "volume": 1000,
+    }])
+    df_daily = pd.DataFrame({"trade_date": [target_date], "close": [1024.0]})
+
+    sigs = {}
+    for label, closes in [("a", closes_a), ("b", closes_b)]:
+        kospi = pd.DataFrame({
+            "trade_date": [f"202509{d+1:02d}" for d in range(25)],
+            "close": closes,
+        })
+        strat = MACDCrossRegimeFilterStrategy(
+            regime_filter_enabled=True, kospi_daily_df=kospi,
+            signal_type="ma20_and_ma5_below",
+            fast_period=14, slow_period=34, signal_period=12,
+        )
+        sigs[label] = strat.prepare_features(df_min, df_daily)["kospi_below_ma20"].iloc[0]
+    assert sigs["a"] == sigs["b"]
+
+
+def test_no_lookahead_5d_return_drop():
+    """D 일 close 변경 → 5d_return_drop 신호 불변."""
+    closes_a = [1000 + i for i in range(10)]
+    closes_b = closes_a.copy()
+    closes_b[-1] = 99999
+
+    target_date = "20250910"  # 마지막 kospi row (index 9)
+    df_min = pd.DataFrame([{
+        "stock_code": "000001", "trade_date": target_date,
+        "trade_time": "143100",
+        "open": 1000.0, "high": 1010.0, "low": 990.0, "close": 1005.0,
+        "volume": 1000,
+    }])
+    df_daily = pd.DataFrame({"trade_date": [target_date], "close": [1009.0]})
+
+    sigs = {}
+    for label, closes in [("a", closes_a), ("b", closes_b)]:
+        kospi = pd.DataFrame({
+            "trade_date": [f"202509{d+1:02d}" for d in range(10)],
+            "close": closes,
+        })
+        strat = MACDCrossRegimeFilterStrategy(
+            regime_filter_enabled=True, kospi_daily_df=kospi,
+            signal_type="5d_return_drop", signal_threshold=-0.001,
+            fast_period=14, slow_period=34, signal_period=12,
+        )
+        sigs[label] = strat.prepare_features(df_min, df_daily)["kospi_below_ma20"].iloc[0]
+    assert sigs["a"] == sigs["b"]
+
+
+def test_no_lookahead_20d_return_neg():
+    """D 일 close 변경 → 20d_return_neg 신호 불변."""
+    closes_a = [1000 + i for i in range(25)]
+    closes_b = closes_a.copy()
+    closes_b[-1] = 99999
+
+    target_date = "20250925"
+    df_min = pd.DataFrame([{
+        "stock_code": "000001", "trade_date": target_date,
+        "trade_time": "143100",
+        "open": 1000.0, "high": 1010.0, "low": 990.0, "close": 1005.0,
+        "volume": 1000,
+    }])
+    df_daily = pd.DataFrame({"trade_date": [target_date], "close": [1024.0]})
+
+    sigs = {}
+    for label, closes in [("a", closes_a), ("b", closes_b)]:
+        kospi = pd.DataFrame({
+            "trade_date": [f"202509{d+1:02d}" for d in range(25)],
+            "close": closes,
+        })
+        strat = MACDCrossRegimeFilterStrategy(
+            regime_filter_enabled=True, kospi_daily_df=kospi,
+            signal_type="20d_return_neg", signal_threshold=0.0,
+            fast_period=14, slow_period=34, signal_period=12,
+        )
+        sigs[label] = strat.prepare_features(df_min, df_daily)["kospi_below_ma20"].iloc[0]
+    assert sigs["a"] == sigs["b"]
