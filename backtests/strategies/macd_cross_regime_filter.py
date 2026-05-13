@@ -11,15 +11,25 @@ from backtests.common.feature_cache import get_arrays
 from backtests.strategies.base import EntryOrder
 from backtests.strategies.macd_cross import MACDCrossStrategy
 
+SIGNAL_TYPES = (
+    "ma20_below_prev",
+    "ma20_and_ma5_below",
+    "5d_return_drop",
+    "20d_return_neg",
+)
+
 
 class MACDCrossRegimeFilterStrategy(MACDCrossStrategy):
-    """KOSPI MA20 regime filter overlay.
+    """KOSPI regime filter overlay.
 
     Args:
-        regime_filter_enabled: True 면 KOSPI close < MA20 (전일) 인 날 entry block.
-        kospi_daily_df: KOSPI 일봉 DataFrame (columns: trade_date YYYYMMDD str, close float).
+        regime_filter_enabled: True 면 signal_type 에 따라 entry block.
+        kospi_daily_df: KOSPI 일봉 DataFrame (trade_date YYYYMMDD str, close float).
             None 이고 regime_filter_enabled=True 면 ValueError.
-        ma_period: MA window. 기본 20.
+        signal_type: 어떤 신호로 차단할지. SIGNAL_TYPES 중 하나.
+        signal_threshold: return 기반 신호의 임계값 (None 이면 signal_type 별 default).
+        ma_period: MA 장기 window (ma20_below_prev / ma20_and_ma5_below 용).
+        ma_short_period: MA 단기 window (ma20_and_ma5_below 용).
     """
     name = "macd_cross_regime_filter"
 
@@ -27,13 +37,24 @@ class MACDCrossRegimeFilterStrategy(MACDCrossStrategy):
         self,
         regime_filter_enabled: bool = False,
         kospi_daily_df: Optional[pd.DataFrame] = None,
+        signal_type: str = "ma20_below_prev",
+        signal_threshold: Optional[float] = None,
         ma_period: int = 20,
+        ma_short_period: int = 5,
         **kwargs,
     ):
         super().__init__(**kwargs)
+        if signal_type not in SIGNAL_TYPES:
+            raise ValueError(
+                f"unknown signal_type: {signal_type!r}, "
+                f"expected one of {SIGNAL_TYPES}"
+            )
         self.regime_filter_enabled = regime_filter_enabled
         self.kospi_daily_df = kospi_daily_df
+        self.signal_type = signal_type
+        self.signal_threshold = signal_threshold
         self.ma_period = ma_period
+        self.ma_short_period = ma_short_period
         if regime_filter_enabled and kospi_daily_df is None:
             raise ValueError(
                 "regime_filter_enabled=True 인데 kospi_daily_df 가 None"

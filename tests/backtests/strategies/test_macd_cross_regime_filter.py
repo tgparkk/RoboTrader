@@ -228,3 +228,20 @@ def test_no_lookahead_d_close_not_used():
     # D 일 close 변경이 D 일 신호에 영향 없어야 — shift(1) lookahead 0 보증
     assert (feat_a["kospi_below_ma20"].values
             == feat_b["kospi_below_ma20"].values).all()
+
+
+def test_invalid_signal_type_raises():
+    """알 수 없는 signal_type 은 ValueError."""
+    with pytest.raises(ValueError, match="signal_type"):
+        MACDCrossRegimeFilterStrategy(
+            regime_filter_enabled=False,
+            signal_type="not_a_real_signal",
+        )
+
+
+def test_signal_type_default_is_v1_ma20_below_prev():
+    """default signal_type 은 'ma20_below_prev' — v1 backward compat."""
+    strat = MACDCrossRegimeFilterStrategy(regime_filter_enabled=False)
+    assert strat.signal_type == "ma20_below_prev"
+    assert strat.signal_threshold is None
+    assert strat.ma_short_period == 5
