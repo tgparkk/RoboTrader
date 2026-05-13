@@ -85,11 +85,12 @@ class MACDCrossRegimeFilterStrategy(MACDCrossStrategy):
             thr = self.signal_threshold if self.signal_threshold is not None else -0.03
             ret5 = kospi["close"] / kospi["close"].shift(5) - 1
             cond = ret5 <= thr
+        elif self.signal_type == "20d_return_neg":
+            thr = self.signal_threshold if self.signal_threshold is not None else 0.0
+            ret20 = kospi["close"] / kospi["close"].shift(20) - 1
+            cond = ret20 <= thr
         else:
-            raise NotImplementedError(
-                f"signal_type {self.signal_type!r} 는 아직 미구현. "
-                f"현재 지원: 'ma20_below_prev', 'ma20_and_ma5_below'"
-            )
+            raise AssertionError(f"unreachable: {self.signal_type}")
         return cond.fillna(False).astype(bool).shift(1).fillna(False).astype(bool)
 
     def prepare_features(

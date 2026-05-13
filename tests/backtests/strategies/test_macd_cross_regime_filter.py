@@ -356,3 +356,69 @@ def test_signal_5d_return_drop_default_threshold_is_neg_3pct():
     feat = strat.prepare_features(df_min, df_daily)
     # ret5[D-1] = -0.04 ≤ -0.03 → True (block)
     assert feat["kospi_below_ma20"].iloc[0] == True
+
+
+def test_signal_20d_return_neg_basic():
+    """close[D-1]/close[D-21] - 1 ≤ threshold 시 block."""
+    # 25일치: 처음 21일 close=1000, 22~25일 close=950 (5% drop over 20d).
+    closes = [1000] * 21 + [950] * 4
+    kospi = pd.DataFrame({
+        "trade_date": [f"202509{d+1:02d}" for d in range(25)],
+        "close": closes,
+    })
+    # D = 25일째 (마지막 kospi row, index 24) → block_map[D] = cond_shifted[24] = cond[23]
+    # cond[23] = closes[23]/closes[23-20]-1 = 950/1000-1 = -0.05
+    target_date = "20250925"
+    df_min = pd.DataFrame([{
+        "stock_code": "000001", "trade_date": target_date,
+        "trade_time": "143100",
+        "open": 1000.0, "high": 1010.0, "low": 990.0, "close": 1005.0,
+        "volume": 1000,
+    }])
+    df_daily = pd.DataFrame({"trade_date": [target_date], "close": [950.0]})
+
+    # threshold 0.0 (5% drop ≤ 0 → block)
+    strat_block = MACDCrossRegimeFilterStrategy(
+        regime_filter_enabled=True, kospi_daily_df=kospi,
+        signal_type="20d_return_neg", signal_threshold=0.0,
+        fast_period=14, slow_period=34, signal_period=12,
+    )
+    feat_block = strat_block.prepare_features(df_min, df_daily)
+    assert feat_block["kospi_below_ma20"].iloc[0] == True
+
+    # threshold -0.1 (5% drop > -10% → no block)
+    strat_allow = MACDCrossRegimeFilterStrategy(
+        regime_filter_enabled=True, kospi_daily_df=kospi,
+        signal_type="20d_return_neg", signal_threshold=-0.1,
+        fast_period=14, slow_period=34, signal_period=12,
+    )
+    feat_allow = strat_allow.prepare_features(df_min, df_daily)
+    assert feat_allow["kospi_below_ma20"].iloc[0] == False
+
+
+def test_signal_20d_return_neg_default_threshold_is_zero():
+    """signal_threshold=None 시 default 0.0."""
+    # 25일: 24일 close=1000 + 마지막 close=999.
+    # cond[23] = closes[23]/closes[3]-1 = 1000/1000-1 = 0 ≤ 0 → True (block)
+    closes = [1000] * 24 + [999]
+    kospi = pd.DataFrame({
+        "trade_date": [f"202509{d+1:02d}" for d in range(25)],
+        "close": closes,
+    })
+    target_date = "20250925"
+    df_min = pd.DataFrame([{
+        "stock_code": "000001", "trade_date": target_date,
+        "trade_time": "143100",
+        "open": 1000.0, "high": 1010.0, "low": 990.0, "close": 1005.0,
+        "volume": 1000,
+    }])
+    df_daily = pd.DataFrame({"trade_date": [target_date], "close": [999.0]})
+
+    strat = MACDCrossRegimeFilterStrategy(
+        regime_filter_enabled=True, kospi_daily_df=kospi,
+        signal_type="20d_return_neg",
+        fast_period=14, slow_period=34, signal_period=12,
+    )
+    feat = strat.prepare_features(df_min, df_daily)
+    # closes[23]/closes[3]-1 = 0 ≤ 0 → True
+    assert feat["kospi_below_ma20"].iloc[0] == True
