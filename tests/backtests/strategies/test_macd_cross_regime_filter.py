@@ -250,7 +250,8 @@ def test_signal_type_default_is_v1_ma20_below_prev():
 def test_signal_ma20_and_ma5_below_basic():
     """(close<MA20) AND (MA5<MA20) signal — D-1 두 조건 모두 만족 시 block."""
     n = 30
-    # 0~19: 상승, 20~24: close 만 급락 (MA5 아직 위), 25~29: close + MA5 모두 < MA20
+    # 0~19: 상승, 20~21: close 급락 (MA5 아직 MA20 위),
+    # 22~29: close + MA5 모두 < MA20
     closes = list(range(1000, 1020))
     closes += [1000, 995, 990, 985, 980]
     closes += [970, 960, 950, 940, 930]
