@@ -15,6 +15,7 @@ import pandas as pd
 PG_DIR = Path("backtests/reports/macd_cross_mv/param_grid")
 EO_DIR = Path("backtests/reports/macd_cross_mv/exit_overlay")
 RF_DIR = Path("backtests/reports/macd_cross_mv/regime_filter")
+RFv2_DIR = Path("backtests/reports/macd_cross_mv/regime_filter_v2")
 
 
 def _heatmap(ax, df, x_col, y_col, value_col, title):
@@ -291,6 +292,148 @@ def write_regime_filter_summary():
     print(f"[summary] {RF_DIR / 'summary.md'}")
 
 
+def _heatmap_signal_dataset(pivot, out_path, title, center=None):
+    """signal × dataset heatmap 1장 → PNG.
+
+    Args:
+        pivot: pd.DataFrame, index=signal_label, columns=dataset, value=숫자.
+        center: 색 중심값 (None = 자동 min~max, 0 = diverging cmap).
+    """
+    fig, ax = plt.subplots(figsize=(8, max(4, 0.5 * len(pivot.index) + 1)))
+    finite_vals = pivot.values[~np.isnan(pivot.values)]
+    if center is not None and finite_vals.size > 0:
+        vmax = max(abs(finite_vals.min()), abs(finite_vals.max()), 1.0)
+        im = ax.imshow(pivot.values, aspect="auto", cmap="RdYlGn",
+                       vmin=-vmax, vmax=vmax)
+    else:
+        im = ax.imshow(pivot.values, aspect="auto", cmap="RdYlGn")
+    ax.set_xticks(range(len(pivot.columns)))
+    ax.set_xticklabels(pivot.columns)
+    ax.set_yticks(range(len(pivot.index)))
+    ax.set_yticklabels(pivot.index, fontsize=9)
+    ax.set_title(title)
+    for i in range(len(pivot.index)):
+        for j in range(len(pivot.columns)):
+            v = pivot.values[i, j]
+            if not np.isnan(v):
+                ax.text(j, i, f"{v:+.1f}" if center is not None else f"{v:.1f}",
+                        ha="center", va="center", fontsize=8, color="black")
+    plt.colorbar(im, ax=ax, fraction=0.04)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=110)
+    plt.close(fig)
+
+
+def plot_regime_filter_v2():
+    df = pd.read_csv(RFv2_DIR / "cells.csv")
+    out = RFv2_DIR / "heatmaps"
+    out.mkdir(exist_ok=True)
+    signal_order = list(dict.fromkeys(df["signal_label"]))
+    dataset_order = ["fold1", "fold2", "fold3", "oos"]
+
+    for param_label in df["param_label"].unique():
+        sub = df[df["param_label"] == param_label]
+        pivot = sub.pivot_table(
+            index="signal_label", columns="dataset",
+            values="calmar", aggfunc="mean",
+        )
+        pivot = pivot.reindex(index=signal_order, columns=dataset_order)
+        # (1) absolute
+        _heatmap_signal_dataset(
+            pivot, out / f"calmar_abs_{param_label}.png",
+            title=f"Calmar — {param_label}", center=None,
+        )
+        # (2) delta vs off
+        if "off" in pivot.index:
+            off_row = pivot.loc["off"]
+            delta = pivot.subtract(off_row, axis=1)
+            _heatmap_signal_dataset(
+                delta, out / f"calmar_delta_{param_label}.png",
+                title=f"Calmar Δ vs off — {param_label}", center=0,
+            )
+    print(f"[plot] regime_filter_v2 heatmaps → {out}")
+
+
+def write_regime_filter_v2_summary():
+    df = pd.read_csv(RFv2_DIR / "cells.csv")
+    off_df = df[df["signal_label"] == "off"]
+    on_df = df[df["signal_label"] != "off"]
+
+    off_calmar = off_df.set_index(["param_label", "dataset"])["calmar"]
+
+    rows = []
+    for (sig, param), grp in on_df.groupby(["signal_label", "param_label"]):
+        ds_calmar = grp.set_index("dataset")["calmar"]
+        ds_block = grp.set_index("dataset")["block_days"]
+        try:
+            off_for_param = off_calmar.xs(param, level="param_label")
+        except KeyError:
+            continue
+        delta = ds_calmar - off_for_param
+
+        f2d = float(delta.get("fold2", 0.0))
+        f1d = float(delta.get("fold1", 0.0))
+        f3d = float(delta.get("fold3", 0.0))
+        oosd = float(delta.get("oos", 0.0))
+        f1_off = float(off_for_param.get("fold1", 0.0))
+        f3_off = float(off_for_param.get("fold3", 0.0))
+        f1_pct = (f1d / f1_off * 100) if abs(f1_off) > 1e-6 else 0.0
+        f3_pct = (f3d / f3_off * 100) if abs(f3_off) > 1e-6 else 0.0
+
+        g1 = f2d >= 20.0
+        g2 = abs(f1_pct) <= 5.0 and abs(f3_pct) <= 5.0
+        g3 = oosd >= 0.0
+        b_f2 = int(ds_block.get("fold2", 0))
+        b_f1 = int(ds_block.get("fold1", 0))
+        b_f3 = int(ds_block.get("fold3", 0))
+        g4 = (b_f2 > 5) and (max(b_f1, b_f3) <= 2)
+        score = int(g1) + int(g2) + int(g3) + int(g4)
+
+        rows.append({
+            "signal_label": sig, "param_label": param,
+            "fold2_delta": f2d, "fold1_pct": f1_pct, "fold3_pct": f3_pct,
+            "oos_delta": oosd,
+            "block_f2": b_f2, "block_f1": b_f1, "block_f3": b_f3,
+            "g1_f2_+20": g1, "g2_f13_5pct": g2, "g3_oos_0": g3,
+            "g4_select": g4, "gate_score": score,
+        })
+
+    res = pd.DataFrame(rows).sort_values(
+        ["gate_score", "fold2_delta"], ascending=[False, False],
+    ).reset_index(drop=True)
+
+    body = ["# MV-C v2 regime filter summary\n"]
+    body.append("## Per-cell 4-gate evaluation\n")
+    body.append("sorted by gate_score desc, fold2_delta desc.\n")
+    body.append(res.to_markdown(index=False, floatfmt=".2f"))
+    body.append("")
+
+    full_pass = res[res["gate_score"] == 4]
+    partial_pass = res[(res["gate_score"] >= 2) & (res["gate_score"] < 4)]
+    body.append("## 종합")
+    if not full_pass.empty:
+        best = full_pass.iloc[0]
+        body.append(
+            f"\n**PASS** — `{best['signal_label']}` × `{best['param_label']}` "
+            f"(gate_score=4, fold2_delta={best['fold2_delta']:+.2f}). "
+            f"Phase 2 라이브 적용 검토."
+        )
+    elif not partial_pass.empty:
+        body.append(
+            f"\n**PARTIAL** — {len(partial_pass)} cell 이 2~3 gate 통과. "
+            "사람 판단 필요 (trade-off 검토)."
+        )
+    else:
+        body.append(
+            "\n**FAIL** — 모든 cell 이 4-gate 통과 불가. "
+            "결론: fold2 unrecoverable, paper macd_cross_alt + circuit breaker "
+            "만으로 운영."
+        )
+    body.append("\nheatmaps/ 와 cells.csv 함께 검토.")
+    (RFv2_DIR / "summary.md").write_text("\n".join(body), encoding="utf-8")
+    print(f"[summary] {RFv2_DIR / 'summary.md'}")
+
+
 def main():
     if (PG_DIR / "cells.csv").exists():
         plot_param_grid()
@@ -301,6 +444,9 @@ def main():
     if (RF_DIR / "cells.csv").exists():
         plot_regime_filter()
         write_regime_filter_summary()
+    if (RFv2_DIR / "cells.csv").exists():
+        plot_regime_filter_v2()
+        write_regime_filter_v2_summary()
 
 
 if __name__ == "__main__":
