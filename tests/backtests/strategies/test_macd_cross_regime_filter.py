@@ -245,3 +245,36 @@ def test_signal_type_default_is_v1_ma20_below_prev():
     assert strat.signal_type == "ma20_below_prev"
     assert strat.signal_threshold is None
     assert strat.ma_short_period == 5
+
+
+def test_signal_ma20_and_ma5_below_basic():
+    """(close<MA20) AND (MA5<MA20) signal — D-1 두 조건 모두 만족 시 block."""
+    n = 30
+    # 0~19: 상승, 20~24: close 만 급락 (MA5 아직 위), 25~29: close + MA5 모두 < MA20
+    closes = list(range(1000, 1020))
+    closes += [1000, 995, 990, 985, 980]
+    closes += [970, 960, 950, 940, 930]
+    kospi = pd.DataFrame({
+        "trade_date": [f"202509{d+1:02d}" for d in range(n)],
+        "close": closes,
+    })
+    target_date = f"202509{30:02d}"  # D = 30일째 → D-1 = 29일째 (index 28)
+    df_min = pd.DataFrame([{
+        "stock_code": "000001", "trade_date": target_date,
+        "trade_time": "143100",
+        "open": 1000.0, "high": 1010.0, "low": 990.0, "close": 1005.0,
+        "volume": 1000,
+    }])
+    df_daily = pd.DataFrame({"trade_date": [target_date], "close": [1024.0]})
+
+    strat = MACDCrossRegimeFilterStrategy(
+        regime_filter_enabled=True, kospi_daily_df=kospi,
+        signal_type="ma20_and_ma5_below",
+        fast_period=14, slow_period=34, signal_period=12,
+    )
+    feat = strat.prepare_features(df_min, df_daily)
+    # D-1 = index 28: close=940, MA20[28]=mean(closes[9:29]), MA5[28]=mean(closes[24:29])
+    expected_ma20 = sum(closes[9:29]) / 20
+    expected_ma5 = sum(closes[24:29]) / 5
+    expected_below = (closes[28] < expected_ma20) and (expected_ma5 < expected_ma20)
+    assert feat["kospi_below_ma20"].iloc[0] == expected_below

@@ -77,10 +77,14 @@ class MACDCrossRegimeFilterStrategy(MACDCrossStrategy):
         if self.signal_type == "ma20_below_prev":
             ma = kospi["close"].rolling(self.ma_period).mean()
             cond = kospi["close"] < ma
+        elif self.signal_type == "ma20_and_ma5_below":
+            ma_long = kospi["close"].rolling(self.ma_period).mean()
+            ma_short = kospi["close"].rolling(self.ma_short_period).mean()
+            cond = (kospi["close"] < ma_long) & (ma_short < ma_long)
         else:
             raise NotImplementedError(
                 f"signal_type {self.signal_type!r} 는 아직 미구현. "
-                f"현재 지원: 'ma20_below_prev'"
+                f"현재 지원: 'ma20_below_prev', 'ma20_and_ma5_below'"
             )
         return cond.fillna(False).astype(bool).shift(1).fillna(False).astype(bool)
 
