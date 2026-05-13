@@ -81,6 +81,10 @@ class MACDCrossRegimeFilterStrategy(MACDCrossStrategy):
             ma_long = kospi["close"].rolling(self.ma_period).mean()
             ma_short = kospi["close"].rolling(self.ma_short_period).mean()
             cond = (kospi["close"] < ma_long) & (ma_short < ma_long)
+        elif self.signal_type == "5d_return_drop":
+            thr = self.signal_threshold if self.signal_threshold is not None else -0.03
+            ret5 = kospi["close"] / kospi["close"].shift(5) - 1
+            cond = ret5 <= thr
         else:
             raise NotImplementedError(
                 f"signal_type {self.signal_type!r} 는 아직 미구현. "

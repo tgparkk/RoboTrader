@@ -279,3 +279,80 @@ def test_signal_ma20_and_ma5_below_basic():
     expected_ma5 = sum(closes[24:29]) / 5
     expected_below = (closes[28] < expected_ma20) and (expected_ma5 < expected_ma20)
     assert feat["kospi_below_ma20"].iloc[0] == expected_below
+
+
+def test_signal_5d_return_drop_basic():
+    """close[D-1]/close[D-6] - 1 ≤ threshold 시 block.
+
+    kospi 10일치 (index 0-9, dates 20250901-20250910).
+    처음 5일 close=1000, 6~10일 close=990 (1% drop).
+
+    target_date = "20250910" (index 9, D 일).
+    shift(1) 적용 후 D 일(index 9) 신호 = D-1(index 8) 의 ret5 결과.
+    ret5[8] = closes[8] / closes[3] - 1 = 990/1000 - 1 = -0.01.
+    """
+    closes = [1000] * 5 + [990] * 5
+    kospi = pd.DataFrame({
+        "trade_date": [f"202509{d+1:02d}" for d in range(10)],
+        "close": closes,
+    })
+    target_date = "20250910"  # index 9 — exists in kospi
+    df_min = pd.DataFrame([{
+        "stock_code": "000001", "trade_date": target_date,
+        "trade_time": "143100",
+        "open": 1000.0, "high": 1010.0, "low": 990.0, "close": 1005.0,
+        "volume": 1000,
+    }])
+    df_daily = pd.DataFrame({"trade_date": [target_date], "close": [990.0]})
+
+    # threshold -0.005 (ret5[D-1]=-1% ≤ -0.5% → True → block)
+    strat_block = MACDCrossRegimeFilterStrategy(
+        regime_filter_enabled=True, kospi_daily_df=kospi,
+        signal_type="5d_return_drop", signal_threshold=-0.005,
+        fast_period=14, slow_period=34, signal_period=12,
+    )
+    feat_block = strat_block.prepare_features(df_min, df_daily)
+    assert feat_block["kospi_below_ma20"].iloc[0] == True
+
+    # threshold -0.05 (ret5[D-1]=-1% > -5% → False → no block)
+    strat_allow = MACDCrossRegimeFilterStrategy(
+        regime_filter_enabled=True, kospi_daily_df=kospi,
+        signal_type="5d_return_drop", signal_threshold=-0.05,
+        fast_period=14, slow_period=34, signal_period=12,
+    )
+    feat_allow = strat_allow.prepare_features(df_min, df_daily)
+    assert feat_allow["kospi_below_ma20"].iloc[0] == False
+
+
+def test_signal_5d_return_drop_default_threshold_is_neg_3pct():
+    """signal_threshold=None 시 default -0.03 사용.
+
+    kospi 10일치 (index 0-9, dates 20250901-20250910).
+    처음 5일 close=1000, 6~10일 close=960 (4% drop).
+
+    target_date = "20250910" (index 9, D 일).
+    shift(1) 후 D 일 신호 = D-1(index 8) 의 ret5 결과.
+    ret5[8] = 960/1000 - 1 = -0.04 ≤ -0.03 → True (block).
+    """
+    closes = [1000] * 5 + [960] * 5
+    kospi = pd.DataFrame({
+        "trade_date": [f"202509{d+1:02d}" for d in range(10)],
+        "close": closes,
+    })
+    target_date = "20250910"  # index 9 — exists in kospi
+    df_min = pd.DataFrame([{
+        "stock_code": "000001", "trade_date": target_date,
+        "trade_time": "143100",
+        "open": 1000.0, "high": 1010.0, "low": 990.0, "close": 1005.0,
+        "volume": 1000,
+    }])
+    df_daily = pd.DataFrame({"trade_date": [target_date], "close": [990.0]})
+
+    strat = MACDCrossRegimeFilterStrategy(
+        regime_filter_enabled=True, kospi_daily_df=kospi,
+        signal_type="5d_return_drop",  # threshold None → default -0.03
+        fast_period=14, slow_period=34, signal_period=12,
+    )
+    feat = strat.prepare_features(df_min, df_daily)
+    # ret5[D-1] = -0.04 ≤ -0.03 → True (block)
+    assert feat["kospi_below_ma20"].iloc[0] == True
