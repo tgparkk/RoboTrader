@@ -5,6 +5,7 @@ filter 활성 시 KOSPI close < MA20 (전일 기준, lookahead 방지) 인 날 e
 """
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 
 from backtests.common.feature_cache import get_arrays
@@ -91,7 +92,15 @@ class MACDCrossRegimeFilterStrategy(MACDCrossStrategy):
             cond = ret20 <= thr
         else:
             raise AssertionError(f"unreachable: {self.signal_type}")
-        return cond.fillna(False).astype(bool).shift(1).fillna(False).astype(bool)
+        # Avoid pandas >=2.1 FutureWarning on fillna downcasting object dtype.
+        # After shift(1) a bool Series becomes object dtype (NaN introduced);
+        # fillna on that triggers the warning.  Cast through numpy instead.
+        filled = cond.fillna(False).infer_objects(copy=False).astype(bool)
+        shifted = filled.shift(1)
+        return pd.Series(
+            np.where(shifted.isna(), False, shifted).astype(bool),
+            index=cond.index,
+        )
 
     def prepare_features(
         self, df_minute: pd.DataFrame, df_daily: pd.DataFrame
