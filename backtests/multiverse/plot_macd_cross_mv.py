@@ -21,6 +21,24 @@ FR_DIR = Path("backtests/reports/fold2_robust_survey")
 PA_DIR = Path("backtests/reports/portfolio_allocation")
 
 
+_MANUAL_MARKER = "\n## 사람 보강 결론"
+
+
+def _write_summary_preserving_manual(path: Path, auto_body: str) -> None:
+    """auto_body 를 path 에 쓰되, 기존 파일에 '## 사람 보강 결론' 섹션이 있으면 보존.
+
+    write_*_summary 함수들이 plot 재실행 시 사람 추가 결론을 덮어쓰는 부작용 방지.
+    """
+    body = auto_body.rstrip("\n")
+    if path.exists():
+        existing = path.read_text(encoding="utf-8")
+        idx = existing.find(_MANUAL_MARKER)
+        if idx >= 0:
+            manual_section = existing[idx:].rstrip("\n")
+            body = body + "\n" + manual_section
+    path.write_text(body + "\n", encoding="utf-8")
+
+
 def _heatmap(ax, df, x_col, y_col, value_col, title):
     pivot = df.pivot_table(
         index=y_col, columns=x_col, values=value_col, aggfunc="mean",
@@ -129,7 +147,7 @@ def write_param_grid_summary():
     fold2_fail_pct = len(fold2_fail) / (df["dataset"] == "fold2").sum() * 100
 
     out = PG_DIR / "summary.md"
-    out.write_text(f"""# MV-A 파라미터 fine grid summary
+    _write_summary_preserving_manual(out, f"""# MV-A 파라미터 fine grid summary
 
 ## Best cell (Stage 2 best: fast=14, slow=34, signal=12, entry=1430)
 
@@ -155,7 +173,7 @@ def write_param_grid_summary():
 ## 결론 (자동)
 
 자동 텍스트 — 사람이 데이터 보고 보강 필요. heatmaps/ 6장 PNG 와 cells.csv 직접 조회.
-""", encoding="utf-8")
+""")
     print(f"[summary] {out}")
 
 
@@ -187,7 +205,7 @@ def write_exit_overlay_summary():
     f2_improve["mdd_delta"] = f2_improve["mdd"] - base_f2
 
     out = EO_DIR / "summary.md"
-    out.write_text(f"""# MV-B exit overlay summary
+    _write_summary_preserving_manual(out, f"""# MV-B exit overlay summary
 
 ## Baseline ([off, off, off]) — 4 dataset 평균
 
@@ -209,7 +227,7 @@ def write_exit_overlay_summary():
 ## 결론
 
 자동 텍스트 — heatmaps/*.png 와 cells.csv 직접 조회 필수.
-""", encoding="utf-8")
+""")
     print(f"[summary] {out}")
 
 
@@ -291,7 +309,7 @@ def write_regime_filter_summary():
     body.append("")
     body.append("heatmaps/calmar_summary.png 와 cells.csv 함께 검토.")
 
-    (RF_DIR / "summary.md").write_text("\n".join(body), encoding="utf-8")
+    _write_summary_preserving_manual(RF_DIR / "summary.md", "\n".join(body))
     print(f"[summary] {RF_DIR / 'summary.md'}")
 
 
@@ -433,7 +451,7 @@ def write_regime_filter_v2_summary():
             "만으로 운영."
         )
     body.append("\nheatmaps/ 와 cells.csv 함께 검토.")
-    (RFv2_DIR / "summary.md").write_text("\n".join(body), encoding="utf-8")
+    _write_summary_preserving_manual(RFv2_DIR / "summary.md", "\n".join(body))
     print(f"[summary] {RFv2_DIR / 'summary.md'}")
 
 
@@ -647,7 +665,7 @@ def write_exit_regime_v2_summary():
         )
 
     body.append("\nheatmaps/ 와 cells.csv 함께 검토.")
-    (ER2_DIR / "summary.md").write_text("\n".join(body), encoding="utf-8")
+    _write_summary_preserving_manual(ER2_DIR / "summary.md", "\n".join(body))
     print(f"[summary] {ER2_DIR / 'summary.md'}")
 
 
@@ -829,7 +847,7 @@ def write_fold2_robust_survey_summary():
         )
 
     body.append("\nheatmaps/ 와 cells.csv 함께 검토.")
-    (FR_DIR / "summary.md").write_text("\n".join(body), encoding="utf-8")
+    _write_summary_preserving_manual(FR_DIR / "summary.md", "\n".join(body))
     print(f"[summary] {FR_DIR / 'summary.md'}")
 
 
@@ -1037,7 +1055,7 @@ def write_portfolio_allocation_summary():
             )
 
     body.append("\nheatmaps/ + cells.csv 참조.")
-    (PA_DIR / "summary.md").write_text("\n".join(body), encoding="utf-8")
+    _write_summary_preserving_manual(PA_DIR / "summary.md", "\n".join(body))
     print(f"[summary] {PA_DIR / 'summary.md'}")
 
 
