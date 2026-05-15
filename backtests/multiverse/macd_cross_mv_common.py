@@ -1,6 +1,6 @@
 """macd_cross 멀티버스 공통 유틸 — KPI extras, dataset 로더, cell evaluator."""
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Optional
 
 import pandas as pd
 
@@ -58,6 +58,7 @@ class Dataset:
     minute_by_code: Dict[str, pd.DataFrame] = field(default_factory=dict)
     daily_by_code: Dict[str, pd.DataFrame] = field(default_factory=dict)
     universe: List[str] = field(default_factory=list)
+    kospi_daily_df: Optional[pd.DataFrame] = None  # 신규 (regime filter 용)
 
 
 def build_cell_kpis(
@@ -190,6 +191,17 @@ def load_all_datasets() -> Dict[str, Dataset]:
         print(f"  {name}: {start}~{end}, "
               f"{len(nonempty)}/{len(universe)} stocks, "
               f"{_trading_days_count(m_by)} trading days")
+
+    # 신규: KOSPI 일봉 1회 로드 (모든 dataset 공유)
+    from backtests.common.data_loader import load_index_df
+    kospi_raw = load_index_df("KS11", daily_start, minute_end)
+    kospi_norm = pd.DataFrame({
+        "trade_date": kospi_raw["trade_date"].astype(str),
+        "close": kospi_raw["close"].astype(float),
+    }).sort_values("trade_date").reset_index(drop=True)
+
+    for ds_name in datasets:
+        datasets[ds_name].kospi_daily_df = kospi_norm
 
     return datasets
 
