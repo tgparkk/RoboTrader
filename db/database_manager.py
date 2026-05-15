@@ -3,7 +3,6 @@
 후보 종목 선정 이력 및 관련 데이터 저장/조회
 """
 import psycopg2
-import psycopg2.extras
 import psycopg2.pool
 import pandas as pd
 from datetime import datetime, timedelta
@@ -27,18 +26,6 @@ class CandidateRecord:
     score: float
     reasons: str
     status: str = 'active'
-
-
-@dataclass
-class PriceRecord:
-    """가격 기록"""
-    stock_code: str
-    date_time: datetime
-    open_price: float
-    high_price: float
-    low_price: float
-    close_price: float
-    volume: int
 
 
 class DatabaseManager:
@@ -203,143 +190,6 @@ class DatabaseManager:
             self.logger.error(f"후보 종목 저장 실패: {e}")
             return False
 
-    def save_price_data(self, stock_code: str, price_data: List[PriceRecord]) -> bool:
-        """가격 데이터 저장"""
-        try:
-            if not price_data:
-                return True
-
-            with self._pool_obj.connection(commit=True) as conn:
-                cur = conn.cursor()
-                for record in price_data:
-                    cur.execute('''
-                        DELETE FROM stock_prices WHERE stock_code = %s AND date_time = %s
-                    ''', (stock_code, record.date_time.strftime('%Y-%m-%d %H:%M:%S')))
-                    cur.execute('''
-                        INSERT INTO stock_prices
-                        (stock_code, date_time, open_price, high_price, low_price, close_price, volume, created_at)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    ''', (
-                        stock_code,
-                        record.date_time.strftime('%Y-%m-%d %H:%M:%S'),
-                        record.open_price,
-                        record.high_price,
-                        record.low_price,
-                        record.close_price,
-                        record.volume,
-                        now_kst().strftime('%Y-%m-%d %H:%M:%S')
-                    ))
-
-            self.logger.debug(f"{stock_code} 가격 데이터 {len(price_data)}개 저장")
-            return True
-
-        except Exception as e:
-            self.logger.error(f"가격 데이터 저장 실패 ({stock_code}): {e}")
-            return False
-
-    def save_minute_data(self, stock_code: str, date_str: str, df_minute: pd.DataFrame) -> bool:
-        """1분봉 데이터를 기존 stock_prices 테이블에 저장"""
-        try:
-            if df_minute is None or df_minute.empty:
-                return True
-
-            start_datetime = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 00:00:00"
-            end_datetime = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 23:59:59"
-
-            with self._pool_obj.connection(commit=True) as conn:
-                cur = conn.cursor()
-                cur.execute('''
-                    DELETE FROM stock_prices
-                    WHERE stock_code = %s
-                    AND date_time >= %s
-                    AND date_time <= %s
-                ''', (stock_code, start_datetime, end_datetime))
-
-                rows = []
-                for _, row in df_minute.iterrows():
-                    rows.append((
-                        stock_code,
-                        row['datetime'].strftime('%Y-%m-%d %H:%M:%S'),
-                        row['open'],
-                        row['high'],
-                        row['low'],
-                        row['close'],
-                        row['volume'],
-                        now_kst().strftime('%Y-%m-%d %H:%M:%S')
-                    ))
-
-                if rows:
-                    psycopg2.extras.execute_batch(
-                        cur,
-                        '''INSERT INTO stock_prices
-                        (stock_code, date_time, open_price, high_price, low_price, close_price, volume, created_at)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)''',
-                        rows,
-                        page_size=500,
-                    )
-
-            self.logger.debug(f"{stock_code} 1분봉 데이터 {len(df_minute)}개 저장 ({date_str})")
-            return True
-
-        except Exception as e:
-            self.logger.error(f"1분봉 데이터 저장 실패 ({stock_code}, {date_str}): {e}")
-            return False
-
-    def get_minute_data(self, stock_code: str, date_str: str) -> Optional[pd.DataFrame]:
-        """1분봉 데이터를 기존 stock_prices 테이블에서 조회"""
-        try:
-            start_datetime = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 00:00:00"
-            end_datetime = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 23:59:59"
-
-            with self._pool_obj.connection() as conn:
-                df = pd.read_sql_query('''
-                    SELECT date_time, open_price, high_price, low_price, close_price, volume
-                    FROM stock_prices
-                    WHERE stock_code = %s
-                    AND date_time >= %s
-                    AND date_time <= %s
-                    ORDER BY date_time
-                ''', conn, params=(stock_code, start_datetime, end_datetime))
-
-            if df.empty:
-                return None
-
-            df['datetime'] = pd.to_datetime(df['date_time'])
-            df = df.drop('date_time', axis=1)
-            df = df.rename(columns={
-                'open_price': 'open',
-                'high_price': 'high',
-                'low_price': 'low',
-                'close_price': 'close'
-            })
-
-            self.logger.debug(f"{stock_code} 1분봉 데이터 {len(df)}개 조회 ({date_str})")
-            return df
-
-        except Exception as e:
-            self.logger.error(f"1분봉 데이터 조회 실패 ({stock_code}, {date_str}): {e}")
-            return None
-
-    def has_minute_data(self, stock_code: str, date_str: str) -> bool:
-        """해당 종목의 해당 날짜 1분봉 데이터가 DB에 있는지 확인"""
-        try:
-            start_datetime = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 00:00:00"
-            end_datetime = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 23:59:59"
-
-            row = self._fetchone('''
-                SELECT COUNT(1) FROM stock_prices
-                WHERE stock_code = %s
-                AND date_time >= %s
-                AND date_time <= %s
-            ''', (stock_code, start_datetime, end_datetime))
-
-            count = row[0]
-            return count > 0
-
-        except Exception as e:
-            self.logger.error(f"1분봉 데이터 존재 확인 실패 ({stock_code}, {date_str}): {e}")
-            return False
-
     def get_candidate_history(self, days: int = 30) -> pd.DataFrame:
         """후보 종목 선정 이력 조회"""
         try:
@@ -359,53 +209,6 @@ class DatabaseManager:
 
         except Exception as e:
             self.logger.error(f"후보 종목 이력 조회 실패: {e}")
-            return pd.DataFrame()
-
-    def get_price_history(self, stock_code: str, days: int = 30) -> pd.DataFrame:
-        """종목별 가격 이력 조회"""
-        try:
-            start_date = now_kst() - timedelta(days=days)
-            with self._pool_obj.connection() as conn:
-                df = pd.read_sql_query('''
-                    SELECT date_time, open_price, high_price, low_price, close_price, volume
-                    FROM stock_prices
-                    WHERE stock_code = %s AND date_time >= %s
-                    ORDER BY date_time ASC
-                ''', conn, params=(stock_code, start_date.strftime('%Y-%m-%d %H:%M:%S')))
-
-            df['date_time'] = pd.to_datetime(df['date_time'])
-            self.logger.debug(f"{stock_code} 가격 이력 {len(df)}건 조회")
-            return df
-
-        except Exception as e:
-            self.logger.error(f"가격 이력 조회 실패 ({stock_code}): {e}")
-            return pd.DataFrame()
-
-    def get_candidate_performance(self, days: int = 30) -> pd.DataFrame:
-        """후보 종목 성과 분석"""
-        try:
-            start_date = now_kst() - timedelta(days=days)
-            with self._pool_obj.connection() as conn:
-                df = pd.read_sql_query('''
-                    SELECT
-                        c.stock_code, c.stock_name, c.selection_date, c.score,
-                        COUNT(p.id) as price_records,
-                        AVG(p.close_price) as avg_price,
-                        MAX(p.high_price) as max_price,
-                        MIN(p.low_price) as min_price
-                    FROM candidate_stocks c
-                    LEFT JOIN stock_prices p ON c.stock_code = p.stock_code
-                        AND p.date_time >= c.selection_date
-                    WHERE c.selection_date >= %s
-                    GROUP BY c.id, c.stock_code, c.stock_name, c.selection_date, c.score
-                    ORDER BY c.selection_date DESC, c.score DESC
-                ''', conn, params=(start_date.strftime('%Y-%m-%d %H:%M:%S'),))
-
-            df['selection_date'] = pd.to_datetime(df['selection_date'])
-            return df
-
-        except Exception as e:
-            self.logger.error(f"성과 분석 조회 실패: {e}")
             return pd.DataFrame()
 
     def get_daily_candidate_count(self, days: int = 30) -> pd.DataFrame:
@@ -439,7 +242,6 @@ class DatabaseManager:
             cutoff_str = cutoff_date.strftime('%Y-%m-%d %H:%M:%S')
 
             self._execute('DELETE FROM candidate_stocks WHERE selection_date < %s', (cutoff_str,))
-            self._execute('DELETE FROM stock_prices WHERE date_time < %s', (cutoff_str,))
 
             self.logger.info(f"{keep_days}일 이전 데이터 정리 완료")
 
@@ -450,7 +252,7 @@ class DatabaseManager:
         """데이터베이스 통계"""
         try:
             stats = {}
-            for table in ['candidate_stocks', 'stock_prices', 'trading_records', 'virtual_trading_records', 'real_trading_records']:
+            for table in ['candidate_stocks', 'trading_records', 'virtual_trading_records', 'real_trading_records']:
                 try:
                     row = self._fetchone(f'SELECT COUNT(*) FROM {table}')
                     stats[table] = row[0]

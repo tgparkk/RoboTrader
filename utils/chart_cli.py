@@ -74,7 +74,6 @@ def main():
         stats = db_manager.get_database_stats()
         print(f"\n📈 데이터베이스 통계:")
         print(f"  • 후보 종목 기록: {stats.get('candidate_stocks', 0):,}건")
-        print(f"  • 가격 데이터: {stats.get('stock_prices', 0):,}건")
         print(f"  • 매매 기록: {stats.get('trading_records', 0):,}건")
         
     except Exception as e:

@@ -2,7 +2,7 @@
 DuckDB → PostgreSQL 데이터 마이그레이션 스크립트
 
 1. 매매 기록 DB (db/robotrader_trades.duckdb) → PostgreSQL robotrader DB
-   - candidate_stocks, stock_prices, virtual_trading_records, real_trading_records, trading_records
+   - candidate_stocks, virtual_trading_records, real_trading_records, trading_records
 2. 시세 캐시 DB (cache/market_data_v2.duckdb) → PostgreSQL robotrader DB
    - minute_{code} 테이블들 → minute_candles 단일 테이블
    - daily_{code} 테이블들 → daily_candles 단일 테이블
@@ -45,7 +45,7 @@ def migrate_trades_db():
     pg = get_pg_conn()
     cur = pg.cursor()
 
-    tables = ['candidate_stocks', 'stock_prices', 'virtual_trading_records', 'real_trading_records', 'trading_records']
+    tables = ['candidate_stocks', 'virtual_trading_records', 'real_trading_records', 'trading_records']
 
     for table in tables:
         try:

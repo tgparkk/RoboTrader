@@ -20,22 +20,6 @@ CREATE_TABLES_SQL: List[str] = [
     )
     ''',
 
-    # 종목 가격 데이터 테이블
-    '''
-    CREATE TABLE IF NOT EXISTS stock_prices (
-        id SERIAL PRIMARY KEY,
-        stock_code VARCHAR NOT NULL,
-        date_time TIMESTAMP NOT NULL,
-        open_price DOUBLE PRECISION,
-        high_price DOUBLE PRECISION,
-        low_price DOUBLE PRECISION,
-        close_price DOUBLE PRECISION,
-        volume BIGINT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(stock_code, date_time)
-    )
-    ''',
-
     # 가상 매매 기록 테이블
     '''
     CREATE TABLE IF NOT EXISTS virtual_trading_records (
@@ -120,7 +104,6 @@ CREATE_TABLES_SQL: List[str] = [
 CREATE_INDEXES_SQL: List[str] = [
     'CREATE INDEX IF NOT EXISTS idx_candidate_date ON candidate_stocks(selection_date)',
     'CREATE INDEX IF NOT EXISTS idx_candidate_code ON candidate_stocks(stock_code)',
-    'CREATE INDEX IF NOT EXISTS idx_price_code_date ON stock_prices(stock_code, date_time)',
     'CREATE INDEX IF NOT EXISTS idx_trading_code_date ON trading_records(stock_code, timestamp)',
     'CREATE INDEX IF NOT EXISTS idx_virtual_trading_code_date ON virtual_trading_records(stock_code, timestamp)',
     'CREATE INDEX IF NOT EXISTS idx_virtual_trading_action ON virtual_trading_records(action)',
