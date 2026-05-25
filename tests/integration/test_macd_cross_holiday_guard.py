@@ -33,15 +33,19 @@ def _bind(bot, *method_names):
 # ---------------------------------------------------------------------------
 
 def test_previous_trading_day_skips_weekend():
-    """월요일에서 호출하면 직전 금요일을 반환 (토/일 스킵)."""
+    """월요일에서 호출하면 토/일 + 근로자의날(5/1 금) 스킵하고 4/30(목) 반환.
+
+    2026-05-04(월) → 5/3(일) → 5/2(토) → 5/1(금, 근로자의날) → 4/30(목) 영업일.
+    근로자의 날은 KRX 휴장 (mom 캘린더 대조 후 2025/2026/2027 모두 등록).
+    """
     bot = _FakeBot()
     _bind(bot, '_previous_trading_day')
 
-    # 2026-05-04 (월) → 2026-05-01 (금)
     monday = KST.localize(datetime(2026, 5, 4, 9, 0))
     result = bot._previous_trading_day(monday)
 
-    assert result.date() == date(2026, 5, 1)
+    assert result.date() == date(2026, 4, 30)
+    assert '20260501' in KOREAN_HOLIDAYS, '근로자의 날 등록 누락'
 
 
 def test_previous_trading_day_skips_holiday():

@@ -17,20 +17,24 @@ KOREAN_HOLIDAYS = {
     '20250101',  # 신정
     '20250127', '20250128', '20250129', '20250130',  # 설날 연휴(포함 임시공휴일)
     '20250301', '20250303',  # 삼일절(토) → 대체공휴일 월
+    '20250501',  # 근로자의 날(목) — KRX 휴장 (법정공휴일 아님)
     '20250505', '20250506',  # 어린이날·석가탄신일 대체
+    '20250603',  # 21대 대선
     '20250606',  # 현충일
     '20250815',  # 광복절
     '20251003', '20251006', '20251007', '20251008', '20251009',  # 개천절·추석·한글날
     '20251225',  # 크리스마스
+    '20251231',  # 연말 증시 휴장
     # 2026
     '20260101',  # 신정
     '20260216', '20260217', '20260218',  # 설날 연휴
     '20260302',  # 삼일절(일) → 대체공휴일 월
+    '20260501',  # 근로자의 날(금) — KRX 휴장
     '20260505',  # 어린이날
-    '20260525',  # 석가탄신일
-    '20260608',  # 현충일(월) — 6/6 토요일 보정
+    '20260525',  # 석가탄신일 대체 (5/24=일)
+    '20260608',  # 현충일(월) — 6/6 토요일 보정 (검토필요: 현충일은 법적 대체 대상 아님)
     '20260817',  # 광복절(토) → 대체공휴일 월
-    '20260924', '20260925', '20260926',  # 추석 연휴
+    '20260924', '20260925', '20260926', '20260928',  # 추석 연휴 (9/26 토, 9/28 대체)
     '20261005',  # 개천절(월)
     '20261009',  # 한글날
     '20261225',  # 크리스마스
@@ -39,9 +43,10 @@ KOREAN_HOLIDAYS = {
     '20270101',  # 신정
     '20270208', '20270209',  # 설날 연휴
     '20270301',  # 삼일절
+    '20270501',  # 근로자의 날(토 자연차단, 일관성용 등록)
     '20270505',  # 어린이날
     '20270513',  # 석가탄신일
-    '20270607',  # 현충일 대체
+    '20270607',  # 현충일 대체 (검토필요: 현충일은 법적 대체 대상 아님)
     '20270816',  # 광복절 대체
     '20270914', '20270915', '20270916',  # 추석
     '20271004',  # 개천절 대체
@@ -194,7 +199,7 @@ class MarketHours:
             dt: 확인할 시간 (None이면 현재)
 
         Returns:
-            장중이면 True
+            장중이면 True (주말·공휴일은 False)
         """
         hours = cls.get_market_hours(market, dt)
         tz = pytz.timezone(hours['timezone'])
@@ -204,8 +209,9 @@ class MarketHours:
         elif dt.tzinfo is None:
             dt = tz.localize(dt)
 
-        # 평일만 확인 (월-금)
-        if dt.weekday() >= 5:  # 토요일(5), 일요일(6)
+        # 거래일 캘린더(주말 + KOREAN_HOLIDAYS) 차단.
+        # 2026-05-25 회귀: 휴일 미체크 → _update_intraday_data 33,798회 무한 재시도.
+        if not cls.is_trading_day(market, dt):
             return False
 
         market_open = hours['market_open']
@@ -216,7 +222,7 @@ class MarketHours:
 
     @classmethod
     def is_before_market_open(cls, market: str = 'KRX', dt: Optional[datetime] = None) -> bool:
-        """장 시작 전인지 확인"""
+        """장 시작 전인지 확인 (주말·공휴일은 False — 장 자체가 없음)"""
         hours = cls.get_market_hours(market, dt)
         tz = pytz.timezone(hours['timezone'])
 
@@ -225,8 +231,7 @@ class MarketHours:
         elif dt.tzinfo is None:
             dt = tz.localize(dt)
 
-        # 평일이 아니면 False
-        if dt.weekday() >= 5:
+        if not cls.is_trading_day(market, dt):
             return False
 
         market_open = hours['market_open']
@@ -248,7 +253,7 @@ class MarketHours:
         elif dt.tzinfo is None:
             dt = tz.localize(dt)
 
-        if dt.weekday() >= 5:
+        if not cls.is_trading_day(market, dt):
             return "weekend"
         elif cls.is_before_market_open(market, dt):
             return "pre_market"
