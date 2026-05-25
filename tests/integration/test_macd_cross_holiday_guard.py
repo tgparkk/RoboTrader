@@ -62,7 +62,10 @@ def test_previous_trading_day_skips_holiday():
 
 
 def test_previous_trading_day_skips_long_holiday_chain():
-    """9/28 월요일에서 호출하면 9/24~26 추석 + 9/27 일요일을 스킵하고 9/23 수요일 반환."""
+    """9/28(월)에서 호출하면 9/27(일) + 9/26(토) + 9/25/24(추석)을 스킵하고 9/23(수) 반환.
+
+    2026 추석은 9/24(목)/25(금)/26(토). 일요일이 없어 9/28은 대체공휴일 없음 → 영업일.
+    """
     bot = _FakeBot()
     _bind(bot, '_previous_trading_day')
 
@@ -70,9 +73,10 @@ def test_previous_trading_day_skips_long_holiday_chain():
     result = bot._previous_trading_day(mon)
 
     assert result.date() == date(2026, 9, 23)
-    # KOREAN_HOLIDAYS 등록 확인
-    for holi in ('20260924', '20260925', '20260926'):
+    # 추석 KOREAN_HOLIDAYS 등록 확인 (9/26 토 자연차단, 9/28 영업일이라 미등록)
+    for holi in ('20260924', '20260925'):
         assert holi in KOREAN_HOLIDAYS
+    assert '20260928' not in KOREAN_HOLIDAYS, '오등록 회귀'
 
 
 def test_previous_trading_day_raises_on_runaway(monkeypatch):

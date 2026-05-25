@@ -86,11 +86,10 @@ def test_get_market_status_holiday_classified_as_weekend():
     ('20250603', '2025 21대 대선'),
     ('20251231', '2025 연말 증시 휴장'),
     ('20260501', '2026 근로자의 날'),
-    ('20260928', '2026 추석 대체 (9/26 토 보정)'),
     ('20270501', '2027 근로자의 날 (토 자연차단, 일관성)'),
 ])
 def test_added_holidays_present(date_str, label):
-    """mom 캘린더 대조로 발견된 누락 6건 등록 회귀 방지."""
+    """mom 캘린더 대조로 발견된 누락 5건 등록 회귀 방지."""
     assert date_str in KOREAN_HOLIDAYS, f'{label} 누락'
 
 
@@ -100,7 +99,28 @@ def test_is_market_open_false_on_2026_labor_day():
     assert MarketHours.is_market_open('KRX', dt) is False
 
 
-def test_is_market_open_false_on_2026_chuseok_substitute():
-    """2026-09-28 추석 대체(월) — 9/26 토요일 보정."""
+# ---------------------------------------------------------------------------
+# 오등록 정정: 현충일/추석은 특정 조건에서만 대체공휴일 적용
+# (관공서의 공휴일에 관한 규정 + KRX 공식 캘린더 검증)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize('date_str,label', [
+    ('20260608', '현충일은 토요일이어도 대체공휴일 없음 (법적 대체 대상 아님)'),
+    ('20270607', '현충일은 일요일이어도 대체공휴일 없음'),
+    ('20260928', '추석 대체는 일요일 겹침 시만 — 2026 추석은 목/금/토(일요일 없음)'),
+])
+def test_incorrectly_registered_holidays_removed(date_str, label):
+    """KRX 공식 캘린더 + 법령 대조로 오등록 정정. 회귀 방지."""
+    assert date_str not in KOREAN_HOLIDAYS, f'오등록 회귀: {label}'
+
+
+def test_is_market_open_true_on_2026_06_08():
+    """2026-06-08(월) — 6/6 현충일 토요일이지만 대체 없음 → 정상 영업."""
+    dt = KST.localize(datetime(2026, 6, 8, 10, 0))
+    assert MarketHours.is_market_open('KRX', dt) is True
+
+
+def test_is_market_open_true_on_2026_09_28():
+    """2026-09-28(월) — 추석 9/24-26 중 일요일 없으므로 대체 없음 → 정상 영업."""
     dt = KST.localize(datetime(2026, 9, 28, 10, 0))
-    assert MarketHours.is_market_open('KRX', dt) is False
+    assert MarketHours.is_market_open('KRX', dt) is True
