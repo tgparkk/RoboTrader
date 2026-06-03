@@ -34,6 +34,22 @@ def get_inquire_price(div_code: str = "J", itm_no: str = "", tr_cont: str = "",
         return None
 
 
+def get_chk_holiday(bass_dt: str, tr_cont: str = "", FK: str = "", NK: str = "") -> Optional[list]:
+    """국내휴장일조회 (CTCA0903R). bass_dt(YYYYMMDD) 기준 24일치 캘린더 리스트 반환, 실패 시 None."""
+    url = '/uapi/domestic-stock/v1/quotations/chk-holiday'
+    tr_id = "CTCA0903R"
+    params = {"BASS_DT": bass_dt, "CTX_AREA_NK": NK, "CTX_AREA_FK": FK}
+    res = kis._url_fetch(url, tr_id, tr_cont, params)
+    if res and res.isOK():
+        body = res.getBody()
+        out = getattr(body, 'output', None)
+        if isinstance(out, list):
+            return out
+        return [out] if out else []
+    logger.error(f"국내휴장일조회 실패: {bass_dt}")
+    return None
+
+
 def get_inquire_ccnl(div_code: str = "J", itm_no: str = "", tr_cont: str = "",
                      FK100: str = "", NK100: str = "") -> Optional[pd.DataFrame]:
     """주식현재가 체결 (최근 30건)"""

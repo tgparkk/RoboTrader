@@ -32,6 +32,7 @@ KOREAN_HOLIDAYS = {
     '20260501',  # 근로자의 날(금) — KRX 휴장
     '20260505',  # 어린이날
     '20260525',  # 석가탄신일 대체 (5/24=일)
+    '20260603',  # 제9회 전국동시지방선거
     '20260817',  # 광복절(토) → 대체공휴일 월
     '20260924', '20260925',  # 추석 연휴 (9/26 토 자연차단, 일요일 없으므로 대체 없음)
     '20261005',  # 개천절(월)
@@ -185,6 +186,12 @@ class MarketHours:
             date_str = dt.strftime('%Y%m%d')
             if date_str in KOREAN_HOLIDAYS:
                 return False
+            try:
+                from utils.holiday_kis_sync import is_kis_closed_day
+                if is_kis_closed_day(dt):
+                    return False
+            except Exception:
+                pass
 
         return True
 
