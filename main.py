@@ -39,6 +39,22 @@ def get_decision_engine():
     return _global_decision_engine
 
 
+# 킬스위치가 집계하는 macd_cross 매도 조회 SQL.
+# ⚠️ 매도 레코드의 strategy 라벨은 emergency_sync 복구 경로에서 '보유종목 자동복구'
+#    로 덮일 수 있다(D+2 보유 중 봇 재시작 시). 매도 라벨만 필터하면 macd_cross
+#    거래를 0건으로 오판하여 킬스위치가 영구 무력화된다(2026-06-04 진단). 매수
+#    레코드(buy_record_id)의 strategy 는 항상 정확하므로 매수 기준으로도 식별한다.
+_MACD_CROSS_KILL_SWITCH_SELL_SQL = """
+    SELECT s.timestamp, s.net_profit
+    FROM real_trading_records s
+    LEFT JOIN real_trading_records b ON s.buy_record_id = b.id
+    WHERE s.action='SELL'
+      AND s.net_profit IS NOT NULL
+      AND (s.strategy = 'macd_cross' OR b.strategy = 'macd_cross')
+    ORDER BY s.timestamp ASC
+"""
+
+
 class DayTradingBot:
     """주식 단타 거래 봇"""
     
@@ -783,7 +799,8 @@ class DayTradingBot:
     def _check_macd_cross_kill_switch_thresholds(self) -> None:
         """누적 -5% 또는 5연속 손실 시 킬 스위치 발동.
 
-        실거래 모드만 평가. real_trading_records.strategy='macd_cross' AND action='SELL'.
+        실거래 모드만 평가. macd_cross 매도는 매수 레코드(buy_record_id)의
+        strategy 로 식별한다 (매도 라벨은 복구 경로에서 덮일 수 있음).
         """
         try:
             if self._macd_cross_mode() != 'real':
@@ -793,13 +810,7 @@ class DayTradingBot:
             # SELL 레코드 시간순 조회
             with self.db_manager._pool_obj.connection() as conn:
                 cur = conn.cursor()
-                cur.execute("""
-                    SELECT timestamp, net_profit
-                    FROM real_trading_records
-                    WHERE strategy='macd_cross' AND action='SELL'
-                      AND net_profit IS NOT NULL
-                    ORDER BY timestamp ASC
-                """)
+                cur.execute(_MACD_CROSS_KILL_SWITCH_SELL_SQL)
                 rows = cur.fetchall()
             if not rows:
                 return
@@ -872,6 +883,45 @@ class DayTradingBot:
             self.logger.warning(f"[macd_cross.cb] 체크 실패 → 차단 안 함: {e}")
             return False
 
+    def _macd_cross_kosdaq_regime_blocks(self, current_time) -> bool:
+        """KOSDAQ 직전 N거래일 수익률 <= 임계% 시 macd_cross 매수 차단 (실거래 전용).
+
+        2026-06-04 도입. analysis/macd_cross_kosdaq_regime_validate.py 검증:
+        5d_drop_-2pct 가 fold1/2/3+oos+recent 5개 전부 PASS (나쁜장 완화 + 좋은장 미악화).
+        백테스트 신호식 ret5=close[D-1]/close[D-6]-1<=thr 를 라이브에 복제 (진입일 제외 = lookahead 0).
+
+        결과 캐시 (당일 1회). 데이터 없으면 보수적으로 False (차단 안 함).
+        """
+        try:
+            from config.strategy_settings import StrategySettings
+            cfg = StrategySettings.MacdCross
+            if not getattr(cfg, 'KOSDAQ_REGIME_FILTER_ENABLED', False):
+                return False
+            today = current_time.date()
+            cache = getattr(self, '_macd_cross_regime_cache', None)
+            if cache and cache.get('date') == today:
+                return cache['blocked']
+
+            as_of = current_time.strftime('%Y%m%d')
+            ret = self.pre_market_analyzer._get_kosdaq_trailing_return(
+                lookback_days=cfg.KOSDAQ_REGIME_LOOKBACK_DAYS, as_of_yyyymmdd=as_of,
+            )
+            if ret is None:
+                self._macd_cross_regime_cache = {'date': today, 'blocked': False}
+                return False
+            blocked = ret <= cfg.KOSDAQ_REGIME_THRESHOLD_PCT
+            self._macd_cross_regime_cache = {'date': today, 'blocked': blocked}
+            if blocked:
+                self.logger.warning(
+                    f"🚫 [macd_cross.regime] KOSDAQ 직전 "
+                    f"{cfg.KOSDAQ_REGIME_LOOKBACK_DAYS}거래일 {ret:+.2f}% "
+                    f"(임계 {cfg.KOSDAQ_REGIME_THRESHOLD_PCT}%) → 매수 차단"
+                )
+            return blocked
+        except Exception as e:
+            self.logger.warning(f"[macd_cross.regime] 체크 실패 → 차단 안 함: {e}")
+            return False
+
     def _macd_cross_mode(self) -> str:
         """macd_cross 운영 모드 결정.
 
@@ -940,6 +990,10 @@ class DayTradingBot:
         # 🚨 실거래 모드 한정: 전일 -3% 서킷브레이커 inherit (자본 보호 absolute)
         # paper 모드는 G1 (백테스트 100% 재현) 원칙으로 미적용.
         if not is_virtual and self._macd_cross_circuit_breaker_blocks(current_time):
+            return
+
+        # 🚨 실거래 모드 한정: KOSDAQ 5거래일 낙폭 레짐필터 (2026-06-04, fold 검증 PASS)
+        if not is_virtual and self._macd_cross_kosdaq_regime_blocks(current_time):
             return
 
         universe_codes = list(strategy._cache.keys()) if hasattr(strategy, '_cache') else []

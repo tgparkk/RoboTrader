@@ -751,6 +751,63 @@ class PreMarketAnalyzer:
             logger.error(f"[서킷브레이커] DB 조회 오류: {e}")
             return None
 
+    def _get_kosdaq_trailing_return(
+        self, lookback_days: int = 5, as_of_yyyymmdd: Optional[str] = None,
+    ) -> Optional[float]:
+        """KOSDAQ(KQ11) 직전 lookback_days 거래일 수익률 (%) 조회.
+
+        백테스트 5d_return_drop 신호식 복제: ret = close[D-1]/close[D-(1+lookback)] - 1.
+        as_of_yyyymmdd (진입일 D) 가 주어지면 그 날짜를 **제외**한 직전 종가만 사용
+        (lookahead 0). daily_candles 에 D 일봉이 이미 있어도 안전.
+
+        Args:
+            lookback_days: 수익률 기간 (거래일). 5 면 종가 6개 필요.
+            as_of_yyyymmdd: 진입일 'YYYYMMDD'. None 이면 가장 최근 종가 기준.
+
+        Returns:
+            수익률 퍼센트 (예: -2.5). 데이터 부족/오류 시 None.
+        """
+        try:
+            import psycopg2
+            from config.settings import PG_HOST, PG_PORT, PG_DATABASE, PG_USER, PG_PASSWORD
+
+            conn = psycopg2.connect(
+                host=PG_HOST, port=PG_PORT, database=PG_DATABASE,
+                user=PG_USER, password=PG_PASSWORD,
+            )
+            cur = conn.cursor()
+            need = lookback_days + 1
+            if as_of_yyyymmdd:
+                cur.execute('''
+                    SELECT CAST(stck_clpr AS FLOAT)
+                    FROM daily_candles
+                    WHERE stock_code = 'KQ11' AND stck_bsop_date < %s
+                    ORDER BY stck_bsop_date DESC
+                    LIMIT %s
+                ''', (as_of_yyyymmdd, need))
+            else:
+                cur.execute('''
+                    SELECT CAST(stck_clpr AS FLOAT)
+                    FROM daily_candles
+                    WHERE stock_code = 'KQ11'
+                    ORDER BY stck_bsop_date DESC
+                    LIMIT %s
+                ''', (need,))
+            rows = cur.fetchall()
+            conn.close()
+
+            if len(rows) < need:
+                return None
+            recent_close = rows[0][0]              # D-1
+            base_close = rows[lookback_days][0]    # D-(1+lookback)
+            if not base_close or base_close <= 0:
+                return None
+            return (recent_close / base_close - 1) * 100
+
+        except Exception as e:
+            logger.error(f"[레짐필터] KOSDAQ 수익률 DB 조회 오류: {e}")
+            return None
+
     def _test_nxt_api_availability(self) -> bool:
         """NXT API 가용성 테스트 (삼성전자로 시도)"""
         try:

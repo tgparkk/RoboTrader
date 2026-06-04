@@ -68,7 +68,8 @@ utils/                         # data_cache, korean_time
 | 항목 | 동작 |
 |------|------|
 | 서킷브레이커 | 전일 KOSPI/KOSDAQ -3% → macd_cross 매수 차단 |
-| 킬 스위치 | 누적 -5% 또는 5연속 손실 → ACTIVE_STRATEGY 정지 (디스크 저장) |
+| KOSDAQ 레짐필터 | KOSDAQ(KQ11) 직전 5거래일 -2% 이하 → macd_cross 매수 차단 (실거래, 2026-06-04, fold 검증 PASS) |
+| 킬 스위치 | 누적 -5% 또는 5연속 손실 → ACTIVE_STRATEGY 정지 (디스크 저장). 매도는 매수 strategy(buy_record_id) 기준 집계 |
 | 장마감 청산 | 15:00 보유 종목 시장가 매도 (단, macd_cross D+2 미도달은 보호) |
 | 매수 쿨다운 | 동일 종목 25분 내 재매수 차단 (macd_cross 는 미적용 — 1일 1회 가드) |
 | API Rate Limiting | 60ms 간격, 연속 실패 시 차단 |
