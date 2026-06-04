@@ -71,6 +71,16 @@ class StrategySettings:
         APPLY_LIVE_OVERLAY = False             # 승격 시 True 검토
         ALLOWED_WEEKDAYS = [0, 1, 2, 3, 4]
 
+        # ---- KOSDAQ 레짐 필터 (2026-06-04 도입) ----
+        # KOSDAQ(KQ11) 직전 N거래일 수익률 <= 임계% 이면 당일 macd_cross 매수 차단.
+        # real 모드 전용 (서킷브레이커와 동일 레이어). 진입일 당일 제외 = lookahead 0.
+        # 검증: analysis/macd_cross_kosdaq_regime_validate.py — 5d_drop_-2pct 가
+        #   fold1/2/3+oos+recent 5개 데이터셋 전부 PASS (나쁜장 완화 + 좋은장 미악화).
+        #   백테스트 신호식: ret5 = close[D-1]/close[D-6]-1 <= threshold (shift1).
+        KOSDAQ_REGIME_FILTER_ENABLED = True
+        KOSDAQ_REGIME_LOOKBACK_DAYS = 5
+        KOSDAQ_REGIME_THRESHOLD_PCT = -2.0     # 퍼센트 (-2.0 = -2%)
+
         # ---- 실거래 / 가상 라우팅 (Phase 1~4 완료, 2026-04-27 실거래 전환) ----
         # True : 시그널 발생 시 execute_virtual_buy 라우팅 (페이퍼)
         # False: KIS 실 계좌 시장가 주문 (실거래) ← 현재
